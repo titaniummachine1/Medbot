@@ -126,11 +126,11 @@ local function fillPolygon(vertices, r, g, b, a)
 end
 
 -- Easy color configuration for area rendering
-local AREA_FILL_COLOR = { 55, 255, 155, 15 } -- r, g, b, a for filled area
-local AREA_OUTLINE_COLOR = { 255, 255, 255, 100 } -- r, g, b, a for area outline
+local AREA_FILL_COLOR = { 55, 255, 155, 12 } -- r, g, b, a for filled area
+local AREA_OUTLINE_COLOR = { 255, 255, 255, 77 } -- r, g, b, a for area outline
 
 -- maximum distance to render visuals (in world units)
-local RENDER_DISTANCE = 800
+local RENDER_DISTANCE = 800 -- fallback default; overridden by G.Menu.Visuals.renderDistance
 
 local function OnDraw()
 	draw.SetFont(Fonts.Verdana)
@@ -149,9 +149,11 @@ local function OnDraw()
 	local currentY = 120
 	-- Precompute screen-visible nodes within render distance
 	local visibleNodes = {}
+	-- use menu-configured distance if present
+	local maxDist = G.Menu.Visuals.renderDistance or RENDER_DISTANCE
 	for id, node in pairs(G.Navigation.nodes or {}) do
 		local dist = (myPos - node.pos):Length()
-		if dist <= RENDER_DISTANCE then
+		if dist <= maxDist then
 			local scr = client.WorldToScreen(node.pos)
 			if scr then
 				visibleNodes[id] = { node = node, screen = scr }
@@ -185,15 +187,35 @@ local function OnDraw()
 		end
 	end
 
-	-- Show connections between nav nodes
+	-- Show connections between nav nodes (colored by directionality)
 	if G.Menu.Visuals.showConnections then
-		draw.Color(255, 255, 0, 255)
 		for id, entry in pairs(visibleNodes) do
+			local node = entry.node
 			for dir = 1, 4 do
-				for _, nid in ipairs(entry.node.c[dir].connections) do
-					local e2 = visibleNodes[nid]
-					if e2 then
-						local s1, s2 = entry.screen, e2.screen
+				for _, nid in ipairs(node.c[dir].connections) do
+					local otherEntry = visibleNodes[nid]
+					if otherEntry then
+						local s1, s2 = entry.screen, otherEntry.screen
+						-- determine if other->id exists in its connections
+						local bidir = false
+						local otherNode = otherEntry.node
+						for d2 = 1, 4 do
+							for _, backId in ipairs(otherNode.c[d2].connections) do
+								if backId == id then
+									bidir = true
+									break
+								end
+							end
+							if bidir then
+								break
+							end
+						end
+						-- yellow for two-way, red for one-way
+						if bidir then
+							draw.Color(255, 255, 0, 100)
+						else
+							draw.Color(255, 0, 0, 70)
+						end
 						draw.Line(s1[1], s1[2], s2[1], s2[2])
 					end
 				end

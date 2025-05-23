@@ -28,6 +28,7 @@ defaultconfig = {
 		showHidingSpots = true, -- Show hiding spots (areas where health packs are located)  [[ Used by: MedBot.Visuals ]]
 		showConnections = true, -- Show connections between nodes  [[ Used by: MedBot.Visuals ]]
 		showAreas = true, -- Show area outlines  [[ Used by: MedBot.Visuals ]]
+		renderDistance = 1000, -- Maximum distance to render visuals
 	},
 	Movement = {
 		lookatpath = false, -- Look at where we are walking

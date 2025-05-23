@@ -60,6 +60,10 @@ local function OnDrawMenu()
 			TimMenu.NextLine()
 			G.Menu.Visuals.showAreas = TimMenu.Checkbox("Show Areas", G.Menu.Visuals.showAreas)
 			TimMenu.NextLine()
+			-- Maximum render distance for visuals
+			G.Menu.Visuals.renderDistance, _ =
+				TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
+			TimMenu.NextLine()
 		end
 	end
 end
