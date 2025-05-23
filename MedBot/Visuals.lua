@@ -1,6 +1,9 @@
 --[[ Imports ]]
 local Common = require("MedBot.Common")
+assert(Common, "MedBot.Common module not found")
 local G = require("MedBot.Utils.Globals")
+assert(G, "MedBot.Utils.Globals module not found")
+
 local Visuals = {}
 
 local Lib = Common.Lib
@@ -272,18 +275,18 @@ local function OnDraw()
 	end
 
 	-- Draw current path
-	if G.Menu.Visuals.drawPath and G.Navigation.path then
+	if G.Menu.Visuals.drawPath and G.Navigation.path and #G.Navigation.path > 0 then
 		draw.Color(255, 255, 255, 255)
 
 		for i = 1, #G.Navigation.path - 1 do
-			local node1 = G.Navigation.path[i]
-			local node2 = G.Navigation.path[i + 1]
-
-			local node1Pos = Vector3(node1.x, node1.y, node1.z)
-			local node2Pos = Vector3(node2.x, node2.y, node2.z)
+			local n1 = G.Navigation.path[i]
+			local n2 = G.Navigation.path[i + 1]
+			local node1Pos = n1.pos
+			local node2Pos = n2.pos
 
 			local screenPos1 = client.WorldToScreen(node1Pos)
 			local screenPos2 = client.WorldToScreen(node2Pos)
+
 			if not screenPos1 or not screenPos2 then
 				goto continue
 			end
@@ -294,11 +297,10 @@ local function OnDraw()
 			::continue::
 		end
 
-		-- Draw a line from the player to the second node from the end
-		local node1 = G.Navigation.path[#G.Navigation.path]
-		if node1 then
-			node1 = Vector3(node1.x, node1.y, node1.z)
-			ArrowLine(myPos, node1, 22, 15, false)
+		-- Draw a line from the player to the last node
+		local lastNode = G.Navigation.path[#G.Navigation.path]
+		if lastNode then
+			ArrowLine(myPos, lastNode.pos, 22, 15, false)
 		end
 	end
 

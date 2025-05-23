@@ -15,7 +15,7 @@ G.Default = {
 	ViewAngles = EulerAngles({ 90, 0, 0 }),
 	Viewheight = Vector3({ 0, 0, 75 }),
 	VisPos = Vector3({ 0, 0, 75 }),
-	vHitbox = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) },
+	vHitbox = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 45) },
 }
 
 G.pLocal = G.Default
@@ -38,7 +38,6 @@ G.Misc = {
 
 G.Navigation = {
 	path = nil,
-	rawNodes = nil,
 	nodes = nil,
 	currentNode = nil,
 	currentNodePos = nil,

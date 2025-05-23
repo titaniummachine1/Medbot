@@ -182,16 +182,36 @@ function findGoalNode(currentTask)
 		return closestNode
 	end
 
+	-- Find and follow the closest teammate
+	local function findFollowGoal()
+		local origin = pLocal:GetAbsOrigin()
+		local closestDist = math.huge
+		local closestNode = nil
+		for _, ent in ipairs(entities.GetPlayers() or {}) do
+			if ent ~= pLocal and ent:IsAlive() and ent:GetTeamNumber() == pLocal:GetTeamNumber() then
+				local dist = (ent:GetAbsOrigin() - origin):Length()
+				if dist < closestDist then
+					closestDist = dist
+					closestNode = Navigation.GetClosestNode(ent:GetAbsOrigin())
+				end
+			end
+		end
+		return closestNode
+	end
+
 	if currentTask == "Objective" then
 		if mapName:find("plr_") or mapName:find("pl_") then
 			return findPayloadGoal()
 		elseif mapName:find("ctf_") then
 			return findFlagGoal()
 		else
-			Log:Warn("Unsupported Gamemode, try CTF, PL, or PLR")
+			-- fallback to following the closest teammate
+			return findFollowGoal()
 		end
 	elseif currentTask == "Health" then
 		return findHealthGoal()
+	elseif currentTask == "Follow" then
+		return findFollowGoal()
 	else
 		Log:Debug("Unknown task: %s", currentTask)
 	end
@@ -232,15 +252,17 @@ function moveTowardsNode(userCmd, node)
 		end
 	else
 		if G.Menu.Main.Skip_Nodes and WorkManager.attemptWork(2, "node skip") then
-			if G.Navigation.currentNodeID > 1 then
-				local nextNode = G.Navigation.path[G.Navigation.currentNodeID - 1]
-				local nextHorizontalDist = math.abs(LocalOrigin.x - nextNode.pos.x)
-					+ math.abs(LocalOrigin.y - nextNode.pos.y)
-				local nextVerticalDist = math.abs(LocalOrigin.z - nextNode.pos.z)
-
-				if nextHorizontalDist < horizontalDist and nextVerticalDist <= G.Misc.NodeTouchHeight then
-					Log:Info("Skipping to closer node %d", G.Navigation.currentNodeID - 1)
-					Navigation.RemoveCurrentNode()
+			local path = G.Navigation.path
+			if path and G.Navigation.currentNodeID > 1 then
+				local nextNode = path[G.Navigation.currentNodeID - 1]
+				if nextNode then
+					local nextHorizontalDist = math.abs(LocalOrigin.x - nextNode.pos.x)
+						+ math.abs(LocalOrigin.y - nextNode.pos.y)
+					local nextVerticalDist = math.abs(LocalOrigin.z - nextNode.pos.z)
+					if nextHorizontalDist < horizontalDist and nextVerticalDist <= G.Misc.NodeTouchHeight then
+						Log:Info("Skipping to closer node %d", G.Navigation.currentNodeID - 1)
+						Navigation.RemoveCurrentNode()
+					end
 				end
 			end
 		elseif G.Menu.Main.Optymise_Path and WorkManager.attemptWork(4, "Optymise Path") then
@@ -262,33 +284,25 @@ function moveTowardsNode(userCmd, node)
 			end
 		end
 
+		local path = G.Navigation.path
 		if
-			G.Navigation.currentNodeTicks > 264
-			or (G.Navigation.currentNodeTicks > 22 and horizontalDist < G.Misc.NodeTouchDistance)
-				and WorkManager.attemptWork(66, "pathCheck")
+			path
+			and (
+				G.Navigation.currentNodeTicks > 264
+				or (G.Navigation.currentNodeTicks > 22 and horizontalDist < G.Misc.NodeTouchDistance)
+					and WorkManager.attemptWork(66, "pathCheck")
+			)
 		then
 			if not Navigation.isWalkable(LocalOrigin, G.Navigation.currentNodePos, 1) then
 				Log:Warn(
 					"Path to node %d is blocked, removing connection and repathing...",
 					G.Navigation.currentNodeIndex
 				)
-				if
-					G.Navigation.path[G.Navigation.currentNodeIndex]
-					and G.Navigation.path[G.Navigation.currentNodeIndex + 1]
-				then
-					Navigation.RemoveConnection(
-						G.Navigation.path[G.Navigation.currentNodeIndex],
-						G.Navigation.path[G.Navigation.currentNodeIndex + 1]
-					)
-				elseif
-					G.Navigation.path[G.Navigation.currentNodeIndex]
-					and not G.Navigation.path[G.Navigation.currentNodeIndex + 1]
-					and G.Navigation.currentNodeIndex > 1
-				then
-					Navigation.RemoveConnection(
-						G.Navigation.path[G.Navigation.currentNodeIndex - 1],
-						G.Navigation.path[G.Navigation.currentNodeIndex]
-					)
+				local idx = G.Navigation.currentNodeIndex
+				if path[idx] and path[idx + 1] then
+					Navigation.RemoveConnection(path[idx], path[idx + 1])
+				elseif path[idx] and idx > 1 then
+					Navigation.RemoveConnection(path[idx - 1], path[idx])
 				end
 				Navigation.ClearPath()
 				Navigation.ResetTickTimer()
@@ -385,8 +399,8 @@ Commands.Register("pf", function(args)
 		return
 	end
 
-	local startNode = Navigation.GetNodeByID(start)
-	local goalNode = Navigation.GetNodeByID(goal)
+	local startNode = Node.GetNodeByID(start)
+	local goalNode = Node.GetNodeByID(goal)
 
 	if not startNode or not goalNode then
 		print("Start/Goal node not found!")

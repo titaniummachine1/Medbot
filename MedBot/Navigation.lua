@@ -1,12 +1,18 @@
 ---@alias Connection { count: integer, connections: integer[] }
 ---@alias Node { x: number, y: number, z: number, id: integer, c: { [1]: Connection, [2]: Connection, [3]: Connection, [4]: Connection } }
 ---@class Pathfinding
+---@field pathFound boolean
+---@field pathFailed boolean
 local Navigation = {}
 
 local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
-local SourceNav = require("MedBot.Utils.SourceNav")
+local Node = require("MedBot.Modules.Node")
 local AStar = require("MedBot.Utils.A-Star")
+assert(
+	Common and G and Node and AStar,
+	"Navigation modules missing: ensure Common, Globals, Node, and A-Star are available"
+)
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -122,6 +128,7 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 	end
 end
 
+--[[
 -- Perform a trace hull down from the given position to the ground
 ---@param position Vector3 The start position of the trace
 ---@param hullSize table The size of the hull
@@ -233,31 +240,13 @@ function Navigation.FixAllNodes()
 		Navigation.FixNode(id)
 	end
 end
+]]
 
 function Navigation.Setup()
 	if engine.GetMapName() then
-		Navigation.LoadNavFile()
-		Navigation.FixAllNodes()
+		Node.Setup()
+		Navigation.ClearPath()
 	end
-end
-
--- Set the raw nodes and copy them to the fixed nodes table
----@param nodes Node[]
-function Navigation.SetNodes(nodes)
-	G.Navigation.rawNodes = nodes
-	G.Navigation.nodes = nodes
-end
-
--- Get the fixed nodes used for calculations
----@return Node[]
-function Navigation.GetNodes()
-	return G.Navigation.nodes
-end
-
--- Get the raw nodes
----@return Node[]
-function Navigation.GetRawNodes()
-	return G.Navigation.rawNodes
 end
 
 -- Get the current path
@@ -269,13 +258,6 @@ end
 -- Clear the current path
 function Navigation.ClearPath()
 	G.Navigation.path = {}
-end
-
--- Get a node by its ID
----@param id integer
----@return Node
-function Navigation.GetNodeByID(id)
-	return G.Navigation.nodes[id]
 end
 
 -- Set the current path
@@ -525,213 +507,44 @@ function Navigation.WalkTo(pCmd, pLocal, pDestination)
 	end
 end
 
--- Attempts to read and parse the nav file
----@param navFilePath string
----@return table|nil, string|nil
-local function tryLoadNavFile(navFilePath)
-	local file = io.open(navFilePath, "rb")
-	if not file then
-		return nil, "File not found"
-	end
-
-	local content = file:read("*a")
-	file:close()
-
-	local navData = SourceNav.parse(content)
-	if not navData or #navData.areas == 0 then
-		return nil, "Failed to parse nav file or no areas found."
-	end
-
-	return navData
-end
-
--- Generates the nav file
-local function generateNavFile()
-	client.RemoveConVarProtection("sv_cheats")
-	client.RemoveConVarProtection("nav_generate")
-	client.SetConVar("sv_cheats", "1")
-	client.Command("nav_generate", true)
-	Log:Info("Generating nav file. Please wait...")
-
-	local navGenerationDelay = 10
-	local startTime = os.time()
-	repeat
-		if os.time() - startTime > navGenerationDelay then
-			break
-		end
-	until false
-end
-
--- Processes nav data to create nodes
----@param navData table
----@return table
-local function processNavData(navData)
-	local navNodes = {}
-	for _, area in ipairs(navData.areas) do
-		local cX = (area.north_west.x + area.south_east.x) / 2
-		local cY = (area.north_west.y + area.south_east.y) / 2
-		local cZ = (area.north_west.z + area.south_east.z) / 2
-
-		-- Compute corners correctly: nw, se, ne, sw
-		local nw = Vector3(area.north_west.x, area.north_west.y, area.north_west.z)
-		local se = Vector3(area.south_east.x, area.south_east.y, area.south_east.z)
-		-- north_east_z and south_west_z from parsed navData
-		local ne = Vector3(area.south_east.x, area.north_west.y, area.north_east_z)
-		local sw = Vector3(area.north_west.x, area.south_east.y, area.south_west_z)
-
-		navNodes[area.id] = {
-			-- center position
-			pos = Vector3(cX, cY, cZ),
-			id = area.id,
-			c = area.connections,
-			-- corners
-			nw = nw,
-			se = se,
-			ne = ne,
-			sw = sw,
-		}
-	end
-	return navNodes
-end
-
--- Main function to load the nav file
----@param navFile string
-function Navigation.LoadFile(navFile)
-	local fullPath = "tf/" .. navFile
-	local navData, error = tryLoadNavFile(fullPath)
-
-	if not navData and error == "File not found" then
-		generateNavFile()
-		navData, error = tryLoadNavFile(fullPath)
-		if not navData then
-			Log:Error("Failed to load or parse generated nav file: " .. error)
-			return
-		end
-	elseif not navData then
-		Log:Error(error)
-		return
-	end
-
-	local navNodes = processNavData(navData)
-	Navigation.SetNodes(navNodes) --alocate all ndoes to raw nodes cache and dynamic nodes.
-	Navigation.FixAllNodes() --fix the dynamic
-	Log:Info("Parsed %d areas from nav file.", #navNodes)
-end
-
--- Loads the nav file of the current map
-function Navigation.LoadNavFile()
-	local mapFile = engine.GetMapName()
-	local navFile = string.gsub(mapFile, ".bsp", ".nav")
-	Navigation.LoadFile(navFile)
-	Navigation.ClearPath()
-end
-
 ---@param pos Vector3|{ x:number, y:number, z:number }
 ---@return Node
 function Navigation.GetClosestNode(pos)
-	local closestNode = nil
-	local closestDist = math.huge
-
-	for _, node in pairs(G.Navigation.nodes) do
-		local dist = (node.pos - pos):Length()
-		if dist < closestDist then
-			closestNode = node
-			closestDist = dist
-		end
-	end
-
-	return closestNode
+	return Node.GetClosestNode(pos)
 end
 
--- Perform a trace line down from a given height to check ground position
----@param startPos table The start position of the trace
----@param endPos table The end position of the trace
----@return boolean Whether the trace line reaches the ground at the target position
-local function canTraceDown(startPos, endPos)
-	local traceResult =
-		engine.TraceLine(Vector3(startPos.x, startPos.y, startPos.z), Vector3(endPos.x, endPos.y, endPos.z), TRACE_MASK)
-	return traceResult.fraction == 1
-end
-
--- Returns all adjacent nodes of the given node
----@param node Node
----@param nodes Node[]
-local function GetAdjacentNodes(node, nodes)
-	local adjacentNodes = {}
-
-	for dir = 1, 4 do
-		local conDir = node.c[dir]
-		for _, con in pairs(conDir.connections) do
-			local conNode = nodes[con]
-			if conNode then
-				-- Calculate horizontal and vertical conditions
-				local conNodeNW = conNode.nw
-				local conNodeSE = conNode.se
-
-				local horizontalCheck = (
-					(conNodeNW.x - node.se.x)
-					* (node.nw.x - conNodeSE.x)
-					* (conNodeNW.y - node.se.y)
-					* (node.nw.y - conNodeSE.y)
-				)
-							<= 0
-						and 1
-					or 0
-
-				local verticalCheck = (conNode.z - (node.z - 70)) * ((node.z + 70) - conNode.z) >= 0 and 1 or 0
-
-				-- If both conditions are met, perform a trace down check
-				if horizontalCheck == 1 and verticalCheck == 1 then
-					local startPos = { x = node.pos.x, y = node.pos.y, z = node.pos.z + 72 }
-					local endPos = { x = conNode.pos.x, y = conNode.pos.y, z = conNode.pos.z }
-					local traceDownCheck = canTraceDown(startPos, endPos)
-
-					if traceDownCheck then
-						table.insert(adjacentNodes, conNode)
-					end
-				end
-			end
-		end
-	end
-
-	return adjacentNodes
-end
-
+-- Main pathfinding function
 ---@param startNode Node
 ---@param goalNode Node
----@param maxNodes number
 function Navigation.FindPath(startNode, goalNode)
-	if not startNode then
-		Log:Warn("Invalid start node!")
-		return
-	end
-
-	if not goalNode then
-		Log:Warn("Invalid goal node!")
-		return
-	end
+	assert(startNode and startNode.pos, "Navigation.FindPath: startNode is nil or has no pos")
+	assert(goalNode and goalNode.pos, "Navigation.FindPath: goalNode is nil or has no pos")
 
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
 	if horizontalDistance <= 100 and verticalDistance <= 18 then --attempt to avoid work
-		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, GetAdjacentNodes)
+		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodes)
 	elseif
 		(horizontalDistance <= 700 and verticalDistance <= 18) or Navigation.isWalkable(startNode.pos, goalNode.pos)
 	then --didnt work try doing less work
-		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, GetAdjacentNodes)
+		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodes)
 	else --damn it then do it propertly at least
-		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, GetAdjacentNodes)
+		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodes)
 	end
 
 	if not G.Navigation.path or #G.Navigation.path == 0 then
 		Log:Error("Failed to find path from %d to %d!", startNode.id, goalNode.id)
 		G.Navigation.path = nil
+		Navigation.pathFailed = true
+		Navigation.pathFound = false
 	else
 		Log:Info("Path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
+		Navigation.pathFound = true
+		Navigation.pathFailed = false
 	end
 
-	printLuaTable(G.Navigation.path)
+	return Navigation
 end
 
 return Navigation
