@@ -103,6 +103,32 @@ local function ArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, 
 	draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
 end
 
+-- 1×1 white texture for filled polygons
+local white_texture_fill = draw.CreateTextureRGBA(string.char(0xff, 0xff, 0xff, 0xff), 1, 1)
+
+-- fillPolygon(vertices: {{x,y}}, r,g,b,a): filled convex polygon
+local function fillPolygon(vertices, r, g, b, a)
+	draw.Color(r, g, b, a)
+	local n = #vertices
+	local cords, rev = {}, {}
+	local sum = 0
+	local v1x, v1y = vertices[1][1], vertices[1][2]
+	local function cross(a, b)
+		return (b[1] - a[1]) * (v1y - a[2]) - (b[2] - a[2]) * (v1x - a[1])
+	end
+	for i, v in ipairs(vertices) do
+		cords[i] = { v[1], v[2], 0, 0 }
+		rev[n - i + 1] = cords[i]
+		local nxt = vertices[i % n + 1]
+		sum = sum + cross(v, nxt)
+	end
+	draw.TexturedPolygon(white_texture_fill, (sum < 0 and rev or cords), true)
+end
+
+-- Easy color configuration for area rendering
+local AREA_FILL_COLOR = { 55, 255, 155, 50 } -- r, g, b, a for filled area
+local AREA_OUTLINE_COLOR = { 255, 255, 255, 100 } -- r, g, b, a for area outline
+
 local function OnDraw()
 	draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 0, 0, 255)
@@ -187,35 +213,39 @@ local function OnDraw()
 		end
 	end
 
-	-- Show area outlines
+	-- Fill and outline areas
 	if G.Menu.Visuals.showAreas then
-		draw.Color(0, 0, 255, 100)
 		for _, node in pairs(G.Navigation.nodes) do
 			local dist = (myPos - node.pos):Length()
 			if dist > 700 then
 				goto continue_area
 			end
-			-- Convert corner tables to Vector3
-			local nwTbl, seTbl = node.nw, node.se
-			local nw = Vector3(nwTbl.x, nwTbl.y, nwTbl.z)
-			local se = Vector3(seTbl.x, seTbl.y, seTbl.z)
-			local ne = Vector3(seTbl.x, nwTbl.y, nwTbl.z)
-			local sw = Vector3(nwTbl.x, seTbl.y, seTbl.z)
-			local corners = { nw, ne, se, sw }
-			local pts, ok = {}, true
-			for i, v in ipairs(corners) do
-				local s = client.WorldToScreen(v)
+			-- world corners to Vector3
+			local nw_tbl, se_tbl = node.nw, node.se
+			local nw = Vector3(nw_tbl.x, nw_tbl.y, nw_tbl.z)
+			local se = Vector3(se_tbl.x, se_tbl.y, se_tbl.z)
+			local ne = Vector3(se_tbl.x, nw_tbl.y, nw_tbl.z)
+			local sw = Vector3(nw_tbl.x, se_tbl.y, se_tbl.z)
+			-- project to screen
+			local verts = { nw, ne, se, sw }
+			local scr, ok = {}, true
+			for i, w in ipairs(verts) do
+				local s = client.WorldToScreen(w)
 				if not s then
 					ok = false
 					break
 				end
-				pts[i] = { x = s[1], y = s[2] }
+				scr[i] = { s[1], s[2] }
 			end
 			if ok then
+				-- filled polygon (semi-transparent blue)
+				fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
+				-- outline in opaque blue
+				draw.Color(table.unpack(AREA_OUTLINE_COLOR))
 				for i = 1, 4 do
-					local p1 = pts[i]
-					local p2 = pts[i % 4 + 1]
-					draw.Line(p1.x, p1.y, p2.x, p2.y)
+					local a = scr[i]
+					local b = scr[i % 4 + 1]
+					draw.Line(a[1], a[2], b[1], b[2])
 				end
 			end
 			::continue_area::
