@@ -182,40 +182,48 @@ end
 ---@param nodeId integer The index of the node in the Nodes table
 ---@return Node The fixed node
 function Navigation.FixNode(nodeId)
-	local node = Navigation.GetNodeByID(nodeId)
+	local nodes = G.Navigation.nodes
+	local node = nodes[nodeId]
 	if not node or not node.pos then
-		print("Node with ID " .. tostring(nodeId) .. " is invalid or missing position, exiting function")
+		print("Invalid node " .. tostring(nodeId) .. ", skipping FixNode")
 		return nil
 	end
-
-	-- Check if the node has already been fixed
 	if node.fixed then
-		return Nodes[nodeId]
+		return node
 	end
 
-	local upVector = Vector3(0, 0, 72) -- Move node 18 units up
-	local downVector = Vector3(0, 0, -72) -- Trace down a large distance
-
-	-- Perform a TraceHull directly downwards from the node's center position
-	local nodePos = node.pos
-	local centerTraceResult =
-		engine.TraceHull(nodePos + upVector, nodePos + downVector, HULL_MIN, HULL_MAX, TRACE_MASK, fFalse)
-
-	-- Check if the trace result is more than 0
-	if centerTraceResult.fraction > 0 then
-		-- Update node's center position in the Nodes table directly
-		Nodes[nodeId].z = centerTraceResult.endpos.z
-		Nodes[nodeId].pos = centerTraceResult.endpos
+	local upVector = Vector3(0, 0, 72)
+	local downVector = Vector3(0, 0, -72)
+	-- Fix center position
+	local traceCenter = engine.TraceHull(node.pos + upVector, node.pos + downVector, HULL_MIN, HULL_MAX, TRACE_MASK)
+	if traceCenter and traceCenter.fraction > 0 then
+		node.pos = traceCenter.endpos
+		node.z = traceCenter.endpos.z
 	else
-		-- Lift the node 18 units up and keep it there
-		Nodes[nodeId].z = nodePos.z + 18
-		Nodes[nodeId].pos = Vector3(nodePos.x, nodePos.y, nodePos.z + 18)
+		node.pos = node.pos + upVector
+		node.z = node.z + 72
 	end
-
-	-- Mark the node as fixed
-	Nodes[nodeId].fixed = true
-
-	return Nodes[nodeId] -- Return the fixed node
+	-- Fix two known corners (nw, se) via line traces
+	for _, cornerKey in ipairs({ "nw", "se" }) do
+		local c = node[cornerKey]
+		if c then
+			local world = Vector3(c.x, c.y, c.z)
+			local trace = engine.TraceLine(world + upVector, world + downVector, TRACE_MASK)
+			if trace and trace.fraction < 1 then
+				node[cornerKey] = trace.endpos
+			else
+				node[cornerKey] = world + upVector
+			end
+		end
+	end
+	-- Compute remaining corners
+	local normal = getGroundNormal(node.pos)
+	local height = math.abs(node.se.z - node.nw.z)
+	local rem = calculateRemainingCorners(node.nw, node.se, normal, height)
+	node.ne = rem[1]
+	node.sw = rem[2]
+	node.fixed = true
+	return node
 end
 
 -- Adjust all nodes by fixing their positions and adding missing corners.
@@ -564,16 +572,23 @@ local function processNavData(navData)
 		local cY = (area.north_west.y + area.south_east.y) / 2
 		local cZ = (area.north_west.z + area.south_east.z) / 2
 
+		-- Compute corners correctly: nw, se, ne, sw
+		local nw = Vector3(area.north_west.x, area.north_west.y, area.north_west.z)
+		local se = Vector3(area.south_east.x, area.south_east.y, area.south_east.z)
+		-- north_east_z and south_west_z from parsed navData
+		local ne = Vector3(area.south_east.x, area.north_west.y, area.north_east_z)
+		local sw = Vector3(area.north_west.x, area.south_east.y, area.south_west_z)
+
 		navNodes[area.id] = {
-			--data
+			-- center position
 			pos = Vector3(cX, cY, cZ),
 			id = area.id,
 			c = area.connections,
-			--corners
-			nw = area.north_west,
-			se = area.south_east,
-			ne = Vector3(0, 0, 0),
-			sw = Vector3(0, 0, 0),
+			-- corners
+			nw = nw,
+			se = se,
+			ne = ne,
+			sw = sw,
 		}
 	end
 	return navNodes

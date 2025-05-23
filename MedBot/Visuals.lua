@@ -201,24 +201,16 @@ local function OnDraw()
 		end
 	end
 
-	-- Fill and outline areas
+	-- Fill and outline areas using fixed corners from Navigation
 	if G.Menu.Visuals.showAreas then
-		for _, node in pairs(G.Navigation.nodes) do
-			local dist = (myPos - node.pos):Length()
-			if dist > RENDER_DISTANCE then
-				goto continue_area
-			end
-			-- world corners to Vector3
-			local nw_tbl, se_tbl = node.nw, node.se
-			local nw = Vector3(nw_tbl.x, nw_tbl.y, nw_tbl.z)
-			local se = Vector3(se_tbl.x, se_tbl.y, se_tbl.z)
-			local ne = Vector3(se_tbl.x, nw_tbl.y, nw_tbl.z)
-			local sw = Vector3(nw_tbl.x, se_tbl.y, se_tbl.z)
-			-- project to screen
-			local verts = { nw, ne, se, sw }
-			local scr, ok = {}, true
-			for i, w in ipairs(verts) do
-				local s = client.WorldToScreen(w)
+		for id, entry in pairs(visibleNodes) do
+			local node = entry.node
+			-- Collect the four corner vectors from the node
+			local worldCorners = { node.nw, node.ne, node.se, node.sw }
+			local scr = {}
+			local ok = true
+			for i, corner in ipairs(worldCorners) do
+				local s = client.WorldToScreen(corner)
 				if not s then
 					ok = false
 					break
@@ -226,9 +218,9 @@ local function OnDraw()
 				scr[i] = { s[1], s[2] }
 			end
 			if ok then
-				-- filled polygon (semi-transparent blue)
+				-- filled polygon
 				fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
-				-- outline in opaque blue
+				-- outline
 				draw.Color(table.unpack(AREA_OUTLINE_COLOR))
 				for i = 1, 4 do
 					local a = scr[i]
@@ -236,7 +228,6 @@ local function OnDraw()
 					draw.Line(a[1], a[2], b[1], b[2])
 				end
 			end
-			::continue_area::
 		end
 	end
 
