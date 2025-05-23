@@ -22,9 +22,13 @@ G.Menu = {
 		EnableVisuals = true,
 		memoryUsage = true,
 		drawNodes = true, -- Draws all nodes on the map
+		drawNodeIDs = true, -- Show node IDs  [[ Used by: MedBot.Visuals ]]
 		drawPath = true, -- Draws the path to the current goal
 		Objective = true,
 		drawCurrentNode = false, -- Draws the current node
+		showHidingSpots = true, -- Show hiding spots (areas where health packs are located)  [[ Used by: MedBot.Visuals ]]
+		showConnections = true, -- Show connections between nodes  [[ Used by: MedBot.Visuals ]]
+		showAreas = true, -- Show area outlines  [[ Used by: MedBot.Visuals ]]
 	},
 	Movement = {
 		lookatpath = false, -- Look at where we are walking

@@ -9,6 +9,7 @@ local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 
 require("MedBot.Visuals")
+require("MedBot.Menu")
 local Lib = Common.Lib
 
 local Notify, Commands, WPlayer = Lib.UI.Notify, Lib.Utils.Commands, Lib.TF2.WPlayer
@@ -400,4 +401,6 @@ Commands.Register("pf_auto", function(args)
 end)
 
 Notify.Alert("MedBot loaded!")
-Navigation.Setup()
+if entities.GetLocalPlayer() then
+	Navigation.Setup()
+end

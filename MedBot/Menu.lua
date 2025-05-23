@@ -19,55 +19,55 @@ local G = require("MedBot.Utils.Globals")
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
 assert(menuLoaded, "TimMenu not found, please install it!")
 
--- Toggle state and menu helper
-local menuOpen = true
-local lastToggleTime = 0
-local toggleCooldown = 0.1
-
-function MenuModule.toggleMenu()
-	local now = globals.RealTime()
-	if now - lastToggleTime >= toggleCooldown then
-		menuOpen = not menuOpen
-		G.Gui.IsVisible = menuOpen
-		lastToggleTime = now
-	end
-end
+local selectedTab = "Main" -- Current menu tab: Main or Visuals
 
 -- Draw the menu
 local function OnDrawMenu()
-	-- Toggle with INSERT key
-	if input.IsButtonDown(KEY_INSERT) then
-		MenuModule.toggleMenu()
-	end
-
-	-- Only draw when menuOpen is true
-	if not menuOpen then
+	-- Only draw when the Lmaobox menu is open
+	if not gui.IsMenuOpen() then
 		return
 	end
 
-	if TimMenu.Begin("MedicBot Control", menuOpen) then
-		-- Enable bot
-		G.Menu.Main.Enable = TimMenu.Checkbox("Enable Bot", G.Menu.Main.Enable)
+	if TimMenu.Begin("MedBot Control") then
+		-- Tab control
+		selectedTab, _ = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, selectedTab)
 		TimMenu.NextLine()
 
-		-- Skip nodes optimization
-		G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
-		TimMenu.NextLine()
+		if selectedTab == "Main" then
+			-- Enable bot
+			G.Menu.Main.Enable = TimMenu.Checkbox("Enable Bot", G.Menu.Main.Enable)
+			TimMenu.NextLine()
 
-		-- Smooth look factor for path following
-		G.Menu.Main.smoothFactor, _ = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 0.1, 0.01)
-		TimMenu.NextLine()
+			-- Skip nodes optimization
+			G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
+			TimMenu.NextLine()
 
-		-- Self-heal threshold
-		G.Menu.Main.SelfHealTreshold, _ = TimMenu.Slider("Self Heal Threshold", G.Menu.Main.SelfHealTreshold, 0, 100, 1)
-		TimMenu.NextLine()
+			-- Smooth look factor for path following
+			G.Menu.Main.smoothFactor, _ = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 0.1, 0.01)
+			TimMenu.NextLine()
 
-		TimMenu.End()
+			-- Self-heal threshold
+			G.Menu.Main.SelfHealTreshold, _ =
+				TimMenu.Slider("Self Heal Threshold", G.Menu.Main.SelfHealTreshold, 0, 100, 1)
+			TimMenu.NextLine()
+		elseif selectedTab == "Visuals" then
+			-- Visuals settings
+			G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
+			TimMenu.NextLine()
+			G.Menu.Visuals.drawNodes = TimMenu.Checkbox("Show Nodes", G.Menu.Visuals.drawNodes)
+			TimMenu.NextLine()
+			G.Menu.Visuals.drawNodeIDs = TimMenu.Checkbox("Show Node IDs", G.Menu.Visuals.drawNodeIDs)
+			TimMenu.NextLine()
+			G.Menu.Visuals.showConnections = TimMenu.Checkbox("Show Connections", G.Menu.Visuals.showConnections)
+			TimMenu.NextLine()
+			G.Menu.Visuals.showAreas = TimMenu.Checkbox("Show Areas", G.Menu.Visuals.showAreas)
+			TimMenu.NextLine()
+		end
 	end
 end
 
 -- Register callbacks
-callbacks.Unregister("Draw", "MedicBot.DrawMenu")
-callbacks.Register("Draw", "MedicBot.DrawMenu", OnDrawMenu)
+callbacks.Unregister("Draw", "MedBot.DrawMenu")
+callbacks.Register("Draw", "MedBot.DrawMenu", OnDrawMenu)
 
 return MenuModule
