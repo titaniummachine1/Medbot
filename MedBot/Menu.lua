@@ -12,7 +12,7 @@
 local MenuModule = {}
 
 -- Import globals
-local G = require("Lmaobot.Utils.Globals")
+local G = require("MedBot.Utils.Globals")
 
 -- Try loading TimMenu
 ---@type boolean, table

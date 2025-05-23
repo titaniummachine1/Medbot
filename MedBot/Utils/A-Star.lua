@@ -1,4 +1,4 @@
-local Heap = require("Lmaobot.Utils.Heap")
+local Heap = require("MedBot.Utils.Heap")
 
 ---@alias PathNode { id : integer, x : number, y : number, z : number }
 
@@ -90,7 +90,7 @@ return AStar
 
 --[[ 2
     
-local Heap = require("Lmaobot.Utils.Heap")
+local Heap = require("MedBot.Utils.Heap")
 
 ---@alias PathNode { id : integer, x : number, y : number, z : number }
 
@@ -161,7 +161,7 @@ return AStar
 --------------------------------------------
 
 --[[ 1
-local Heap = require("Lmaobot.Utils.Heap")
+local Heap = require("MedBot.Utils.Heap")
 
 ---@alias PathNode { id : integer, x : number, y : number, z : number }
 

@@ -1,6 +1,6 @@
 --[[ Imports ]]
-local Common = require("Lmaobot.Common")
-local G = require("Lmaobot.Utils.Globals")
+local Common = require("MedBot.Common")
+local G = require("MedBot.Utils.Globals")
 local Visuals = {}
 
 local Lib = Common.Lib

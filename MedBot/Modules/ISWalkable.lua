@@ -1,5 +1,5 @@
 local isWalkable = {}
-local G = require("Lmaobot.Utils.Globals")
+local G = require("MedBot.Utils.Globals")
 
 local Jump_Height = 72 --duck jump height
 local HULL_MIN = G.pLocal.vHitbox.Min

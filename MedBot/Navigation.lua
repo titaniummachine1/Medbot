@@ -3,12 +3,12 @@
 ---@class Pathfinding
 local Navigation = {}
 
-local Common = require("Lmaobot.Common")
-local G = require("Lmaobot.Utils.Globals")
-local SourceNav = require("Lmaobot.Utils.SourceNav")
-local AStar = require("Lmaobot.Utils.A-Star")
+local Common = require("MedBot.Common")
+local G = require("MedBot.Utils.Globals")
+local SourceNav = require("MedBot.Utils.SourceNav")
+local AStar = require("MedBot.Utils.A-Star")
 local Lib = Common.Lib
-local Log = Lib.Utils.Logger.new("Lmaobot")
+local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
 
 -- Constants
@@ -227,7 +227,7 @@ function Navigation.FixAllNodes()
 end
 
 function Navigation.Setup()
-	if not Netchannel.GetAddress() then
+	if engine.GetMapName() then
 		Navigation.LoadNavFile()
 		Navigation.FixAllNodes()
 	end

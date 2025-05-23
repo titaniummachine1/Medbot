@@ -21,7 +21,7 @@ When those batch scripts have finished, run MakeNavs.bat to get nav meshes for a
 
 Start TF2, inject LMAOBox (not beta build), and go into a map.
 
-Go to the Lua tab in the menu and load "Lmaobot.lua"
+Go to the Lua tab in the menu and load "MedBot.lua"
 
 Enjoy NavBot on LMAOBox!
 
