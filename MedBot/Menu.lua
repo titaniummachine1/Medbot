@@ -19,8 +19,6 @@ local G = require("MedBot.Utils.Globals")
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
 assert(menuLoaded, "TimMenu not found, please install it!")
 
-local selectedTab = "Main" -- Current menu tab: Main or Visuals
-
 -- Draw the menu
 local function OnDrawMenu()
 	-- Only draw when the Lmaobox menu is open
@@ -30,10 +28,10 @@ local function OnDrawMenu()
 
 	if TimMenu.Begin("MedBot Control") then
 		-- Tab control
-		selectedTab, _ = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, selectedTab)
+		G.Menu.Tab, _ = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, G.Menu.Tab)
 		TimMenu.NextLine()
 
-		if selectedTab == "Main" then
+		if G.Menu.Tab == "Main" then
 			-- Enable bot
 			G.Menu.Main.Enable = TimMenu.Checkbox("Enable Bot", G.Menu.Main.Enable)
 			TimMenu.NextLine()
@@ -50,7 +48,7 @@ local function OnDrawMenu()
 			G.Menu.Main.SelfHealTreshold, _ =
 				TimMenu.Slider("Self Heal Threshold", G.Menu.Main.SelfHealTreshold, 0, 100, 1)
 			TimMenu.NextLine()
-		elseif selectedTab == "Visuals" then
+		elseif G.Menu.Tab == "Visuals" then
 			-- Visuals settings
 			G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 			TimMenu.NextLine()

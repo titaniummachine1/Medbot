@@ -9,6 +9,7 @@ local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 
 require("MedBot.Visuals")
+require("MedBot.Utils.Config")
 require("MedBot.Menu")
 local Lib = Common.Lib
 

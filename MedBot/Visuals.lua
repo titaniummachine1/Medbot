@@ -126,8 +126,11 @@ local function fillPolygon(vertices, r, g, b, a)
 end
 
 -- Easy color configuration for area rendering
-local AREA_FILL_COLOR = { 55, 255, 155, 50 } -- r, g, b, a for filled area
+local AREA_FILL_COLOR = { 55, 255, 155, 15 } -- r, g, b, a for filled area
 local AREA_OUTLINE_COLOR = { 255, 255, 255, 100 } -- r, g, b, a for area outline
+
+-- maximum distance to render visuals (in world units)
+local RENDER_DISTANCE = 800
 
 local function OnDraw()
 	draw.SetFont(Fonts.Verdana)
@@ -144,6 +147,17 @@ local function OnDraw()
 
 	local myPos = me:GetAbsOrigin()
 	local currentY = 120
+	-- Precompute screen-visible nodes within render distance
+	local visibleNodes = {}
+	for id, node in pairs(G.Navigation.nodes or {}) do
+		local dist = (myPos - node.pos):Length()
+		if dist <= RENDER_DISTANCE then
+			local scr = client.WorldToScreen(node.pos)
+			if scr then
+				visibleNodes[id] = { node = node, screen = scr }
+			end
+		end
+	end
 	G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
 	if G.Navigation.currentNodeIndex == nil then
 		return
@@ -171,45 +185,19 @@ local function OnDraw()
 		end
 	end
 
-	-- Memory usage
-	if G.Menu.Visuals.memoryUsage then
-		draw.Text(20, currentY, string.format("Memory usage: %.2f MB", G.Benchmark.MemUsage / 1024))
-		currentY = currentY + 20
-	end
-
-	-- Show hiding spots (health packs)
-	if G.Menu.Visuals.showHidingSpots then
-		draw.Color(255, 0, 0, 255)
-		for _, pos in pairs(G.World.healthPacks) do
-			local scr = client.WorldToScreen(pos)
-			if scr then
-				draw.FilledRect(scr[1] - 4, scr[2] - 4, scr[1] + 4, scr[2] + 4)
-			end
-		end
-	end
-
 	-- Show connections between nav nodes
 	if G.Menu.Visuals.showConnections then
 		draw.Color(255, 255, 0, 255)
-		for id, node in pairs(G.Navigation.nodes) do
-			local dist = (myPos - node.pos):Length()
-			if dist > 700 then
-				goto continue_conn
-			end
+		for id, entry in pairs(visibleNodes) do
 			for dir = 1, 4 do
-				local conDir = node.c[dir]
-				for _, nid in ipairs(conDir.connections) do
-					if id < nid then
-						local other = G.Navigation.nodes[nid]
-						local s1 = client.WorldToScreen(node.pos)
-						local s2 = client.WorldToScreen(other.pos)
-						if s1 and s2 then
-							draw.Line(s1[1], s1[2], s2[1], s2[2])
-						end
+				for _, nid in ipairs(entry.node.c[dir].connections) do
+					local e2 = visibleNodes[nid]
+					if e2 then
+						local s1, s2 = entry.screen, e2.screen
+						draw.Line(s1[1], s1[2], s2[1], s2[2])
 					end
 				end
 			end
-			::continue_conn::
 		end
 	end
 
@@ -217,7 +205,7 @@ local function OnDraw()
 	if G.Menu.Visuals.showAreas then
 		for _, node in pairs(G.Navigation.nodes) do
 			local dist = (myPos - node.pos):Length()
-			if dist > 700 then
+			if dist > RENDER_DISTANCE then
 				goto continue_area
 			end
 			-- world corners to Vector3
@@ -261,28 +249,12 @@ local function OnDraw()
 	-- Draw all nodes
 	if G.Menu.Visuals.drawNodes then
 		draw.Color(0, 255, 0, 255)
-
-		local navNodes = G.Navigation.nodes
-		for id, node in pairs(navNodes) do
-			local dist = (myPos - node.pos):Length()
-			if dist > 700 then
-				goto continue
-			end
-
-			local screenPos = client.WorldToScreen(node.pos)
-			if not screenPos then
-				goto continue
-			end
-
-			local x, y = screenPos[1], screenPos[2]
-			draw.FilledRect(x - 4, y - 4, x + 4, y + 4) -- Draw a small square centered at (x, y)
-
-			-- Node IDs
+		for id, entry in pairs(visibleNodes) do
+			local s = entry.screen
+			draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
 			if G.Menu.Visuals.drawNodeIDs then
-				draw.Text(screenPos[1], screenPos[2] + 10, tostring(id))
+				draw.Text(s[1], s[2] + 10, tostring(id))
 			end
-
-			::continue::
 		end
 	end
 
