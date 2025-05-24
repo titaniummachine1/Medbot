@@ -445,58 +445,6 @@ local function calculateZOnPlane(x, y, nw, ne, se, sw)
 	return z
 end
 
---- Check if a 2D line from point A to point B stays within the walkable areas (2D top-down view)
----@param pointA Vector3 Start point
----@param pointB Vector3 End point
----@param areaA table Source area
----@param areaB table Target area
----@return boolean True if line stays within walkable space
-local function canConnect2D(pointA, pointB, areaA, areaB)
-	-- For adjacent nav areas, be more permissive - if they're already connected in the nav mesh,
-	-- they should be able to connect via fine points
-	local samples = 3 -- Reduced samples for performance
-	local stepX = (pointB.x - pointA.x) / samples
-	local stepY = (pointB.y - pointA.y) / samples
-
-	local validSamples = 0
-	for i = 0, samples do
-		local testX = pointA.x + i * stepX
-		local testY = pointA.y + i * stepY
-
-		-- Check if this sample point is within either area (2D)
-		local inAreaA = isPointInArea2D(testX, testY, areaA)
-		local inAreaB = isPointInArea2D(testX, testY, areaB)
-
-		if inAreaA or inAreaB then
-			validSamples = validSamples + 1
-		end
-	end
-
-	-- If most samples are valid, allow the connection
-	local validRatio = validSamples / (samples + 1)
-	local isValid = validRatio >= 0.6 -- Allow connection if 60% of samples are within areas
-
-	if not isValid then
-		Log:Debug("2D connectivity check failed: only %.1f%% of samples were within areas", validRatio * 100)
-	end
-
-	return isValid
-end
-
---- Check if a 2D point is within a nav area (top-down view)
----@param x number X coordinate
----@param y number Y coordinate
----@param area table Nav area with corners
----@return boolean True if point is inside area
-local function isPointInArea2D(x, y, area)
-	if not area.nw or not area.se then
-		return false
-	end
-
-	-- Simple bounding box check (could be improved for rotated areas)
-	return x >= area.nw.x and x <= area.se.x and y >= area.nw.y and y <= area.se.y
-end
-
 --- Generate a grid of fine-grained points within a nav area using fixed 24-unit spacing
 ---@param area table The nav area to generate points for
 ---@return table[] Array of point objects with pos, neighbors, id, and isEdge flag
@@ -688,7 +636,78 @@ local function addInternalConnections(points)
 	return connectionsAdded
 end
 
---- Connect edge points between two adjacent areas using Manhattan distance for performance
+--- Build hierarchical data structure for HPA* pathfinding
+---@param processedAreas table Areas with their fine points and connections
+local function buildHierarchicalStructure(processedAreas)
+	-- Initialize hierarchical structure in globals
+	if not G.Navigation.hierarchical then
+		G.Navigation.hierarchical = {}
+	end
+
+	G.Navigation.hierarchical.areas = {}
+	G.Navigation.hierarchical.edgePoints = {} -- Global registry of edge points for fast lookup
+
+	local totalEdgePoints = 0
+	local totalInterConnections = 0
+
+	-- Process each area and build the hierarchical structure
+	for areaId, data in pairs(processedAreas) do
+		local areaInfo = {
+			id = areaId,
+			area = data.area,
+			points = data.points,
+			edgePoints = {}, -- Points on the boundary of this area
+			internalPoints = {}, -- Points inside this area
+			interAreaConnections = {}, -- Connections to other areas
+		}
+
+		-- Categorize points as edge or internal
+		for _, point in pairs(data.points) do
+			if point.isEdge then
+				table.insert(areaInfo.edgePoints, point)
+				-- Add to global edge point registry with area reference
+				G.Navigation.hierarchical.edgePoints[point.id .. "_" .. areaId] = {
+					point = point,
+					areaId = areaId,
+				}
+				totalEdgePoints = totalEdgePoints + 1
+			else
+				table.insert(areaInfo.internalPoints, point)
+			end
+
+			-- Count inter-area connections
+			for _, neighbor in pairs(point.neighbors) do
+				if neighbor.isInterArea then
+					totalInterConnections = totalInterConnections + 1
+					-- Store inter-area connection info
+					table.insert(areaInfo.interAreaConnections, {
+						fromPoint = point,
+						toPoint = neighbor.point,
+						toArea = neighbor.point.parentArea,
+						cost = neighbor.cost,
+					})
+				end
+			end
+		end
+
+		G.Navigation.hierarchical.areas[areaId] = areaInfo
+		Log:Debug(
+			"Area %d: %d edge points, %d internal points, %d inter-area connections",
+			areaId,
+			#areaInfo.edgePoints,
+			#areaInfo.internalPoints,
+			#areaInfo.interAreaConnections
+		)
+	end
+
+	Log:Info(
+		"Built hierarchical structure: %d total edge points, %d inter-area connections",
+		totalEdgePoints,
+		totalInterConnections
+	)
+end
+
+--- Connect edge points between two adjacent areas using 1-D monotone greedy matching
 ---@param areaA table First area
 ---@param areaB table Second area
 ---@param pointsA table[] Fine points from area A
@@ -716,10 +735,7 @@ local function connectAdjacentAreas(areaA, areaB, pointsA, pointsB)
 		end
 	end
 
-	Log:Info("DEBUG: Areas %d and %d - areNeighbors: %s", areaA.id, areaB.id, tostring(areNeighbors))
-
 	if not areNeighbors then
-		Log:Debug("Areas %d and %d are not neighbors in nav mesh, skipping connection", areaA.id, areaB.id)
 		return 0
 	end
 
@@ -739,74 +755,75 @@ local function connectAdjacentAreas(areaA, areaB, pointsA, pointsB)
 		end
 	end
 
-	Log:Info(
-		"DEBUG: Area %d has %d edge points, Area %d has %d edge points",
-		areaA.id,
-		#edgePointsA,
-		areaB.id,
-		#edgePointsB
-	)
-
 	if #edgePointsA == 0 or #edgePointsB == 0 then
-		Log:Warn("One of the areas has no edge points, skipping connection")
 		return 0
 	end
 
-	-- Greedy matching: for each edge point in neighbor area, connect to nearest unused edge point here
-	local connectionsMade = {}
-	local maxDistance = 150 -- Maximum distance for inter-area connections (increased for better coverage)
-	local usedLocal = {}
-	Log:Info(
-		"DEBUG: Starting greedy matching between %d edge points in area %d and %d edge points in area %d",
-		#edgePointsB,
-		areaB.id,
-		#edgePointsA,
-		areaA.id
-	)
-	for _, pointB in ipairs(edgePointsB) do
-		local bestDist = maxDistance
-		local bestA = nil
-		-- find nearest unused local edge point
-		for _, pointA in ipairs(edgePointsA) do
-			if not usedLocal[pointA.id] then
-				local manh = math.abs(pointA.pos.x - pointB.pos.x) + math.abs(pointA.pos.y - pointB.pos.y)
-				if manh <= bestDist then
-					bestDist = manh
-					bestA = pointA
-				end
-			end
+	-- Determine shared boundary orientation (horizontal vs vertical)
+	-- Simple heuristic: if areas overlap more in X than Y, it's a horizontal boundary
+	local minXA, maxXA = math.huge, -math.huge
+	local minYA, maxYA = math.huge, -math.huge
+	local minXB, maxXB = math.huge, -math.huge
+	local minYB, maxYB = math.huge, -math.huge
+
+	for _, point in ipairs(edgePointsA) do
+		minXA, maxXA = math.min(minXA, point.pos.x), math.max(maxXA, point.pos.x)
+		minYA, maxYA = math.min(minYA, point.pos.y), math.max(maxYA, point.pos.y)
+	end
+	for _, point in ipairs(edgePointsB) do
+		minXB, maxXB = math.min(minXB, point.pos.x), math.max(maxXB, point.pos.x)
+		minYB, maxYB = math.min(minYB, point.pos.y), math.max(maxYB, point.pos.y)
+	end
+
+	local overlapX = math.min(maxXA, maxXB) - math.max(minXA, minXB)
+	local overlapY = math.min(maxYA, maxYB) - math.max(minYA, minYB)
+	local isHorizontal = overlapX >= overlapY
+
+	-- Project edge points onto 1D boundary line and sort
+	local projectedA = {}
+	local projectedB = {}
+
+	for _, point in ipairs(edgePointsA) do
+		local t = isHorizontal and point.pos.x or point.pos.y
+		table.insert(projectedA, { point = point, t = t })
+	end
+	for _, point in ipairs(edgePointsB) do
+		local t = isHorizontal and point.pos.x or point.pos.y
+		table.insert(projectedB, { point = point, t = t })
+	end
+
+	-- Sort by position along boundary
+	table.sort(projectedA, function(a, b)
+		return a.t < b.t
+	end)
+	table.sort(projectedB, function(a, b)
+		return a.t < b.t
+	end)
+
+	-- Monotone greedy matching - no crossings, optimal pairing
+	local i, j = 1, 1
+	while i <= #projectedA and j <= #projectedB do
+		local pointA = projectedA[i].point
+		local pointB = projectedB[j].point
+
+		-- Apply height restriction (72 units max difference)
+		local heightDiff = math.abs(pointA.pos.z - pointB.pos.z)
+		if heightDiff <= 72 then
+			local distance = (pointA.pos - pointB.pos):Length()
+			table.insert(pointA.neighbors, { point = pointB, cost = distance, isInterArea = true })
+			table.insert(pointB.neighbors, { point = pointA, cost = distance, isInterArea = true })
+			connections = connections + 1
 		end
-		-- connect if found
-		if bestA then
-			local key = string.format("%d_%d-%d_%d", bestA.parentArea, bestA.id, pointB.parentArea, pointB.id)
-			if not connectionsMade[key] then
-				local d3 = (bestA.pos - pointB.pos):Length()
-				table.insert(bestA.neighbors, { point = pointB, cost = d3, isInterArea = true })
-				table.insert(pointB.neighbors, { point = bestA, cost = d3, isInterArea = true })
-				connectionsMade[key] = true
-				usedLocal[bestA.id] = true
-				connections = connections + 1
-				Log:Info(
-					"SUCCESS: Matched neighbor area %d point %d -> area %d point %d (manh: %.1f)",
-					areaB.id,
-					pointB.id,
-					areaA.id,
-					bestA.id,
-					bestDist
-				)
-			end
+
+		-- Advance the index of the list with fewer remaining elements
+		if (#projectedA - i) < (#projectedB - j) then
+			i = i + 1
 		else
-			Log:Debug(
-				"No suitable connection found for area %d point %d (all distances > %d)",
-				areaB.id,
-				pointB.id,
-				maxDistance
-			)
+			j = j + 1
 		end
 	end
 
-	Log:Info("Created %d optimal inter-area connections between areas %d and %d", connections, areaA.id, areaB.id)
-
+	Log:Info("Created %d inter-area connections between areas %d and %d", connections, areaA.id, areaB.id)
 	return connections
 end
 
@@ -1019,71 +1036,6 @@ function Node.GenerateHierarchicalNetwork(maxAreas)
 		end
 	end
 	Log:Info("Verification: Found %d inter-area connections in the data structure", verificationCount)
-end
-
---- Build hierarchical data structure for HPA* pathfinding
----@param processedAreas table Areas with their fine points and connections
-local function buildHierarchicalStructure(processedAreas)
-	-- Initialize hierarchical structure in globals
-	if not G.Navigation.hierarchical then
-		G.Navigation.hierarchical = {}
-	end
-
-	G.Navigation.hierarchical.areas = {}
-	G.Navigation.hierarchical.edgePoints = {} -- Global registry of edge points for fast lookup
-
-	local totalEdgePoints = 0
-	local totalInterConnections = 0
-
-	-- Process each area and build the hierarchical structure
-	for areaId, data in pairs(processedAreas) do
-		local areaInfo = {
-			id = areaId,
-			area = data.area,
-			points = data.points,
-			edgePoints = {}, -- Points on the boundary of this area
-			internalPoints = {}, -- Points inside this area
-			interAreaConnections = {}, -- Connections to other areas
-		}
-
-		-- Categorize points as edge or internal
-		for _, point in pairs(data.points) do
-			if point.isEdge then
-				table.insert(areaInfo.edgePoints, point)
-				-- Add to global edge point registry with area reference
-				G.Navigation.hierarchical.edgePoints[point.id .. "_" .. areaId] = {
-					point = point,
-					areaId = areaId,
-				}
-				totalEdgePoints = totalEdgePoints + 1
-			else
-				table.insert(areaInfo.internalPoints, point)
-			end
-
-			-- Count inter-area connections
-			for _, neighbor in pairs(point.neighbors) do
-				if neighbor.isInterArea then
-					totalInterConnections = totalInterConnections + 1
-					-- Store inter-area connection info
-					table.insert(areaInfo.interAreaConnections, {
-						fromPoint = point,
-						toPoint = neighbor.point,
-						toArea = neighbor.point.parentArea,
-						cost = neighbor.cost,
-					})
-				end
-			end
-		end
-
-		G.Navigation.hierarchical.areas[areaId] = areaInfo
-		Log:Debug(
-			"Area %d: %d edge points, %d internal points, %d inter-area connections",
-			areaId,
-			#areaInfo.edgePoints,
-			#areaInfo.internalPoints,
-			#areaInfo.interAreaConnections
-		)
-	end
 end
 
 --- Get hierarchical pathfinding data (for HPA* algorithm)
