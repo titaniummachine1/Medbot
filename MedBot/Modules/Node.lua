@@ -854,8 +854,8 @@ local function processSetupTick()
 			local data = SetupState.processedAreas[areaId]
 			local area = data.area
 
-			-- Get actually adjacent areas using nav mesh connections
-			local adjacentAreas = Node.GetAdjacentNodesSimple(area, nodes)
+			-- Get actually adjacent areas using nav mesh connections (just nodes, no costs needed)
+			local adjacentAreas = Node.GetAdjacentNodesOnly(area, nodes)
 
 			for _, adjacentArea in ipairs(adjacentAreas) do
 				-- Only connect if the adjacent area was also processed
@@ -1075,6 +1075,21 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 			end
 		end
 	end
+	return adjacent
+end
+
+--- Get adjacent nodes as simple array (for backward compatibility with non-pathfinding uses)
+---@param node table First node (source)
+---@param nodes table All navigation nodes
+---@return table[] Array of adjacent node objects only
+function Node.GetAdjacentNodesOnly(node, nodes)
+	local adjacent = {}
+	local adjacentWithCost = Node.GetAdjacentNodesSimple(node, nodes)
+
+	for _, neighborData in ipairs(adjacentWithCost) do
+		table.insert(adjacent, neighborData.node)
+	end
+
 	return adjacent
 end
 

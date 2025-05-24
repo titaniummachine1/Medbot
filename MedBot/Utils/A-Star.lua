@@ -153,7 +153,16 @@ function AStar.HPAStarPath(startPos, goalPos, nodes, hierarchicalData)
 	-- Phase 3: Find high-level path between areas
 	local areaPath = AStar.NormalPath(nodes[startArea.id], nodes[goalArea.id], nodes, function(node, nodeList)
 		local Node = require("MedBot.Modules.Node")
-		return Node.GetAdjacentNodesSimple(node, nodeList)
+		local adjacent = Node.GetAdjacentNodesOnly(node, nodeList)
+		local result = {}
+		-- Convert to cost format for NormalPath
+		for _, adjacentNode in ipairs(adjacent) do
+			table.insert(result, {
+				node = adjacentNode,
+				cost = 1, -- Default cost for area-to-area connections
+			})
+		end
+		return result
 	end)
 
 	if not areaPath or #areaPath == 0 then
