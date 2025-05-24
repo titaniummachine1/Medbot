@@ -490,7 +490,19 @@ Commands.Register("pf_hierarchical", function(args)
 	if args[1] == "network" then
 		local Node = require("MedBot.Modules.Node")
 		Node.GenerateHierarchicalNetwork()
-		Notify.Simple("Generated hierarchical network", "Check console for details", 3)
+		Notify.Simple(
+			"Started hierarchical network generation",
+			"Will process across multiple ticks to prevent freezing",
+			5
+		)
+	elseif args[1] == "status" then
+		-- Check setup progress by accessing the SetupState (we need to expose this)
+		local G = require("MedBot.Utils.Globals")
+		if G.Navigation.hierarchical then
+			print("Hierarchical network ready and available")
+		else
+			print("Hierarchical network not yet available - check if setup is in progress")
+		end
 	elseif args[1] == "info" then
 		local areaId = tonumber(args[2])
 		if areaId then
@@ -512,7 +524,10 @@ Commands.Register("pf_hierarchical", function(args)
 			print("Usage: pf_hierarchical info <areaId>")
 		end
 	else
-		print("Usage: pf_hierarchical network | info <areaId>")
+		print("Usage: pf_hierarchical network | status | info <areaId>")
+		print("  network - Start multi-tick hierarchical network generation")
+		print("  status  - Check if hierarchical network is ready")
+		print("  info    - Show detailed info for specific area")
 	end
 end)
 

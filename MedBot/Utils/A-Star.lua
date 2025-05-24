@@ -13,26 +13,6 @@ local function HeuristicCostEstimate(nodeA, nodeB)
 	return ManhattanDistance(nodeA, nodeB)
 end
 
--- Function to get connection cost between two nodes (returns 1 if no cost specified, or actual cost)
-local function GetConnectionCost(nodeA, nodeB, nodes)
-	-- Check all directions for a connection with cost
-	for dir = 1, 4 do
-		local cDir = nodeA.c[dir]
-		if cDir and cDir.connections then
-			for _, connection in ipairs(cDir.connections) do
-				-- Handle both integer ID and table with cost
-				local targetId = (type(connection) == "table") and connection.node or connection
-				local cost = (type(connection) == "table") and connection.cost or 1
-
-				if targetId == nodeB.id then
-					return cost
-				end
-			end
-		end
-	end
-	return 1 -- Default cost if no connection found
-end
-
 local function reconstructPath(cameFrom, current)
 	local totalPath = { current }
 	while cameFrom[current] do
@@ -42,6 +22,7 @@ local function reconstructPath(cameFrom, current)
 	return totalPath
 end
 
+-- Optimized A-Star using precomputed costs (for complex scenarios)
 function AStar.NormalPath(start, goal, nodes, adjacentFun)
 	local openSet = Heap.new(function(a, b)
 		return a.fScore < b.fScore
@@ -63,11 +44,19 @@ function AStar.NormalPath(start, goal, nodes, adjacentFun)
 
 		closedSet[current] = true
 
-		for _, neighbor in ipairs(adjacentFun(current, nodes)) do
+		-- adjacentFun now returns {node=targetNode, cost=connectionCost}
+		for _, neighborData in ipairs(adjacentFun(current, nodes)) do
+			local neighbor = neighborData.node
+			local connectionCost = neighborData.cost
+
 			if not closedSet[neighbor] then
-				-- Use connection cost instead of just distance
-				local connectionCost = GetConnectionCost(current, neighbor, nodes)
-				local tentativeGScore = gScore[current] + (HeuristicCostEstimate(current, neighbor) * connectionCost)
+				-- Calculate distance cost (Manhattan distance for efficiency)
+				local distanceCost = HeuristicCostEstimate(current, neighbor)
+
+				-- Total cost = distance + precomputed connection cost
+				local totalMoveCost = distanceCost + connectionCost
+
+				local tentativeGScore = gScore[current] + totalMoveCost
 
 				if not gScore[neighbor] or tentativeGScore < gScore[neighbor] then
 					cameFrom[neighbor] = current
@@ -82,6 +71,7 @@ function AStar.NormalPath(start, goal, nodes, adjacentFun)
 	return nil -- Path not found if loop exits
 end
 
+-- Optimized GBFS using precomputed costs (primary algorithm for fine-grained pathfinding)
 function AStar.GBFSPath(start, goal, nodes, getNeighbors)
 	local openSet = Heap.new(function(a, b)
 		return a.heuristic < b.heuristic
@@ -101,15 +91,244 @@ function AStar.GBFSPath(start, goal, nodes, getNeighbors)
 
 		closedSet[currentNode] = true
 
-		for _, neighbor in ipairs(getNeighbors(currentNode, nodes)) do
-			if not closedSet[neighbor] then
+		-- getNeighbors now returns {node=targetNode, cost=connectionCost}
+		for _, neighborData in ipairs(getNeighbors(currentNode, nodes)) do
+			local neighbor = neighborData.node
+			local connectionCost = neighborData.cost
+
+			if not closedSet[neighbor] and connectionCost > 0 then -- Valid connection
 				cameFrom[neighbor] = currentNode
-				openSet:push({ node = neighbor, heuristic = HeuristicCostEstimate(neighbor, goal) })
+				-- Use connection cost to influence heuristic (higher cost = less preferred)
+				local adjustedHeuristic = HeuristicCostEstimate(neighbor, goal) + (connectionCost - 1)
+				openSet:push({ node = neighbor, heuristic = adjustedHeuristic })
 			end
 		end
 	end
 
 	return nil -- Path not found if the open set is empty
+end
+
+--- HPA* Hierarchical Pathfinding Implementation
+---@param startPos Vector3 Start position in world space
+---@param goalPos Vector3 Goal position in world space
+---@param nodes table Nav mesh nodes (areas)
+---@param hierarchicalData table Fine-grained hierarchical data
+---@return table[]|nil Path of fine-grained points or nil if no path found
+function AStar.HPAStarPath(startPos, goalPos, nodes, hierarchicalData)
+	if not hierarchicalData or not hierarchicalData.areas then
+		return nil -- No hierarchical data available
+	end
+
+	-- Phase 1: Find which areas contain start and goal positions
+	local startArea, goalArea = nil, nil
+	local startAreaDist, goalAreaDist = math.huge, math.huge
+
+	for areaId, areaInfo in pairs(hierarchicalData.areas) do
+		local areaNode = nodes[areaId]
+		if areaNode then
+			local distToStart = (areaNode.pos - startPos):Length()
+			local distToGoal = (areaNode.pos - goalPos):Length()
+
+			if distToStart < startAreaDist then
+				startAreaDist = distToStart
+				startArea = areaInfo
+			end
+
+			if distToGoal < goalAreaDist then
+				goalAreaDist = distToGoal
+				goalArea = areaInfo
+			end
+		end
+	end
+
+	if not startArea or not goalArea then
+		return nil -- Could not find containing areas
+	end
+
+	-- Phase 2: If start and goal are in same area, use fine-grained pathfinding only
+	if startArea.id == goalArea.id then
+		return AStar.FindPathWithinArea(startPos, goalPos, startArea)
+	end
+
+	-- Phase 3: Find high-level path between areas
+	local areaPath = AStar.NormalPath(nodes[startArea.id], nodes[goalArea.id], nodes, function(node, nodeList)
+		local Node = require("MedBot.Modules.Node")
+		return Node.GetAdjacentNodesSimple(node, nodeList)
+	end)
+
+	if not areaPath or #areaPath == 0 then
+		return nil -- No high-level path found
+	end
+
+	-- Phase 4: Build detailed path using fine points within each area
+	local detailedPath = {}
+
+	for i = 1, #areaPath do
+		local currentAreaNode = areaPath[i]
+		local currentAreaInfo = hierarchicalData.areas[currentAreaNode.id]
+
+		if not currentAreaInfo then
+			goto continue
+		end
+
+		if i == 1 then
+			-- First area: path from start position to exit point
+			local exitPoint = AStar.FindBestExitPoint(currentAreaInfo, areaPath[i + 1])
+			local pathSegment =
+				AStar.FindPathWithinArea(startPos, exitPoint and exitPoint.pos or currentAreaNode.pos, currentAreaInfo)
+			if pathSegment then
+				for _, point in ipairs(pathSegment) do
+					table.insert(detailedPath, point)
+				end
+			end
+		elseif i == #areaPath then
+			-- Last area: path from entry point to goal position
+			local entryPoint = AStar.FindBestEntryPoint(currentAreaInfo, areaPath[i - 1])
+			local pathSegment =
+				AStar.FindPathWithinArea(entryPoint and entryPoint.pos or currentAreaNode.pos, goalPos, currentAreaInfo)
+			if pathSegment then
+				for _, point in ipairs(pathSegment) do
+					table.insert(detailedPath, point)
+				end
+			end
+		else
+			-- Middle area: path from entry to exit point
+			local entryPoint = AStar.FindBestEntryPoint(currentAreaInfo, areaPath[i - 1])
+			local exitPoint = AStar.FindBestExitPoint(currentAreaInfo, areaPath[i + 1])
+
+			if entryPoint and exitPoint then
+				local pathSegment = AStar.FindPathWithinArea(entryPoint.pos, exitPoint.pos, currentAreaInfo)
+				if pathSegment then
+					for _, point in ipairs(pathSegment) do
+						table.insert(detailedPath, point)
+					end
+				end
+			end
+		end
+
+		::continue::
+	end
+
+	return #detailedPath > 0 and detailedPath or nil
+end
+
+--- Find path within a single area using fine points
+---@param startPos Vector3 Start position
+---@param goalPos Vector3 Goal position
+---@param areaInfo table Area information with fine points
+---@return table[]|nil Array of fine points or nil if no path found
+function AStar.FindPathWithinArea(startPos, goalPos, areaInfo)
+	if not areaInfo.points or #areaInfo.points == 0 then
+		return nil
+	end
+
+	-- Find closest fine points to start and goal
+	local startPoint, goalPoint = nil, nil
+	local startDist, goalDist = math.huge, math.huge
+
+	for _, point in ipairs(areaInfo.points) do
+		local distToStart = (point.pos - startPos):Length()
+		local distToGoal = (point.pos - goalPos):Length()
+
+		if distToStart < startDist then
+			startDist = distToStart
+			startPoint = point
+		end
+
+		if distToGoal < goalDist then
+			goalDist = distToGoal
+			goalPoint = point
+		end
+	end
+
+	if not startPoint or not goalPoint then
+		return nil
+	end
+
+	-- Use A* on fine points within the area
+	return AStar.AStarOnFinePoints(startPoint, goalPoint, areaInfo.points)
+end
+
+--- A* pathfinding on fine points with neighbor connections
+---@param startPoint table Starting fine point
+---@param goalPoint table Goal fine point
+---@param finePoints table[] All fine points in the area
+---@return table[]|nil Path of fine points or nil if no path found
+function AStar.AStarOnFinePoints(startPoint, goalPoint, finePoints)
+	local openSet = Heap.new(function(a, b)
+		return a.fScore < b.fScore
+	end)
+	local closedSet = {}
+	local gScore, fScore, cameFrom = {}, {}, {}
+
+	gScore[startPoint] = 0
+	fScore[startPoint] = (startPoint.pos - goalPoint.pos):Length()
+
+	openSet:push({ node = startPoint, fScore = fScore[startPoint] })
+
+	while not openSet:empty() do
+		local currentData = openSet:pop()
+		local current = currentData.node
+
+		if current.id == goalPoint.id then
+			return reconstructPath(cameFrom, current)
+		end
+
+		closedSet[current] = true
+
+		-- Check neighbors of current fine point
+		for _, neighbor in ipairs(current.neighbors or {}) do
+			local neighborPoint = neighbor.point
+			if not closedSet[neighborPoint] then
+				local tentativeGScore = gScore[current] + (neighbor.cost or 1)
+
+				if not gScore[neighborPoint] or tentativeGScore < gScore[neighborPoint] then
+					cameFrom[neighborPoint] = current
+					gScore[neighborPoint] = tentativeGScore
+					fScore[neighborPoint] = tentativeGScore + (neighborPoint.pos - goalPoint.pos):Length()
+					openSet:push({ node = neighborPoint, fScore = fScore[neighborPoint] })
+				end
+			end
+		end
+	end
+
+	return nil -- No path found
+end
+
+--- Find best entry point into an area from a previous area
+---@param areaInfo table Current area information
+---@param previousAreaNode table Previous area node
+---@return table|nil Best entry point or nil
+function AStar.FindBestEntryPoint(areaInfo, previousAreaNode)
+	local bestPoint, bestDist = nil, math.huge
+
+	for _, point in ipairs(areaInfo.edgePoints or {}) do
+		local dist = (point.pos - previousAreaNode.pos):Length()
+		if dist < bestDist then
+			bestDist = dist
+			bestPoint = point
+		end
+	end
+
+	return bestPoint
+end
+
+--- Find best exit point from an area toward next area
+---@param areaInfo table Current area information
+---@param nextAreaNode table Next area node
+---@return table|nil Best exit point or nil
+function AStar.FindBestExitPoint(areaInfo, nextAreaNode)
+	local bestPoint, bestDist = nil, math.huge
+
+	for _, point in ipairs(areaInfo.edgePoints or {}) do
+		local dist = (point.pos - nextAreaNode.pos):Length()
+		if dist < bestDist then
+			bestDist = dist
+			bestPoint = point
+		end
+	end
+
+	return bestPoint
 end
 
 return AStar

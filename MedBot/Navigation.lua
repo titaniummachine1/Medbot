@@ -544,6 +544,22 @@ function Navigation.FindPath(startNode, goalNode)
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
+	-- Check if hierarchical pathfinding is enabled and available
+	if G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
+		Log:Info("Using HPA* hierarchical pathfinding")
+		local hierarchicalPath =
+			AStar.HPAStarPath(startNode.pos, goalNode.pos, G.Navigation.nodes, G.Navigation.hierarchical)
+		if hierarchicalPath and #hierarchicalPath > 0 then
+			G.Navigation.path = hierarchicalPath
+			Log:Info("HPA* path found with %d fine points", #hierarchicalPath)
+			Navigation.pathFound = true
+			Navigation.pathFailed = false
+			return Navigation
+		else
+			Log:Warn("HPA* pathfinding failed, falling back to normal pathfinding")
+		end
+	end
+
 	-- Use simple adjacent nodes function for faster pathfinding (validation done at setup)
 	if horizontalDistance <= 100 and verticalDistance <= 18 then --attempt to avoid work
 		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)

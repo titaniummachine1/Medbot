@@ -179,13 +179,54 @@ local function isNodeAccessible(nodeA, nodeB)
 	return false
 end
 
+--==========================================================================
+--  Connection utilities - Handle both integer IDs and cost objects
+--==========================================================================
+
+--- Extract node ID from connection (handles both integer and table format)
+---@param connection any Connection data (integer ID or table with node/cost)
+---@return integer Node ID
+local function getConnectionNodeId(connection)
+	if type(connection) == "table" then
+		return connection.node
+	else
+		return connection
+	end
+end
+
+--- Extract cost from connection (handles both integer and table format)
+---@param connection any Connection data (integer ID or table with node/cost)
+---@return number Cost value
+local function getConnectionCost(connection)
+	if type(connection) == "table" then
+		return connection.cost or 1
+	else
+		return 1
+	end
+end
+
+--- Public utility functions for connection handling
+---@param connection any Connection data (integer ID or table with node/cost)
+---@return integer Node ID
+function Node.GetConnectionNodeId(connection)
+	return getConnectionNodeId(connection)
+end
+
+--- Public utility function for getting connection cost
+---@param connection any Connection data (integer ID or table with node/cost)
+---@return number Cost value
+function Node.GetConnectionCost(connection)
+	return getConnectionCost(connection)
+end
+
 --- Remove invalid connections between nodes (expensive validation at setup time)
 ---@param nodes table All navigation nodes
 local function pruneInvalidConnections(nodes)
 	local prunedCount = 0
 	local totalChecked = 0
+	local penalizedCount = 0
 
-	Log:Info("Starting connection cleanup (expensive validation at setup time)...")
+	Log:Info("Starting connection cleanup with height penalty precomputation...")
 
 	for nodeId, node in pairs(nodes) do
 		if not node or not node.c then
@@ -198,17 +239,56 @@ local function pruneInvalidConnections(nodes)
 				local validConnections = {}
 
 				-- Use pairs to iterate through connections
-				for _, targetNodeId in pairs(connectionDir.connections) do
+				for i, connection in pairs(connectionDir.connections) do
 					totalChecked = totalChecked + 1
+					local targetNodeId = getConnectionNodeId(connection)
+					local currentCost = getConnectionCost(connection)
 					local targetNode = nodes[targetNodeId]
 
 					if targetNode then
-						-- Use expensive accessibility check for thorough validation at setup
-						if isNodeAccessible(node, targetNode) then
-							table.insert(validConnections, targetNodeId)
-						else
+						local heightDiff = targetNode.pos.z - node.pos.z
+
+						-- Check height restrictions and precompute penalties
+						if heightDiff > 72 then
+							-- Invalid connection - can't jump this high - REMOVE ENTIRELY
+							prunedCount = prunedCount + 1
+							Log:Debug(
+								"Pruned high jump connection: %d -> %d (%.1f units up)",
+								nodeId,
+								targetNodeId,
+								heightDiff
+							)
+						elseif not isNodeAccessible(node, targetNode) then
+							-- Use expensive accessibility check for thorough validation at setup
 							prunedCount = prunedCount + 1
 							Log:Debug("Pruned inaccessible connection: %d -> %d", nodeId, targetNodeId)
+						else
+							-- Valid connection - precompute final cost including height penalty
+							local finalCost = currentCost
+							if heightDiff > 18 then
+								-- Add 100 unit penalty for steep climbs to the cost
+								finalCost = currentCost + 100
+								penalizedCount = penalizedCount + 1
+								Log:Debug(
+									"Applied height penalty to connection: %d -> %d (%.1f units up, cost: %d)",
+									nodeId,
+									targetNodeId,
+									heightDiff,
+									finalCost
+								)
+							end
+
+							-- Store connection with precomputed cost
+							if finalCost > 1 then
+								-- Store as cost object if cost is not default
+								table.insert(validConnections, {
+									node = targetNodeId,
+									cost = finalCost,
+								})
+							else
+								-- Keep as simple integer if default cost
+								table.insert(validConnections, targetNodeId)
+							end
 						end
 					else
 						-- Remove connections to non-existent nodes
@@ -226,7 +306,12 @@ local function pruneInvalidConnections(nodes)
 		::continue::
 	end
 
-	Log:Info("Connection cleanup complete: %d/%d connections pruned", prunedCount, totalChecked)
+	Log:Info(
+		"Connection cleanup complete: %d/%d connections pruned, %d penalized for height (all costs precomputed)",
+		prunedCount,
+		totalChecked,
+		penalizedCount
+	)
 end
 
 ------------------------------------------------------------------------
@@ -646,49 +731,185 @@ local function buildHierarchicalStructure(processedAreas)
 end
 
 --==========================================================================
---  Hierarchical network generation  (Fixed to use actual nav connections)
+--  Multi-tick setup system to prevent game freezing
 --==========================================================================
-function Node.GenerateHierarchicalNetwork(maxAreas)
+local SetupState = {
+	currentPhase = 0,
+	processedAreas = {},
+	maxAreasPerTick = 5, -- Process 5 areas per tick
+	totalAreas = 0,
+	currentAreaIndex = 0,
+	hierarchicalData = {},
+}
+
+--- Apply height penalties to all fine point connections
+local function applyHeightPenaltiesToConnections(processedAreas)
+	local penalizedCount = 0
+	local invalidatedCount = 0
+
+	Log:Info("Applying height penalties to fine point connections...")
+
+	for areaId, data in pairs(processedAreas) do
+		for _, point in ipairs(data.points) do
+			local validNeighbors = {}
+
+			for _, neighbor in ipairs(point.neighbors) do
+				local heightDiff = neighbor.point.pos.z - point.pos.z
+
+				if heightDiff > 72 then
+					-- Invalid connection - can't jump this high
+					invalidatedCount = invalidatedCount + 1
+				elseif heightDiff > 18 then
+					-- Apply 100 unit penalty for steep climbs
+					neighbor.cost = (neighbor.cost or 1) + 100
+					table.insert(validNeighbors, neighbor)
+					penalizedCount = penalizedCount + 1
+				else
+					-- Normal connection
+					table.insert(validNeighbors, neighbor)
+				end
+			end
+
+			point.neighbors = validNeighbors
+		end
+	end
+
+	Log:Info("Height penalties applied: %d penalized, %d invalidated", penalizedCount, invalidatedCount)
+end
+
+--- Initialize multi-tick setup
+local function initializeSetup()
+	SetupState.currentPhase = 1
+	SetupState.processedAreas = {}
+	SetupState.currentAreaIndex = 0
+	SetupState.hierarchicalData = {}
+
+	local nodes = G.Navigation.nodes
+	if nodes then
+		SetupState.totalAreas = 0
+		for _ in pairs(nodes) do
+			SetupState.totalAreas = SetupState.totalAreas + 1
+		end
+	end
+
+	Log:Info("Starting multi-tick hierarchical setup: %d areas total", SetupState.totalAreas)
+end
+
+--- Process one tick of setup work
+local function processSetupTick()
+	if SetupState.currentPhase == 0 then
+		return false -- No setup in progress
+	end
+
 	local nodes = G.Navigation.nodes
 	if not nodes then
-		return
+		SetupState.currentPhase = 0
+		return false
 	end
-	local processed, areas = {}, 0
-	for id, _ in pairs(nodes) do
-		if maxAreas and areas >= maxAreas then
-			break
+
+	if SetupState.currentPhase == 1 then
+		-- Phase 1: Generate fine points (spread across multiple ticks)
+		local processed = 0
+		local areaIds = {}
+		for id in pairs(nodes) do
+			table.insert(areaIds, id)
 		end
-		processed[id] = { area = nodes[id], points = Node.GenerateAreaPoints(id) }
-		areas = areas + 1
-	end
-	Log:Info("Pass-1 fine points ready in %d areas", areas)
 
-	------------------------------------------------------------
-	-- PASS-2: Connect fine points between actually adjacent areas
-	------------------------------------------------------------
-	local totalConnections = 0
-	for areaId, data in pairs(processed) do
-		local area = data.area
+		local startIdx = SetupState.currentAreaIndex + 1
+		local endIdx = math.min(startIdx + SetupState.maxAreasPerTick - 1, #areaIds)
 
-		-- Get actually adjacent areas using nav mesh connections
-		local adjacentAreas = Node.GetAdjacentNodesSimple(area, nodes)
+		for i = startIdx, endIdx do
+			local areaId = areaIds[i]
+			SetupState.processedAreas[areaId] = {
+				area = nodes[areaId],
+				points = Node.GenerateAreaPoints(areaId),
+			}
+			processed = processed + 1
+		end
 
-		for _, adjacentArea in ipairs(adjacentAreas) do
-			-- Only connect if the adjacent area was also processed
-			if processed[adjacentArea.id] then
-				local connections = connectPair(area, adjacentArea)
-				totalConnections = totalConnections + connections
-				Log:Debug("Connected %d fine points between areas %d and %d", connections, areaId, adjacentArea.id)
+		SetupState.currentAreaIndex = endIdx
+
+		Log:Debug("Phase 1: Processed %d areas (%d/%d)", processed, SetupState.currentAreaIndex, #areaIds)
+
+		if SetupState.currentAreaIndex >= #areaIds then
+			SetupState.currentPhase = 2
+			SetupState.currentAreaIndex = 0
+			Log:Info("Phase 1 complete: Fine points generated for all areas")
+		end
+
+		return true -- More work to do
+	elseif SetupState.currentPhase == 2 then
+		-- Phase 2: Connect fine points between adjacent areas (spread across ticks)
+		local processed = 0
+		local areaIds = {}
+		for id in pairs(SetupState.processedAreas) do
+			table.insert(areaIds, id)
+		end
+
+		local startIdx = SetupState.currentAreaIndex + 1
+		local endIdx = math.min(startIdx + SetupState.maxAreasPerTick - 1, #areaIds)
+
+		for i = startIdx, endIdx do
+			local areaId = areaIds[i]
+			local data = SetupState.processedAreas[areaId]
+			local area = data.area
+
+			-- Get actually adjacent areas using nav mesh connections
+			local adjacentAreas = Node.GetAdjacentNodesSimple(area, nodes)
+
+			for _, adjacentArea in ipairs(adjacentAreas) do
+				-- Only connect if the adjacent area was also processed
+				if SetupState.processedAreas[adjacentArea.id] then
+					local connections = connectPair(area, adjacentArea)
+					Log:Debug("Connected %d fine points between areas %d and %d", connections, areaId, adjacentArea.id)
+				end
 			end
+			processed = processed + 1
 		end
+
+		SetupState.currentAreaIndex = endIdx
+
+		Log:Debug(
+			"Phase 2: Processed connections for %d areas (%d/%d)",
+			processed,
+			SetupState.currentAreaIndex,
+			#areaIds
+		)
+
+		if SetupState.currentAreaIndex >= #areaIds then
+			SetupState.currentPhase = 3
+			Log:Info("Phase 2 complete: Inter-area connections established")
+		end
+
+		return true -- More work to do
+	elseif SetupState.currentPhase == 3 then
+		-- Phase 3: Apply height penalties and build hierarchical structure
+		applyHeightPenaltiesToConnections(SetupState.processedAreas)
+		buildHierarchicalStructure(SetupState.processedAreas)
+
+		SetupState.currentPhase = 0 -- Setup complete
+		Log:Info("Multi-tick hierarchical setup complete!")
+		return false -- Setup finished
 	end
 
-	Log:Info("Pass-2 connected %d fine-point edges between adjacent areas", totalConnections)
+	return false
+end
 
-	------------------------------------------------------------
-	-- PASS-3: Build HPA* structure
-	------------------------------------------------------------
-	buildHierarchicalStructure(processed)
+--==========================================================================
+--  Enhanced hierarchical network generation with multi-tick support
+--==========================================================================
+function Node.GenerateHierarchicalNetwork(maxAreas)
+	-- Start multi-tick setup process
+	initializeSetup()
+
+	-- Register callback to process setup across multiple ticks
+	callbacks.Unregister("CreateMove", "HierarchicalSetup")
+	callbacks.Register("CreateMove", "HierarchicalSetup", function()
+		if not processSetupTick() then
+			-- Setup complete, unregister callback
+			callbacks.Unregister("CreateMove", "HierarchicalSetup")
+		end
+	end)
 end
 
 --==========================================================================
@@ -757,11 +978,12 @@ function Node.RemoveConnection(nodeA, nodeB)
 	if not nodes then
 		return
 	end
-	-- Simplified connection removal
+	-- Updated to handle both connection formats
 	for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
 		if cDir and cDir.connections then
-			for i, v in pairs(cDir.connections) do
-				if v == nodeB.id then
+			for i, connection in pairs(cDir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				if targetNodeId == nodeB.id then
 					table.remove(cDir.connections, i)
 					cDir.count = cDir.count - 1
 					break
@@ -779,12 +1001,13 @@ function Node.AddCostToConnection(nodeA, nodeB, cost)
 	if not nodes then
 		return
 	end
-	-- Simplified cost addition
+	-- Updated to handle both connection formats
 	for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
 		if cDir and cDir.connections then
-			for i, v in pairs(cDir.connections) do
-				if v == nodeB.id then
-					cDir.connections[i] = { node = v, cost = cost }
+			for i, connection in pairs(cDir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				if targetNodeId == nodeB.id then
+					cDir.connections[i] = { node = targetNodeId, cost = cost }
 					break
 				end
 			end
@@ -807,8 +1030,9 @@ function Node.GetAdjacentNodes(node, nodes)
 	-- Check all directions using ipairs for connections
 	for _, cDir in ipairs(node.c) do
 		if cDir and cDir.connections then
-			for _, cid in ipairs(cDir.connections) do
-				local targetNode = nodes[cid]
+			for _, connection in ipairs(cDir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				local targetNode = nodes[targetNodeId]
 				if targetNode and targetNode.pos then
 					-- Use centralized accessibility check (EXPENSIVE)
 					if isNodeAccessible(node, targetNode) then
@@ -824,9 +1048,10 @@ end
 --- Get adjacent nodes without accessibility checks (fast, for finding connections)
 ---@param node table First node (source)
 ---@param nodes table All navigation nodes
----@return table[] Array of connected adjacent nodes
+---@return table[] Array of connected adjacent nodes with costs
 --- NOTE: This function is FAST and should be used for pathfinding.
 --- Assumes connections are already validated during setup time.
+--- Returns: { {node = targetNode, cost = connectionCost}, ... }
 function Node.GetAdjacentNodesSimple(node, nodes)
 	local adjacent = {}
 	if not node or not node.c or not nodes then
@@ -836,10 +1061,16 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 	-- Check all directions using ipairs for connections
 	for _, cDir in ipairs(node.c) do
 		if cDir and cDir.connections then
-			for _, cid in ipairs(cDir.connections) do
-				local targetNode = nodes[cid]
+			for _, connection in ipairs(cDir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				local connectionCost = getConnectionCost(connection)
+				local targetNode = nodes[targetNodeId]
 				if targetNode and targetNode.pos then
-					table.insert(adjacent, targetNode)
+					-- Return node WITH cost for direct use in pathfinding
+					table.insert(adjacent, {
+						node = targetNode,
+						cost = connectionCost,
+					})
 				end
 			end
 		end
