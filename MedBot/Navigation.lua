@@ -123,33 +123,9 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 		return
 	end
 
-	local nodes = G.Navigation.nodes
-
-	for dir = 1, 4 do
-		local conDir = nodes[nodeA.id].c[dir]
-		if conDir and conDir.connections then
-			for i, con in ipairs(conDir.connections) do
-				if con == nodeB.id then
-					print("Adding cost between " .. nodeA.id .. " and " .. nodeB.id)
-					conDir.connections[i] = { node = con, cost = cost }
-					break
-				end
-			end
-		end
-	end
-
-	for dir = 1, 4 do
-		local conDir = nodes[nodeB.id].c[dir]
-		if conDir and conDir.connections then
-			for i, con in ipairs(conDir.connections) do
-				if con == nodeA.id then
-					print("Adding cost between " .. nodeB.id .. " and " .. nodeA.id)
-					conDir.connections[i] = { node = con, cost = cost }
-					break
-				end
-			end
-		end
-	end
+	-- Use Node module's implementation to avoid duplication
+	local Node = require("MedBot.Modules.Node")
+	Node.AddCostToConnection(nodeA, nodeB, cost)
 end
 
 --[[
@@ -541,6 +517,11 @@ end
 ---@param pos Vector3|{ x:number, y:number, z:number }
 ---@return Node
 function Navigation.GetClosestNode(pos)
+	-- Safety check: ensure nodes are available
+	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
+		Log:Debug("No navigation nodes available for GetClosestNode")
+		return nil
+	end
 	return Node.GetClosestNode(pos)
 end
 

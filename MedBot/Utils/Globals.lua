@@ -48,6 +48,9 @@ G.Navigation = {
 
 -- SmartJump integration
 G.ShouldJump = false -- Set by SmartJump module when jump should be performed
+G.LastSmartJumpAttempt = 0 -- Track last time SmartJump was attempted
+G.LastEmergencyJump = 0 -- Track last emergency jump time
+G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
 
 G.Tasks = {
 	None = 0,

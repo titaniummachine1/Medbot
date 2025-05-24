@@ -101,20 +101,23 @@ local function AdjustVelocity(cmd)
 	return velocity
 end
 
--- The main smart jump logic.
+-- Enhanced smart jump logic with obstacle detection and timing
 -- When called from MedBot's OnCreateMove it uses G.pLocal, G.pLocal.flags, etc.
 -- It returns true if the conditions for a jump are met and sets G.ShouldJump accordingly.
 function SmartJump.Main(cmd)
 	local shouldJump = false
+	local currentTick = globals.TickCount()
 
 	if not G.pLocal.entity then
 		G.ShouldJump = false
+		G.ObstacleDetected = false
 		return false
 	end
 
 	-- Check if smart jump is enabled in MedBot menu
 	if not G.Menu.Movement.Smart_Jump then
 		G.ShouldJump = false
+		G.ObstacleDetected = false
 		return false
 	end
 
@@ -135,7 +138,11 @@ function SmartJump.Main(cmd)
 			engine.TraceHull(traceStartPos, traceEndPos, HITBOX_MIN, HITBOX_MAX, MASK_PLAYERSOLID_BRUSHONLY)
 		predictedPosition = forwardTrace.endpos
 
-		if forwardTrace.fraction < 1 then
+		-- Detect obstacle presence
+		local obstacleDetected = forwardTrace.fraction < 1
+		G.ObstacleDetected = obstacleDetected
+
+		if obstacleDetected then
 			local downwardTrace = engine.TraceHull(
 				forwardTrace.endpos,
 				forwardTrace.endpos - MAX_JUMP_HEIGHT,
@@ -156,18 +163,46 @@ function SmartJump.Main(cmd)
 			)
 			predictedPosition = landingDownwardTrace.endpos
 
+			-- Check if jump would be successful
 			if landingDownwardTrace.fraction > 0 and landingDownwardTrace.fraction < JUMP_FRACTION then
 				if IsSurfaceWalkable(landingDownwardTrace.plane) then
 					shouldJump = true
+					G.LastSmartJumpAttempt = currentTick
 				end
 			end
 		end
 	elseif (cmd.buttons & IN_JUMP) == IN_JUMP then
 		shouldJump = true
+		G.LastSmartJumpAttempt = currentTick
 	end
 
 	G.ShouldJump = shouldJump
 	return shouldJump
+end
+
+-- Check if emergency jump should be performed (fallback when SmartJump logic fails)
+---@param currentTick number Current game tick
+---@param stuckTicks number How long we've been stuck
+---@return boolean Whether emergency jump should be performed
+function SmartJump.ShouldEmergencyJump(currentTick, stuckTicks)
+	-- Only emergency jump if:
+	-- 1. We've been stuck for a while (>132 ticks)
+	-- 2. SmartJump hasn't attempted a jump recently (>200 ticks ago)
+	-- 3. We haven't done an emergency jump recently (>300 ticks ago)
+	-- 4. There's an obstacle detected
+	local timeSinceLastSmartJump = currentTick - G.LastSmartJumpAttempt
+	local timeSinceLastEmergencyJump = currentTick - G.LastEmergencyJump
+
+	local shouldEmergency = stuckTicks > 132
+		and timeSinceLastSmartJump > 200
+		and timeSinceLastEmergencyJump > 300
+		and G.ObstacleDetected
+
+	if shouldEmergency then
+		G.LastEmergencyJump = currentTick
+	end
+
+	return shouldEmergency
 end
 
 -- Export functions

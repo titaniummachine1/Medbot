@@ -16,8 +16,7 @@ defaultconfig = {
 		shouldfindhealth = true, -- Path to health
 		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
 		smoothFactor = 0.05,
-		CleanupConnections = true, -- Cleanup invalid connections during map load
-		AllowExpensiveChecks = false, -- Allow expensive walkability trace checks (rarely needed)
+		CleanupConnections = false, -- Cleanup invalid connections during map load (disable to prevent crashes)
 	},
 	Visuals = {
 		EnableVisuals = true,
@@ -30,7 +29,7 @@ defaultconfig = {
 		showHidingSpots = true, -- Show hiding spots (areas where health packs are located)  [[ Used by: MedBot.Visuals ]]
 		showConnections = true, -- Show connections between nodes  [[ Used by: MedBot.Visuals ]]
 		showAreas = true, -- Show area outlines  [[ Used by: MedBot.Visuals ]]
-		renderDistance = 1000, -- Maximum distance to render visuals
+		showAreas = true, -- Show area outlines  [[ Used by: MedBot.Visuals ]]
 	},
 	Movement = {
 		lookatpath = false, -- Look at where we are walking

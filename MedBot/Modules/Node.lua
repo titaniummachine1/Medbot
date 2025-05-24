@@ -128,16 +128,52 @@ local function getNodeCorners(node)
 	return corners
 end
 
---- Check if two nodes are accessible using optimized three-tier fallback approach---@param nodeA table First node---@param nodeB table Second node---@return boolean True if nodes are accessible to each otherlocal function isNodeAccessible(nodeA, nodeB)	-- First pass: Fast center Z distance check	local centerZDiff = math.abs(nodeA.pos.z - nodeB.pos.z)	if centerZDiff <= 72 then		return true -- Fast path: nodes are close enough in height	end	-- Second pass: Check if any corners touch (stairs/ramp scenario)	local cornersA = getNodeCorners(nodeA)	local cornersB = getNodeCorners(nodeB)	for _, cornerA in ipairs(cornersA) do		for _, cornerB in ipairs(cornersB) do			local cornerZDiff = math.abs(cornerA.z - cornerB.z)			if cornerZDiff <= 72 then				return true -- Medium path: corners are within range			end		end	end	-- Third pass: Expensive walkability check (only if allowed and previous checks failed)	if G.Menu.Main.AllowExpensiveChecks then		return isWalkable.Path(nodeA.pos, nodeB.pos)	end	-- If expensive checks are disabled and previous checks failed, assume invalid	return falseend
+--- Check if two nodes are accessible using optimized three-tier fallback approach
+--- Allows going down from any height, but restricts upward movement to 72 units
+---@param nodeA table First node (source)
+---@param nodeB table Second node (destination)
+---@return boolean True if nodes are accessible to each other
+local function isNodeAccessible(nodeA, nodeB)
+	local heightDiff = nodeB.pos.z - nodeA.pos.z -- Positive = going up, negative = going down
+	
+	-- Always allow going downward (falling) regardless of height
+	if heightDiff <= 0 then
+		return true
+	end
+	
+	-- For upward movement, check if it's within duck jump height (72 units)
+	if heightDiff <= 72 then
+		return true -- Fast path: upward movement is within jump height
+	end
 
---- Remove invalid connections between nodes (optimized version)
+	-- If upward movement > 72 units, check corners for stairs/ramps
+	local cornersA = getNodeCorners(nodeA)
+	local cornersB = getNodeCorners(nodeB)
+
+	for _, cornerA in ipairs(cornersA) do
+		for _, cornerB in ipairs(cornersB) do
+			local cornerHeightDiff = cornerB.z - cornerA.z
+			-- Allow if any corner-to-corner connection is within jump height
+			if cornerHeightDiff <= 72 then
+				return true -- Medium path: corners indicate possible stairs/ramp
+			end
+		end
+	end
+
+	-- Third pass: Expensive walkability check (only if allowed and previous checks failed)
+	if G.Menu.Main.AllowExpensiveChecks then
+		return isWalkable.Path(nodeA.pos, nodeB.pos)
+	end
+
+	-- If expensive checks are disabled and previous checks failed, assume invalid
+	return false
+end
+
+--- Remove invalid connections between nodes (simple version to prevent crashes)
 ---@param nodes table All navigation nodes
 local function pruneInvalidConnections(nodes)
 	local prunedCount = 0
 	local totalChecked = 0
-	local fastPassCount = 0
-	local mediumPassCount = 0
-	local slowPassCount = 0
 
 	Log:Info("Starting connection cleanup...")
 
@@ -146,9 +182,8 @@ local function pruneInvalidConnections(nodes)
 			goto continue
 		end
 
-		-- Check all directions (1-4)
-		for dir = 1, 4 do
-			local connectionDir = node.c[dir]
+		-- Check all directions using ipairs
+		for dir, connectionDir in ipairs(node.c) do
 			if connectionDir and connectionDir.connections then
 				local validConnections = {}
 
@@ -158,56 +193,8 @@ local function pruneInvalidConnections(nodes)
 					local targetNode = nodes[targetNodeId]
 
 					if targetNode then
-						-- Use optimized accessibility check
-						local centerZDiff = math.abs(node.pos.z - targetNode.pos.z)
-						local isValid = false
-
-						if centerZDiff <= 72 then
-							-- Fast path: center Z distance is acceptable
-							isValid = true
-							fastPassCount = fastPassCount + 1
-						else
-							-- Check corners for stairs/ramps
-							local cornersA = getNodeCorners(node)
-							local cornersB = getNodeCorners(targetNode)
-							local cornerMatch = false
-
-							for _, cornerA in ipairs(cornersA) do
-								for _, cornerB in ipairs(cornersB) do
-									local cornerZDiff = math.abs(cornerA.z - cornerB.z)
-									if cornerZDiff <= 72 then
-										cornerMatch = true
-										break
-									end
-								end
-								if cornerMatch then
-									break
-								end
-							end
-
-							if cornerMatch then
-								-- Medium path: corners are within range
-								isValid = true
-								mediumPassCount = mediumPassCount + 1
-							elseif G.Menu.Main.AllowExpensiveChecks then
-								-- Slow path: expensive walkability check (only if allowed)
-								isValid = isWalkable.Path(node.pos, targetNode.pos)
-								slowPassCount = slowPassCount + 1
-								if not isValid then
-									Log:Debug(
-										"Pruned connection: Node %d -> Node %d (not walkable)",
-										nodeId,
-										targetNodeId
-									)
-								end
-							else
-								-- Skip expensive check, assume invalid if other checks failed
-								isValid = false
-							end
-						end
-
-						-- Keep valid connections
-						if isValid then
+						-- Use proper accessibility check that considers up/down movement
+						if isNodeAccessible(node, targetNode) then
 							table.insert(validConnections, targetNodeId)
 						else
 							prunedCount = prunedCount + 1
@@ -215,7 +202,6 @@ local function pruneInvalidConnections(nodes)
 					else
 						-- Remove connections to non-existent nodes
 						prunedCount = prunedCount + 1
-						Log:Debug("Pruned connection: Node %d -> Node %d (target not found)", nodeId, targetNodeId)
 					end
 				end
 
@@ -229,7 +215,6 @@ local function pruneInvalidConnections(nodes)
 	end
 
 	Log:Info("Connection cleanup complete: %d/%d connections pruned", prunedCount, totalChecked)
-	Log:Info("Performance: Fast=%d, Medium=%d, Slow=%d checks", fastPassCount, mediumPassCount, slowPassCount)
 end
 
 --[[ Public Module Functions ]]
@@ -243,10 +228,13 @@ function Node.GetNodes()
 end
 
 function Node.GetNodeByID(id)
-	return G.Navigation.nodes[id]
+	return G.Navigation.nodes and G.Navigation.nodes[id] or nil
 end
 
 function Node.GetClosestNode(pos)
+	if not G.Navigation.nodes then
+		return nil
+	end
 	local closest, dist = nil, math.huge
 	for _, node in pairs(G.Navigation.nodes) do
 		local d = (node.pos - pos):Length()
@@ -267,105 +255,20 @@ function Node.CleanupConnections()
 	end
 end
 
---- Removes a node entirely along with its connections
-function Node.RemoveNode(nodeId)
-	local nodes = G.Navigation.nodes
-	local node = nodes[nodeId]
-	if not node then
-		return
-	end
-	-- remove all connections to this node
-	for dir = 1, 4 do
-		local cDir = node.c[dir]
-		if cDir and cDir.connections then
-			for _, nid in ipairs(cDir.connections) do
-				local neighbor = nodes[nid]
-				if neighbor then
-					Node.RemoveConnection(node, neighbor)
-				end
-			end
-		end
-	end
-	-- delete the node
-	nodes[nodeId] = nil
-end
-
---- Fixes node position and corners; removes node if no ground found
----@param nodeId integer
----@return table?|nil fixed node or nil if removed
-function Node.FixNode(nodeId)
-	local nodes = G.Navigation.nodes
-	local node = nodes[nodeId]
-	if not node or not node.pos then
-		return nil
-	end
-	-- Hull trace to find ground surface
-	local trace = traceHullDown(node.pos)
-	if trace.fraction == 0 then
-		-- no valid ground, remove node entirely
-		Node.RemoveNode(nodeId)
-		return nil
-	end
-	-- update center position
-	node.pos = trace.endpos
-	node.z = trace.endpos.z
-	-- adjust two known corners via line trace
-	for _, key in ipairs({ "nw", "se" }) do
-		local c = node[key]
-		if c then
-			local world = Vector3(c.x, c.y, c.z)
-			local lineTrace = traceLineDown(world)
-			node[key] = (lineTrace.fraction < 1) and lineTrace.endpos or world
-		end
-	end
-	-- recompute remaining corners
-	local normal = getGroundNormal(node.pos)
-	local height = math.abs(node.se.z - node.nw.z)
-	local rem = calculateRemainingCorners(node.nw, node.se, normal, height)
-	node.ne, node.sw = rem[1], rem[2]
-	node.fixed = true
-	return node
-end
-
 function Node.AddConnection(nodeA, nodeB)
 	if not nodeA or not nodeB then
 		return
 	end
 	local nodes = G.Navigation.nodes
-	for dir = 1, 4 do
-		local cDir = nodes[nodeA.id].c[dir]
-		if cDir and cDir.connections then
-			-- Check if connection already exists
-			local exists = false
-			for _, existingId in ipairs(cDir.connections) do
-				if existingId == nodeB.id then
-					exists = true
-					break
-				end
-			end
-			if not exists then
-				print("Adding connection between " .. nodeA.id .. " and " .. nodeB.id)
-				table.insert(cDir.connections, nodeB.id)
-				cDir.count = cDir.count + 1
-			end
-		end
+	if not nodes then
+		return
 	end
-	for dir = 1, 4 do
-		local cDir = nodes[nodeB.id].c[dir]
+	-- Simplified connection adding
+	for dir, cDir in ipairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
 		if cDir and cDir.connections then
-			-- Check if reverse connection already exists
-			local exists = false
-			for _, existingId in ipairs(cDir.connections) do
-				if existingId == nodeA.id then
-					exists = true
-					break
-				end
-			end
-			if not exists then
-				print("Adding reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
-				table.insert(cDir.connections, nodeA.id)
-				cDir.count = cDir.count + 1
-			end
+			table.insert(cDir.connections, nodeB.id)
+			cDir.count = cDir.count + 1
+			break
 		end
 	end
 end
@@ -375,25 +278,14 @@ function Node.RemoveConnection(nodeA, nodeB)
 		return
 	end
 	local nodes = G.Navigation.nodes
-	for dir = 1, 4 do
-		local cDir = nodes[nodeA.id].c[dir]
+	if not nodes then
+		return
+	end
+	-- Simplified connection removal
+	for dir, cDir in ipairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
 		if cDir and cDir.connections then
 			for i, v in ipairs(cDir.connections) do
 				if v == nodeB.id then
-					print("Removing connection between " .. nodeA.id .. " and " .. nodeB.id)
-					table.remove(cDir.connections, i)
-					cDir.count = cDir.count - 1
-					break
-				end
-			end
-		end
-	end
-	for dir = 1, 4 do
-		local cDir = nodes[nodeB.id].c[dir]
-		if cDir and cDir.connections then
-			for i, v in ipairs(cDir.connections) do
-				if v == nodeA.id then
-					print("Removing reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
 					table.remove(cDir.connections, i)
 					cDir.count = cDir.count - 1
 					break
@@ -408,24 +300,14 @@ function Node.AddCostToConnection(nodeA, nodeB, cost)
 		return
 	end
 	local nodes = G.Navigation.nodes
-	for dir = 1, 4 do
-		local cDir = nodes[nodeA.id].c[dir]
+	if not nodes then
+		return
+	end
+	-- Simplified cost addition
+	for dir, cDir in ipairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
 		if cDir and cDir.connections then
 			for i, v in ipairs(cDir.connections) do
 				if v == nodeB.id then
-					print("Adding cost between " .. nodeA.id .. " and " .. nodeB.id)
-					cDir.connections[i] = { node = v, cost = cost }
-					break
-				end
-			end
-		end
-	end
-	for dir = 1, 4 do
-		local cDir = nodes[nodeB.id].c[dir]
-		if cDir and cDir.connections then
-			for i, v in ipairs(cDir.connections) do
-				if v == nodeA.id then
-					print("Adding cost between " .. nodeB.id .. " and " .. nodeA.id)
 					cDir.connections[i] = { node = v, cost = cost }
 					break
 				end
@@ -436,53 +318,18 @@ end
 
 function Node.GetAdjacentNodes(node, nodes)
 	local adjacent = {}
+	if not node or not node.c or not nodes then
+		return adjacent
+	end
+
 	-- Check all directions using ipairs for connections
-	for d = 1, 4 do
-		local cDir = node.c[d]
+	for d, cDir in ipairs(node.c) do
 		if cDir and cDir.connections then
 			for _, cid in ipairs(cDir.connections) do
 				local targetNode = nodes[cid]
 				if targetNode and targetNode.pos then
-					-- Three-tier accessibility check (same as pruning logic)
-					local isValid = false
-
-					-- First pass: Fast center Z distance check
-					local centerZDiff = math.abs(node.pos.z - targetNode.pos.z)
-					if centerZDiff <= 72 then
-						isValid = true -- Fast path: nodes are close enough in height
-					else
-						-- Second pass: Check if any corners are within range (stairs/ramp scenario)
-						local cornersA = getNodeCorners(node)
-						local cornersB = getNodeCorners(targetNode)
-						local cornerMatch = false
-
-						for _, cornerA in ipairs(cornersA) do
-							for _, cornerB in ipairs(cornersB) do
-								local cornerZDiff = math.abs(cornerA.z - cornerB.z)
-								if cornerZDiff <= 72 then
-									cornerMatch = true
-									break
-								end
-							end
-							if cornerMatch then
-								break
-							end
-						end
-
-						if cornerMatch then
-							isValid = true -- Medium path: corners are within range
-						elseif G.Menu.Main.AllowExpensiveChecks then
-							-- Third pass: Expensive walkability check (only if allowed)
-							local isWalkable = require("MedBot.Modules.ISWalkable")
-							isValid = isWalkable.Path(node.pos, targetNode.pos)
-						else
-							-- Skip expensive check, assume invalid if other checks failed
-							isValid = false
-						end
-					end
-
-					-- Only add if connection passes all checks
-					if isValid then
+					-- Use centralized accessibility check
+					if isNodeAccessible(node, targetNode) then
 						table.insert(adjacent, targetNode)
 					end
 				end
@@ -496,18 +343,25 @@ function Node.LoadFile(navFile)
 	local full = "tf/" .. navFile
 	local navData, err = tryLoadNavFile(full)
 	if not navData and err == "File not found" then
+		Log:Warn("Nav file not found, attempting to generate...")
 		generateNavFile()
 		navData, err = tryLoadNavFile(full)
 		if not navData then
-			Log:Error("Failed to load or parse generated nav file: " .. err)
-			return
+			Log:Error("Failed to load or parse generated nav file: %s", err or "unknown")
+			-- Initialize empty nodes table to prevent crashes
+			Node.SetNodes({})
+			return false
 		end
 	elseif not navData then
-		Log:Error(err)
-		return
+		Log:Error("Failed to load nav file: %s", err or "unknown")
+		-- Initialize empty nodes table to prevent crashes
+		Node.SetNodes({})
+		return false
 	end
+
 	local navNodes = processNavData(navData)
 	Node.SetNodes(navNodes)
+	Log:Info("Successfully loaded %d navigation nodes", table.getn and table.getn(navNodes) or 0)
 
 	-- Cleanup invalid connections after loading (if enabled)
 	if G.Menu.Main.CleanupConnections then
@@ -515,17 +369,184 @@ function Node.LoadFile(navFile)
 	else
 		Log:Info("Connection cleanup is disabled in settings")
 	end
+
+	return true
 end
 
 function Node.LoadNavFile()
 	local mf = engine.GetMapName()
-	Node.LoadFile(string.gsub(mf, ".bsp", ".nav"))
+	if mf and mf ~= "" then
+		Node.LoadFile(string.gsub(mf, ".bsp", ".nav"))
+	else
+		Log:Warn("No map name available for nav file loading")
+		Node.SetNodes({})
+	end
 end
 
 function Node.Setup()
-	if engine.GetMapName() then
+	local mapName = engine.GetMapName()
+	if mapName and mapName ~= "" and mapName ~= "menu" then
+		Log:Info("Setting up navigation for map: %s", mapName)
 		Node.LoadNavFile()
+	else
+		Log:Info("No valid map loaded, initializing empty navigation nodes")
+		-- Initialize empty nodes table to prevent crashes when no map is loaded
+		Node.SetNodes({})
 	end
+end
+
+--[[ Hierarchical Pathfinding Support ]]
+
+--- Generate a grid of fine-grained points within a nav area for detailed local pathfinding
+---@param area table The nav area to generate points for
+---@param stepSize number? Grid step size in units (default: 32)
+---@param edgeBuffer number? Distance from edges (default: 16)
+---@return table[] Array of point objects with pos, neighbors, and id
+local function generateAreaPoints(area, stepSize, edgeBuffer)
+	stepSize = stepSize or 32 -- Smaller step size for better accuracy
+	edgeBuffer = edgeBuffer or 16
+	
+	if not area.nw or not area.se then
+		-- Fallback to center point if corners are missing
+		return {{pos = area.pos, neighbors = {}, id = 1}}
+	end
+	
+	local points = {}
+	local nw, se = area.nw, area.se
+	
+	-- Calculate dimensions of the area
+	local dimX = math.abs(se.x - nw.x) - 2 * edgeBuffer
+	local dimY = math.abs(se.y - nw.y) - 2 * edgeBuffer
+	
+	-- Skip if area is too small
+	if dimX <= 0 or dimY <= 0 then
+		return {{pos = area.pos, neighbors = {}, id = 1}}
+	end
+	
+	-- Calculate starting points
+	local startX = nw.x + edgeBuffer
+	local startY = nw.y + edgeBuffer
+	
+	-- Calculate number of steps
+	local stepsX = math.floor(dimX / stepSize)
+	local stepsY = math.floor(dimY / stepSize)
+	
+	-- Center the grid
+	local extraSpaceX = dimX - stepsX * stepSize
+	local extraSpaceY = dimY - stepsY * stepSize
+	
+	startX = startX + extraSpaceX / 2
+	startY = startY + extraSpaceY / 2
+	
+	-- Generate points
+	for i = 0, stepsX do
+		for j = 0, stepsY do
+			local pointX = startX + i * stepSize
+			local pointY = startY + j * stepSize
+			local pointZ = nw.z -- Assume flat area, could be improved with ground tracing
+			
+			table.insert(points, {
+				pos = Vector3(pointX, pointY, pointZ),
+				neighbors = {},
+				id = #points + 1,
+				parentArea = area.id
+			})
+		end
+	end
+	
+	-- Assign neighbors to each point
+	for i, pointA in ipairs(points) do
+		for j, pointB in ipairs(points) do
+			if i ~= j then
+				local distance = (pointA.pos - pointB.pos):Length()
+				if distance <= (stepSize * 1.5) then -- Allow diagonal connections
+					table.insert(pointA.neighbors, {point = pointB, cost = distance})
+				end
+			end
+		end
+	end
+	
+	-- If no points generated, add center point
+	if #points == 0 then
+		table.insert(points, {pos = area.pos, neighbors = {}, id = 1, parentArea = area.id})
+	end
+	
+	return points
+end
+
+--- Generate fine-grained points for a specific nav area and cache them
+---@param areaId number The area ID to generate points for
+---@return table[]|nil Array of points or nil if area not found
+function Node.GenerateAreaPoints(areaId)
+	local nodes = Node.GetNodes()
+	if not nodes or not nodes[areaId] then
+		return nil
+	end
+	
+	local area = nodes[areaId]
+	if not area.finePoints then
+		area.finePoints = generateAreaPoints(area)
+		Log:Info("Generated %d fine points for area %d", #area.finePoints, areaId)
+	end
+	
+	return area.finePoints
+end
+
+--- Get fine-grained points for an area, generating them if needed
+---@param areaId number The area ID
+---@return table[]|nil Array of points or nil if area not found
+function Node.GetAreaPoints(areaId)
+	local nodes = Node.GetNodes()
+	if not nodes or not nodes[areaId] then
+		return nil
+	end
+	
+	local area = nodes[areaId]
+	if not area.finePoints then
+		return Node.GenerateAreaPoints(areaId)
+	end
+	
+	return area.finePoints
+end
+
+--- Find the closest fine point within an area to a given position
+---@param areaId number The area ID
+---@param position Vector3 The target position
+---@return table|nil The closest point or nil if not found
+function Node.GetClosestAreaPoint(areaId, position)
+	local points = Node.GetAreaPoints(areaId)
+	if not points then
+		return nil
+	end
+	
+	local closest, minDist = nil, math.huge
+	for _, point in ipairs(points) do
+		local dist = (point.pos - position):Length()
+		if dist < minDist then
+			minDist = dist
+			closest = point
+		end
+	end
+	
+	return closest
+end
+
+--- Clear cached fine points for all areas (useful when settings change)
+function Node.ClearAreaPoints()
+	local nodes = Node.GetNodes()
+	if not nodes then
+		return
+	end
+	
+	local clearedCount = 0
+	for _, area in pairs(nodes) do
+		if area.finePoints then
+			area.finePoints = nil
+			clearedCount = clearedCount + 1
+		end
+	end
+	
+	Log:Info("Cleared fine points cache for %d areas", clearedCount)
 end
 
 return Node

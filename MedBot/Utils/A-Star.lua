@@ -13,6 +13,26 @@ local function HeuristicCostEstimate(nodeA, nodeB)
 	return ManhattanDistance(nodeA, nodeB)
 end
 
+-- Function to get connection cost between two nodes (returns 1 if no cost specified, or actual cost)
+local function GetConnectionCost(nodeA, nodeB, nodes)
+	-- Check all directions for a connection with cost
+	for dir = 1, 4 do
+		local cDir = nodeA.c[dir]
+		if cDir and cDir.connections then
+			for _, connection in ipairs(cDir.connections) do
+				-- Handle both integer ID and table with cost
+				local targetId = (type(connection) == "table") and connection.node or connection
+				local cost = (type(connection) == "table") and connection.cost or 1
+
+				if targetId == nodeB.id then
+					return cost
+				end
+			end
+		end
+	end
+	return 1 -- Default cost if no connection found
+end
+
 local function reconstructPath(cameFrom, current)
 	local totalPath = { current }
 	while cameFrom[current] do
@@ -45,7 +65,9 @@ function AStar.NormalPath(start, goal, nodes, adjacentFun)
 
 		for _, neighbor in ipairs(adjacentFun(current, nodes)) do
 			if not closedSet[neighbor] then
-				local tentativeGScore = gScore[current] + HeuristicCostEstimate(current, neighbor)
+				-- Use connection cost instead of just distance
+				local connectionCost = GetConnectionCost(current, neighbor, nodes)
+				local tentativeGScore = gScore[current] + (HeuristicCostEstimate(current, neighbor) * connectionCost)
 
 				if not gScore[neighbor] or tentativeGScore < gScore[neighbor] then
 					cameFrom[neighbor] = current

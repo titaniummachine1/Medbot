@@ -71,6 +71,12 @@ function handleIdleState()
 		return
 	end
 
+	-- Safety check: ensure nodes are available before pathfinding
+	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
+		Log:Debug("No navigation nodes available, staying in IDLE state")
+		return
+	end
+
 	local startNode = Navigation.GetClosestNode(G.pLocal.Origin)
 	if not startNode then
 		Log:Warn("Could not find start node")
@@ -132,6 +138,8 @@ end
 
 -- Function to handle the STUCK state
 function handleStuckState(userCmd)
+	local currentTick = globals.TickCount()
+
 	-- Use SmartJump for intelligent obstacle detection
 	SmartJump.Main(userCmd)
 
@@ -139,19 +147,35 @@ function handleStuckState(userCmd)
 	if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
 		userCmd:SetButtons(userCmd.buttons | IN_JUMP)
 		userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
+		Log:Debug("SmartJump triggered in stuck state")
 	end
 
-	-- Fallback emergency jump for extreme stuck situations
-	if WorkManager.attemptWork(150, "Emergency_Stuck_Jump") then
-		if not G.pLocal.entity:InCond(TFCond_Zoomed) and G.pLocal.flags & FL_ONGROUND == 1 then
+	-- Enhanced emergency jump using SmartJump's intelligence
+	if SmartJump.ShouldEmergencyJump(currentTick, G.Navigation.currentNodeTicks) then
+		if not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
 			userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
 			userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
 			userCmd:SetButtons(userCmd.buttons | IN_JUMP)
+			Log:Info("Emergency jump in stuck state - SmartJump conditions met")
 		end
 	end
 
 	if G.Navigation.currentNodeTicks > 264 then
 		Log:Warn("Stuck for too long, repathing...")
+		-- Add high cost to current connection if we have one
+		local path = G.Navigation.path
+		if path and #path > 1 then
+			local currentNode = path[1]
+			local nextNode = path[2]
+			if currentNode and nextNode then
+				Navigation.AddCostToConnection(currentNode, nextNode, 1000)
+				Log:Debug(
+					"Added high cost to connection %d -> %d due to prolonged stuck state",
+					currentNode.id,
+					nextNode.id
+				)
+			end
+		end
 		Navigation.ClearPath()
 		G.currentState = G.States.IDLE
 	else
@@ -161,6 +185,11 @@ end
 
 -- Function to find goal node based on the current task
 function findGoalNode(currentTask)
+	-- Safety check: ensure nodes are loaded before proceeding
+	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
+		Log:Debug("No navigation nodes available, cannot find goal")
+		return nil
+	end
 	local pLocal = G.pLocal.entity
 	local mapName = engine.GetMapName():lower()
 
@@ -341,15 +370,16 @@ function moveTowardsNode(userCmd, node)
 		userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
 	end
 
-	-- Fallback unstuck jump for extreme cases when SmartJump might not trigger
+	-- Enhanced emergency jump logic using SmartJump intelligence
 	if G.pLocal.flags & FL_ONGROUND == 1 or G.pLocal.entity:EstimateAbsVelocity():Length() < 50 then
-		if G.Navigation.currentNodeTicks > 132 then -- Increased threshold since SmartJump should handle most cases
-			if WorkManager.attemptWork(200, "Emergency_Unstuck_Jump") then -- Longer delay, renamed for clarity
-				if not G.pLocal.entity:InCond(TFCond_Zoomed) and G.pLocal.flags & FL_ONGROUND == 1 then
-					userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
-					userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
-					userCmd:SetButtons(userCmd.buttons | IN_JUMP)
-				end
+		local currentTick = globals.TickCount()
+		-- Use SmartJump's emergency logic instead of simple timer
+		if SmartJump.ShouldEmergencyJump(currentTick, G.Navigation.currentNodeTicks) then
+			if not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
+				userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
+				userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
+				userCmd:SetButtons(userCmd.buttons | IN_JUMP)
+				Log:Info("Emergency jump triggered - obstacle detected but SmartJump inactive")
 			end
 		end
 
@@ -368,9 +398,10 @@ function moveTowardsNode(userCmd, node)
 			local nextNode = path[currentIdx + 1] -- Next node (index 2)
 
 			if not Navigation.isWalkable(LocalOrigin, currentNode.pos) then
-				Log:Warn("Path to current node is blocked, removing connection and repathing...")
+				Log:Warn("Path to current node is blocked, adding high cost to connection and repathing...")
 				if currentNode and nextNode then
-					Navigation.RemoveConnection(currentNode, nextNode)
+					-- Add high cost instead of removing connection entirely - pathfinding will avoid but keep as backup
+					Navigation.AddCostToConnection(currentNode, nextNode, 1000)
 				end
 				Navigation.ClearPath()
 				Navigation.ResetTickTimer()
@@ -627,5 +658,13 @@ end)
 
 Notify.Alert("MedBot loaded!")
 if entities.GetLocalPlayer() then
-	Navigation.Setup()
+	-- Add safety check to prevent crashes when no map is loaded
+	local mapName = engine.GetMapName()
+	if mapName and mapName ~= "" and mapName ~= "menu" then
+		Navigation.Setup()
+	else
+		Log:Info("Skipping navigation setup - no valid map loaded")
+		-- Initialize empty nodes to prevent crashes
+		G.Navigation.nodes = {}
+	end
 end
