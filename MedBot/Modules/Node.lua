@@ -128,33 +128,7 @@ local function getNodeCorners(node)
 	return corners
 end
 
---- Check if two nodes are accessible using optimized three-tier approach
----@param nodeA table First node
----@param nodeB table Second node
----@return boolean True if nodes are accessible to each other
-local function isNodeAccessible(nodeA, nodeB)
-	-- First pass: Fast center Z distance check
-	local centerZDiff = math.abs(nodeA.pos.z - nodeB.pos.z)
-	if centerZDiff <= 72 then
-		return true -- Fast path: nodes are close enough in height
-	end
-
-	-- Second pass: Check if any corners touch (stairs/ramp scenario)
-	local cornersA = getNodeCorners(nodeA)
-	local cornersB = getNodeCorners(nodeB)
-
-	for _, cornerA in ipairs(cornersA) do
-		for _, cornerB in ipairs(cornersB) do
-			local cornerZDiff = math.abs(cornerA.z - cornerB.z)
-			if cornerZDiff <= 72 then
-				return true -- Medium path: corners are within range
-			end
-		end
-	end
-
-	-- Third pass: Expensive walkability check (only if previous checks failed)
-	return isWalkable.Path(nodeA.pos, nodeB.pos)
-end
+--- Check if two nodes are accessible using optimized three-tier fallback approach---@param nodeA table First node---@param nodeB table Second node---@return boolean True if nodes are accessible to each otherlocal function isNodeAccessible(nodeA, nodeB)	-- First pass: Fast center Z distance check	local centerZDiff = math.abs(nodeA.pos.z - nodeB.pos.z)	if centerZDiff <= 72 then		return true -- Fast path: nodes are close enough in height	end	-- Second pass: Check if any corners touch (stairs/ramp scenario)	local cornersA = getNodeCorners(nodeA)	local cornersB = getNodeCorners(nodeB)	for _, cornerA in ipairs(cornersA) do		for _, cornerB in ipairs(cornersB) do			local cornerZDiff = math.abs(cornerA.z - cornerB.z)			if cornerZDiff <= 72 then				return true -- Medium path: corners are within range			end		end	end	-- Third pass: Expensive walkability check (only if allowed and previous checks failed)	if G.Menu.Main.AllowExpensiveChecks then		return isWalkable.Path(nodeA.pos, nodeB.pos)	end	-- If expensive checks are disabled and previous checks failed, assume invalid	return falseend
 
 --- Remove invalid connections between nodes (optimized version)
 ---@param nodes table All navigation nodes
