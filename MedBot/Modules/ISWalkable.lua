@@ -1,5 +1,6 @@
 local isWalkable = {}
 local G = require("MedBot.Utils.Globals")
+local Common = require("MedBot.Common")
 
 local Jump_Height = 72 --duck jump height
 local HULL_MIN = G.pLocal.vHitbox.Min
@@ -29,7 +30,7 @@ local MAX_SLOPE_ANGLE_RAD = degreesToRadians(MAX_SLOPE_ANGLE)
 local function adjustDirectionToGround(direction, groundNormal)
 	local angleBetween = math.acos(groundNormal:Dot(UP_VECTOR))
 	if angleBetween <= MAX_SLOPE_ANGLE_RAD then
-		return (direction:Cross(UP_VECTOR):Cross(groundNormal)):Normalize()
+		return Common.Normalize(direction:Cross(UP_VECTOR):Cross(groundNormal))
 	end
 	return direction -- If the slope is too steep, keep the original direction
 end
@@ -37,7 +38,7 @@ end
 -- Main function to check if the path between the current position and the node is walkable.
 function isWalkable.Path(startPos, endPos)
 	local direction = (endPos - startPos)
-	direction:Normalize()
+	direction = Common.Normalize(direction)
 	local totalDistance = (endPos - startPos):Length()
 	local stepSize = math.max(MIN_STEP_SIZE, totalDistance / preferredSteps)
 	local currentPosition = startPos
@@ -73,7 +74,7 @@ function isWalkable.Path(startPos, endPos)
 		currentPosition = groundTraceResult.endpos
 
 		-- Adjust direction to align with the ground
-		direction = adjustDirectionToGround((endPos - currentPosition):Normalize(), groundTraceResult.plane)
+		direction = adjustDirectionToGround(Common.Normalize(endPos - currentPosition), groundTraceResult.plane)
 	end
 
 	return true -- Path is walkable

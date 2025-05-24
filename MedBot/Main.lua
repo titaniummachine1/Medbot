@@ -82,6 +82,12 @@ function handleIdleState()
 		return
 	end
 
+	-- Avoid pathfinding if we're already at the goal
+	if startNode.id == goalNode.id then
+		Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+		return
+	end
+
 	Log:Info("Generating new path from node %d to node %d", startNode.id, goalNode.id)
 	WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 	G.currentState = G.States.PATHFINDING
@@ -107,7 +113,8 @@ function handleMovingState(userCmd)
 		return
 	end
 
-	local currentNode = G.Navigation.path[G.Navigation.currentNodeIndex]
+	-- Always target the first node in the remaining path
+	local currentNode = G.Navigation.path[1]
 	if not currentNode then
 		Log:Warn("Current node is nil, returning to IDLE state")
 		G.currentState = G.States.IDLE
@@ -182,20 +189,57 @@ function findGoalNode(currentTask)
 		return closestNode
 	end
 
-	-- Find and follow the closest teammate
+	-- Find and follow the closest teammate using FastPlayers
 	local function findFollowGoal()
-		local origin = pLocal:GetAbsOrigin()
+		local localWP = Common.FastPlayers.GetLocal()
+		if not localWP then
+			return nil
+		end
+		local origin = localWP:GetRawEntity():GetAbsOrigin()
 		local closestDist = math.huge
 		local closestNode = nil
-		for _, ent in ipairs(entities.GetPlayers() or {}) do
-			if ent ~= pLocal and ent:IsAlive() and ent:GetTeamNumber() == pLocal:GetTeamNumber() then
-				local dist = (ent:GetAbsOrigin() - origin):Length()
+		local foundTarget = false
+
+		for _, wp in ipairs(Common.FastPlayers.GetTeammates(true)) do
+			local ent = wp:GetRawEntity()
+			if ent and ent:IsAlive() then
+				foundTarget = true
+				local pos = ent:GetAbsOrigin()
+				local dist = (pos - origin):Length()
 				if dist < closestDist then
 					closestDist = dist
-					closestNode = Navigation.GetClosestNode(ent:GetAbsOrigin())
+					-- Update our memory of where we last saw this target
+					G.Navigation.lastKnownTargetPosition = pos
+					closestNode = Navigation.GetClosestNode(pos)
 				end
 			end
 		end
+
+		-- If no alive teammates found, but we have a last known position, use that
+		if not foundTarget and G.Navigation.lastKnownTargetPosition then
+			Log:Info("No alive teammates found, moving to last known position")
+			closestNode = Navigation.GetClosestNode(G.Navigation.lastKnownTargetPosition)
+		end
+
+		-- If the target is very close (same node), add some distance to avoid pathfinding to self
+		if closestNode and closestDist < 150 then -- 150 units is quite close
+			local startNode = Navigation.GetClosestNode(origin)
+			if startNode and closestNode.id == startNode.id then
+				Log:Debug("Target too close (same node), expanding search radius")
+				-- Look for a node near the target but not the same as our current node
+				for _, node in pairs(G.Navigation.nodes or {}) do
+					if node.id ~= startNode.id then
+						local targetPos = G.Navigation.lastKnownTargetPosition or closestNode.pos
+						local nodeToTargetDist = (node.pos - targetPos):Length()
+						if nodeToTargetDist < 200 then -- Within 200 units of target
+							closestNode = node
+							break
+						end
+					end
+				end
+			end
+		end
+
 		return closestNode
 	end
 
@@ -246,21 +290,25 @@ function moveTowardsNode(userCmd, node)
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 
-		if G.Navigation.currentNodeID < 1 then
+		-- Check if we've reached the end of the path
+		if #G.Navigation.path == 0 then
 			Navigation.ClearPath()
 			Log:Info("Reached end of path")
+			G.currentState = G.States.IDLE
 		end
 	else
 		if G.Menu.Main.Skip_Nodes and WorkManager.attemptWork(2, "node skip") then
 			local path = G.Navigation.path
-			if path and G.Navigation.currentNodeID > 1 then
-				local nextNode = path[G.Navigation.currentNodeID - 1]
+			local currentIdx = G.Navigation.currentNodeIndex
+			-- Check if we can skip to the next node (index 2)
+			if path and #path > 1 then
+				local nextNode = path[2] -- Next node in normal order
 				if nextNode then
 					local nextHorizontalDist = math.abs(LocalOrigin.x - nextNode.pos.x)
 						+ math.abs(LocalOrigin.y - nextNode.pos.y)
 					local nextVerticalDist = math.abs(LocalOrigin.z - nextNode.pos.z)
 					if nextHorizontalDist < horizontalDist and nextVerticalDist <= G.Misc.NodeTouchHeight then
-						Log:Info("Skipping to closer node %d", G.Navigation.currentNodeID - 1)
+						Log:Info("Skipping to closer node (index 2)")
 						Navigation.RemoveCurrentNode()
 					end
 				end
@@ -285,6 +333,7 @@ function moveTowardsNode(userCmd, node)
 		end
 
 		local path = G.Navigation.path
+		local currentIdx = G.Navigation.currentNodeIndex
 		if
 			path
 			and (
@@ -293,23 +342,23 @@ function moveTowardsNode(userCmd, node)
 					and WorkManager.attemptWork(66, "pathCheck")
 			)
 		then
-			if not Navigation.isWalkable(LocalOrigin, G.Navigation.currentNodePos, 1) then
-				Log:Warn(
-					"Path to node %d is blocked, removing connection and repathing...",
-					G.Navigation.currentNodeIndex
-				)
-				local idx = G.Navigation.currentNodeIndex
-				if path[idx] and path[idx + 1] then
-					Navigation.RemoveConnection(path[idx], path[idx + 1])
-				elseif path[idx] and idx > 1 then
-					Navigation.RemoveConnection(path[idx - 1], path[idx])
+			-- Check if path is blocked
+			local currentNode = path[currentIdx] -- Current node (index 1)
+			local nextNode = path[currentIdx + 1] -- Next node (index 2)
+
+			if not Navigation.isWalkable(LocalOrigin, currentNode.pos) then
+				Log:Warn("Path to current node is blocked, removing connection and repathing...")
+				if currentNode and nextNode then
+					Navigation.RemoveConnection(currentNode, nextNode)
 				end
 				Navigation.ClearPath()
 				Navigation.ResetTickTimer()
+				G.currentState = G.States.IDLE
 			elseif not WorkManager.attemptWork(5, "pathCheck") then
-				Log:Warn("Path to node %d is stuck but not blocked, repathing...", G.Navigation.currentNodeIndex)
+				Log:Warn("Path is stuck but not blocked, repathing...")
 				Navigation.ClearPath()
 				Navigation.ResetTickTimer()
+				G.currentState = G.States.IDLE
 			end
 		end
 	end
@@ -385,6 +434,11 @@ Commands.Register("pf_reload", function()
 	Navigation.Setup()
 end)
 
+Commands.Register("pf_cleanup", function()
+	local Node = require("MedBot.Modules.Node")
+	Node.CleanupConnections()
+end)
+
 Commands.Register("pf", function(args)
 	if args:size() ~= 2 then
 		print("Usage: pf <Start> <Goal>")
@@ -399,6 +453,7 @@ Commands.Register("pf", function(args)
 		return
 	end
 
+	local Node = require("MedBot.Modules.Node")
 	local startNode = Node.GetNodeByID(start)
 	local goalNode = Node.GetNodeByID(goal)
 

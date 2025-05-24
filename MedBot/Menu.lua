@@ -40,6 +40,16 @@ local function OnDrawMenu()
 			G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
 			TimMenu.NextLine()
 
+			-- Connection cleanup
+			G.Menu.Main.CleanupConnections =
+				TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections)
+			TimMenu.NextLine()
+
+			-- Cleanup aggressiveness
+			G.Menu.Main.CleanupAggressiveness, _ =
+				TimMenu.Slider("Cleanup Aggressiveness", G.Menu.Main.CleanupAggressiveness, 0, 2, 1)
+			TimMenu.NextLine()
+
 			-- Smooth look factor for path following
 			G.Menu.Main.smoothFactor, _ = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 0.1, 0.01)
 			TimMenu.NextLine()

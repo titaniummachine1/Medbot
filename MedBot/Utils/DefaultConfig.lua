@@ -16,6 +16,8 @@ defaultconfig = {
 		shouldfindhealth = true, -- Path to health
 		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
 		smoothFactor = 0.05,
+		CleanupConnections = true, -- Cleanup invalid connections during map load
+		CleanupAggressiveness = 1, -- 0=Fast only, 1=Fast+Medium, 2=Fast+Medium+Slow (full)
 	},
 	Visuals = {
 		EnableVisuals = true,

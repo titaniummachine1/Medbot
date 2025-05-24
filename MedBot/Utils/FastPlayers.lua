@@ -1,20 +1,16 @@
 -- fastplayers.lua ─────────────────────────────────────────────────────────
--- FastPlayers: Simplified per-tick cached player lists.
--- On each CreateMove tick, caches reset; lists built on demand.
+-- FastPlayers: Simplified per-tick cached player lists for MedBot.
 
 --[[ Imports ]]
-local G = require("Cheater_Detection.Utils.Globals")
-local Common = require("Cheater_Detection.Utils.Common")
-local WrappedPlayer = require("Cheater_Detection.Utils.WrappedPlayer")
+--local Common = require("MedBot.Common")
+local G = require("MedBot.Utils.Globals")
+local WrappedPlayer = require("MedBot.Utils.WrappedPlayer")
 
 --[[ Module Declaration ]]
 local FastPlayers = {}
 
 --[[ Local Caches ]]
-local cachedAllPlayers
-local cachedTeammates
-local cachedEnemies
-local cachedLocal
+local cachedAllPlayers, cachedTeammates, cachedEnemies, cachedLocal
 
 FastPlayers.AllUpdated = false
 FastPlayers.TeammatesUpdated = false
@@ -31,22 +27,29 @@ local function ResetCaches()
 	FastPlayers.EnemiesUpdated = false
 end
 
+--[[ Simplified validity check ]]
+local function isValidPlayer(ent, excludeEnt)
+	return ent and ent:IsValid() and ent:IsAlive() and not ent:IsDormant() and ent ~= excludeEnt
+end
+
 --[[ Public API ]]
 
 --- Returns list of valid, non-dormant players once per tick.
+---@param excludeLocal boolean? exclude local player if true
 ---@return WrappedPlayer[]
-function FastPlayers.GetAll(excludelocal)
+function FastPlayers.GetAll(excludeLocal)
 	if FastPlayers.AllUpdated then
 		return cachedAllPlayers
 	end
-	excludelocal = excludelocal and FastPlayers.GetLocal() or nil
+	-- Determine entity to skip (local player)
+	local skipEnt = excludeLocal and entities.GetLocalPlayer() or nil
 	cachedAllPlayers = {}
-	local debugMode = G.Menu.Advanced.debug
+	-- Gather valid players
 	for _, ent in pairs(entities.FindByClass("CTFPlayer") or {}) do
-		if Common.IsValidPlayer(ent, debugMode, true, excludelocal) then
-			local wrapped = WrappedPlayer.FromEntity(ent)
-			if wrapped then
-				cachedAllPlayers[#cachedAllPlayers + 1] = wrapped
+		if isValidPlayer(ent, skipEnt) then
+			local wp = WrappedPlayer.FromEntity(ent)
+			if wp then
+				table.insert(cachedAllPlayers, wp)
 			end
 		end
 	end
@@ -64,42 +67,32 @@ function FastPlayers.GetLocal()
 	return cachedLocal
 end
 
---- Returns list of teammates, optionally excluding a player (or the local player).
----@param exclude boolean|WrappedPlayer? Pass `true` to exclude the local player, or a WrappedPlayer instance to exclude that specific teammate. Omit/nil to include everyone.
+--- Returns list of teammates, optionally excluding local player.
+---@param excludeLocal boolean? exclude local player if true
 ---@return WrappedPlayer[]
-function FastPlayers.GetTeammates(exclude)
+function FastPlayers.GetTeammates(excludeLocal)
 	if not FastPlayers.TeammatesUpdated then
 		if not FastPlayers.AllUpdated then
-			FastPlayers.GetAll()
+			FastPlayers.GetAll(true)
 		end
-
 		cachedTeammates = {}
-
-		-- Determine which player (if any) to exclude
-		local localPlayer = FastPlayers.GetLocal()
-		local excludePlayer = nil
-		if exclude == true then
-			excludePlayer = localPlayer -- explicitly exclude self
-		elseif type(exclude) == "table" then
-			excludePlayer = exclude
-		end
-
-		-- Use local player's team for filtering
-		local myTeam = localPlayer and localPlayer:GetTeamNumber() or nil
+		local localWP = FastPlayers.GetLocal()
+		local ex = excludeLocal and localWP or nil
+		local myTeam = localWP and localWP:GetRawEntity():GetTeamNumber()
 		if myTeam then
 			for _, wp in ipairs(cachedAllPlayers) do
-				if wp:GetTeamNumber() == myTeam and wp ~= excludePlayer then
-					cachedTeammates[#cachedTeammates + 1] = wp
+				local ent = wp:GetRawEntity()
+				if ent and ent:GetTeamNumber() == myTeam and wp ~= ex then
+					table.insert(cachedTeammates, wp)
 				end
 			end
 		end
-
 		FastPlayers.TeammatesUpdated = true
 	end
 	return cachedTeammates
 end
 
---- Returns list of enemies (players on a different team).
+--- Returns list of enemies (different team).
 ---@return WrappedPlayer[]
 function FastPlayers.GetEnemies()
 	if not FastPlayers.EnemiesUpdated then
@@ -107,12 +100,13 @@ function FastPlayers.GetEnemies()
 			FastPlayers.GetAll()
 		end
 		cachedEnemies = {}
-		local pLocal = FastPlayers.GetLocal()
-		if pLocal then
-			local myTeam = pLocal:GetTeamNumber()
+		local localWP = FastPlayers.GetLocal()
+		local myTeam = localWP and localWP:GetRawEntity():GetTeamNumber()
+		if myTeam then
 			for _, wp in ipairs(cachedAllPlayers) do
-				if wp:GetTeamNumber() ~= myTeam then
-					cachedEnemies[#cachedEnemies + 1] = wp
+				local ent = wp:GetRawEntity()
+				if ent and ent:GetTeamNumber() ~= myTeam then
+					table.insert(cachedEnemies, wp)
 				end
 			end
 		end
@@ -121,7 +115,6 @@ function FastPlayers.GetEnemies()
 	return cachedEnemies
 end
 
---[[ Initialization ]]
 -- Reset caches at the start of every CreateMove tick.
 callbacks.Register("CreateMove", "FastPlayers_ResetCaches", ResetCaches)
 

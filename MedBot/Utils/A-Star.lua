@@ -17,7 +17,7 @@ local function reconstructPath(cameFrom, current)
 	local totalPath = { current }
 	while cameFrom[current] do
 		current = cameFrom[current]
-		table.insert(totalPath, 1, current)
+		table.insert(totalPath, 1, current) -- Insert at beginning to get start-to-goal order
 	end
 	return totalPath
 end

@@ -1,16 +1,14 @@
 --[[ WrappedPlayer.lua ]]
---
--- A proper wrapper for player entities that extends lnxLib's WPlayer
+-- A proper wrapper for player entities using LNXlib's WPlayer
 
--- Get required modules
-local Common = require("Cheater_Detection.Utils.Common")
-
-assert(Common, "Common is nil")
-local WPlayer = Common.WPlayer
-assert(WPlayer, "WPlayer is nil")
+--[[ Imports ]]
+local libLoaded, Lib = pcall(require, "LNXlib")
+assert(libLoaded, "LNXlib not found in WrappedPlayer!")
+local WPlayer = Lib.TF2.WPlayer
+assert(WPlayer, "WPlayer not found in LNXlib!")
 
 ---@class WrappedPlayer
----@field _basePlayer table Base WPlayer from lnxLib
+---@field _basePlayer table Base WPlayer from LNXlib
 ---@field _rawEntity Entity Raw entity object
 local WrappedPlayer = {}
 WrappedPlayer.__index = WrappedPlayer
@@ -19,20 +17,17 @@ WrappedPlayer.__index = WrappedPlayer
 ---@param entity Entity The entity to wrap
 ---@return WrappedPlayer|nil The wrapped player or nil if invalid
 function WrappedPlayer.FromEntity(entity)
-	if not entity or not entity:IsValid() then
+	if not entity or not entity:IsValid() or not entity:IsAlive() then
 		return nil
 	end
-
-	local basePlayer = WPlayer.FromEntity(entity)
-	if not basePlayer then
+	local base = WPlayer.FromEntity(entity)
+	if not base then
 		return nil
 	end
-
-	local wrapped = setmetatable({}, WrappedPlayer)
-	wrapped._basePlayer = basePlayer -- Store the lnxLib player wrapper
-	wrapped._rawEntity = entity -- Store the raw entity directly
-
-	return wrapped
+	local self = setmetatable({}, WrappedPlayer)
+	self._basePlayer = base
+	self._rawEntity = entity
+	return self
 end
 
 --- Create WrappedPlayer from index
@@ -43,75 +38,66 @@ function WrappedPlayer.FromIndex(index)
 	return entity and WrappedPlayer.FromEntity(entity) or nil
 end
 
--- Forward all method calls to the base player unless specifically overridden
-setmetatable(WrappedPlayer, {
-	__index = function(self, key)
-		local value = rawget(self, key)
-		if value ~= nil then
-			return value
-		end
-
-		-- If this is a function, wrap it to properly handle 'self'
-		local baseValue = WPlayer[key]
-		if type(baseValue) == "function" then
-			return function(self, ...)
-				return self._basePlayer[key](self._basePlayer, ...)
-			end
-		end
-
-		return baseValue
-	end,
-})
-
 --- Returns the underlying raw entity
 function WrappedPlayer:GetRawEntity()
 	return self._rawEntity
 end
 
---- Returns the base WPlayer from lnxLib
+--- Returns the base WPlayer from LNXlib
 function WrappedPlayer:GetBasePlayer()
 	return self._basePlayer
 end
 
---- Checks if a given entity is valid
----@param checkFriend boolean? Check if the entity is a friend
----@param checkDormant boolean? Check if the entity is dormant
----@param skipEntity Entity? Optional entity to skip
----@return boolean Whether the entity is valid
-function WrappedPlayer:IsValidPlayer(checkFriend, checkDormant, skipEntity)
-	return Common.IsValidPlayer(self._rawEntity, checkFriend, checkDormant, skipEntity)
-end
+-- Forward all missing methods to the base player
+setmetatable(WrappedPlayer, {
+	__index = function(tbl, key)
+		local v = rawget(tbl, key)
+		if v ~= nil then
+			return v
+		end
+		local fn = WPlayer[key]
+		if type(fn) == "function" then
+			return function(self, ...)
+				return fn(self._basePlayer, ...)
+			end
+		end
+		return fn
+	end,
+})
 
---- Get SteamID64 for this player object
+--- Returns SteamID64 via Common utility
 ---@return string|number The player's SteamID64
 function WrappedPlayer:GetSteamID64()
-	return Common.GetSteamID64(self._basePlayer)
+	local ent = self._rawEntity
+	local idx = ent:GetIndex()
+	local info = assert(client.GetPlayerInfo(idx), "Failed to get player info")
+	return info.IsBot and info.UserID or assert(steam.ToSteamID64(info.SteamID), "SteamID conversion failed")
 end
 
---- Check if player is on the ground via m_fFlags
----@return boolean Whether the player is on the ground
+--- Check if player is on ground via m_fFlags
+---@return boolean
 function WrappedPlayer:IsOnGround()
 	local flags = self._basePlayer:GetPropInt("m_fFlags")
 	return (flags & FL_ONGROUND) ~= 0
+end
+
+--- Eye position
+---@return Vector3
+function WrappedPlayer:GetEyePos()
+	return self._basePlayer:GetAbsOrigin() + self._basePlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
+end
+
+--- Eye angles
+---@return EulerAngles
+function WrappedPlayer:GetEyeAngles()
+	local ang = self._basePlayer:GetPropVector("tfnonlocaldata", "m_angEyeAngles[0]")
+	return EulerAngles(ang.x, ang.y, ang.z)
 end
 
 --- Returns the view offset from the player's origin as a Vector3
 ---@return Vector3 The player's view offset
 function WrappedPlayer:GetViewOffset()
 	return self._basePlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
-end
-
---- Returns the player's eye position in world coordinates
----@return Vector3 The player's eye position
-function WrappedPlayer:GetEyePos()
-	return self._basePlayer:GetAbsOrigin() + self:GetViewOffset()
-end
-
---- Returns the player's eye angles as an EulerAngles object
----@return EulerAngles The player's eye angles
-function WrappedPlayer:GetEyeAngles()
-	local ang = self._basePlayer:GetPropVector("tfnonlocaldata", "m_angEyeAngles[0]")
-	return EulerAngles(ang.x, ang.y, ang.z)
 end
 
 --- Returns the world position the player is looking at by tracing a ray
@@ -122,13 +108,6 @@ function WrappedPlayer:GetLookPos()
 	local targetPos = eyePos + eyeAng:Forward() * 8192
 	local tr = engine.TraceLine(eyePos, targetPos, MASK_SHOT)
 	return tr and tr.endpos or nil
-end
-
---- Returns the currently active weapon wrapper
----@return table|nil The active weapon wrapper or nil
-function WrappedPlayer:GetActiveWeapon()
-	local w = self._basePlayer:GetPropEntity("m_hActiveWeapon")
-	return w and Common.WWeapon.FromEntity(w) or nil
 end
 
 --- Returns the player's observer mode

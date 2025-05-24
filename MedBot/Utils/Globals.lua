@@ -39,12 +39,11 @@ G.Misc = {
 G.Navigation = {
 	path = nil,
 	nodes = nil,
-	currentNode = nil,
-	currentNodePos = nil,
-	currentNodeID = 1,
+	currentNodeIndex = 1, -- Current node we're moving towards (1 = first node in path)
 	currentNodeTicks = 0,
 	FirstAgentNode = 1,
 	SecondAgentNode = 2,
+	lastKnownTargetPosition = nil, -- Remember last position of follow target
 }
 
 G.Tasks = {

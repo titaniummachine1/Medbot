@@ -9,10 +9,6 @@ local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
 local AStar = require("MedBot.Utils.A-Star")
-assert(
-	Common and G and Node and AStar,
-	"Navigation modules missing: ensure Common, Globals, Node, and A-Star are available"
-)
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -45,19 +41,39 @@ function Navigation.AddConnection(nodeA, nodeB)
 
 	for dir = 1, 4 do
 		local conDir = nodes[nodeA.id].c[dir]
-		if not conDir.connections[nodeB.id] then
-			print("Adding connection between " .. nodeA.id .. " and " .. nodeB.id)
-			table.insert(conDir.connections, nodeB.id)
-			conDir.count = conDir.count + 1
+		if conDir and conDir.connections then
+			-- Check if connection already exists
+			local exists = false
+			for _, existingId in ipairs(conDir.connections) do
+				if existingId == nodeB.id then
+					exists = true
+					break
+				end
+			end
+			if not exists then
+				print("Adding connection between " .. nodeA.id .. " and " .. nodeB.id)
+				table.insert(conDir.connections, nodeB.id)
+				conDir.count = conDir.count + 1
+			end
 		end
 	end
 
 	for dir = 1, 4 do
 		local conDir = nodes[nodeB.id].c[dir]
-		if not conDir.connections[nodeA.id] then
-			print("Adding reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
-			table.insert(conDir.connections, nodeA.id)
-			conDir.count = conDir.count + 1
+		if conDir and conDir.connections then
+			-- Check if reverse connection already exists
+			local exists = false
+			for _, existingId in ipairs(conDir.connections) do
+				if existingId == nodeA.id then
+					exists = true
+					break
+				end
+			end
+			if not exists then
+				print("Adding reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
+				table.insert(conDir.connections, nodeA.id)
+				conDir.count = conDir.count + 1
+			end
 		end
 	end
 end
@@ -73,24 +89,28 @@ function Navigation.RemoveConnection(nodeA, nodeB)
 
 	for dir = 1, 4 do
 		local conDir = nodes[nodeA.id].c[dir]
-		for i, con in ipairs(conDir.connections) do
-			if con == nodeB.id then
-				print("Removing connection between " .. nodeA.id .. " and " .. nodeB.id)
-				table.remove(conDir.connections, i)
-				conDir.count = conDir.count - 1
-				break
+		if conDir and conDir.connections then
+			for i, con in ipairs(conDir.connections) do
+				if con == nodeB.id then
+					print("Removing connection between " .. nodeA.id .. " and " .. nodeB.id)
+					table.remove(conDir.connections, i)
+					conDir.count = conDir.count - 1
+					break
+				end
 			end
 		end
 	end
 
 	for dir = 1, 4 do
 		local conDir = nodes[nodeB.id].c[dir]
-		for i, con in ipairs(conDir.connections) do
-			if con == nodeA.id then
-				print("Removing reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
-				table.remove(conDir.connections, i)
-				conDir.count = conDir.count - 1
-				break
+		if conDir and conDir.connections then
+			for i, con in ipairs(conDir.connections) do
+				if con == nodeA.id then
+					print("Removing reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
+					table.remove(conDir.connections, i)
+					conDir.count = conDir.count - 1
+					break
+				end
 			end
 		end
 	end
@@ -107,22 +127,26 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 
 	for dir = 1, 4 do
 		local conDir = nodes[nodeA.id].c[dir]
-		for i, con in ipairs(conDir.connections) do
-			if con == nodeB.id then
-				print("Adding cost between " .. nodeA.id .. " and " .. nodeB.id)
-				conDir.connections[i] = { node = con, cost = cost }
-				break
+		if conDir and conDir.connections then
+			for i, con in ipairs(conDir.connections) do
+				if con == nodeB.id then
+					print("Adding cost between " .. nodeA.id .. " and " .. nodeB.id)
+					conDir.connections[i] = { node = con, cost = cost }
+					break
+				end
 			end
 		end
 	end
 
 	for dir = 1, 4 do
 		local conDir = nodes[nodeB.id].c[dir]
-		for i, con in ipairs(conDir.connections) do
-			if con == nodeA.id then
-				print("Adding cost between " .. nodeB.id .. " and " .. nodeA.id)
-				conDir.connections[i] = { node = con, cost = cost }
-				break
+		if conDir and conDir.connections then
+			for i, con in ipairs(conDir.connections) do
+				if con == nodeA.id then
+					print("Adding cost between " .. nodeB.id .. " and " .. nodeA.id)
+					conDir.connections[i] = { node = con, cost = cost }
+					break
+				end
 			end
 		end
 	end
@@ -258,6 +282,7 @@ end
 -- Clear the current path
 function Navigation.ClearPath()
 	G.Navigation.path = {}
+	G.Navigation.currentNodeIndex = 1
 end
 
 -- Set the current path
@@ -268,12 +293,18 @@ function Navigation.SetCurrentPath(path)
 		return
 	end
 	G.Navigation.path = path
+	G.Navigation.currentNodeIndex = 1 -- Start from the first node (start) and work towards goal
 end
 
--- Remove the current node from the path
+-- Remove the current node from the path (we've reached it)
 function Navigation.RemoveCurrentNode()
 	G.Navigation.currentNodeTicks = 0
-	table.remove(G.Navigation.path)
+	if G.Navigation.path and #G.Navigation.path > 0 then
+		-- Remove the first node (current node we just reached)
+		table.remove(G.Navigation.path, 1)
+		-- currentNodeIndex stays at 1 since we always target the first node in the remaining path
+		G.Navigation.currentNodeIndex = 1
+	end
 end
 
 -- Function to increment the current node ticks

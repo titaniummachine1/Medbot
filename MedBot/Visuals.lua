@@ -1,8 +1,6 @@
 --[[ Imports ]]
 local Common = require("MedBot.Common")
-assert(Common, "MedBot.Common module not found")
 local G = require("MedBot.Utils.Globals")
-assert(G, "MedBot.Utils.Globals module not found")
 
 local Visuals = {}
 
@@ -168,17 +166,19 @@ local function OnDraw()
 		return
 	end
 
-	-- Visualizing agents
-	local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
-		and G.Navigation.path[G.Navigation.FirstAgentNode].pos
-	local agent2Pos = G.Navigation.path[G.Navigation.SecondAgentNode]
-		and G.Navigation.path[G.Navigation.SecondAgentNode].pos
+	if G.Navigation.path then
+		-- Visualizing agents
+		local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
+			and G.Navigation.path[G.Navigation.FirstAgentNode].pos
+		local agent2Pos = G.Navigation.path[G.Navigation.SecondAgentNode]
+			and G.Navigation.path[G.Navigation.SecondAgentNode].pos
 
-	if agent1Pos then
-		local screenPos1 = client.WorldToScreen(agent1Pos)
-		if screenPos1 then
-			draw.Color(255, 255, 255, 255) -- White color for the first agent
-			Draw3DBox(10, agent1Pos) -- Smaller size for the first agent
+		if agent1Pos then
+			local screenPos1 = client.WorldToScreen(agent1Pos)
+			if screenPos1 then
+				draw.Color(255, 255, 255, 255) -- White color for the first agent
+				Draw3DBox(10, agent1Pos) -- Smaller size for the first agent
+			end
 		end
 	end
 
@@ -195,31 +195,37 @@ local function OnDraw()
 		for id, entry in pairs(visibleNodes) do
 			local node = entry.node
 			for dir = 1, 4 do
-				for _, nid in ipairs(node.c[dir].connections) do
-					local otherEntry = visibleNodes[nid]
-					if otherEntry then
-						local s1, s2 = entry.screen, otherEntry.screen
-						-- determine if other->id exists in its connections
-						local bidir = false
-						local otherNode = otherEntry.node
-						for d2 = 1, 4 do
-							for _, backId in ipairs(otherNode.c[d2].connections) do
-								if backId == id then
-									bidir = true
-									break
+				local cDir = node.c[dir]
+				if cDir and cDir.connections then
+					for _, nid in ipairs(cDir.connections) do
+						local otherEntry = visibleNodes[nid]
+						if otherEntry then
+							local s1, s2 = entry.screen, otherEntry.screen
+							-- determine if other->id exists in its connections
+							local bidir = false
+							local otherNode = otherEntry.node
+							for d2 = 1, 4 do
+								local otherCDir = otherNode.c[d2]
+								if otherCDir and otherCDir.connections then
+									for _, backId in ipairs(otherCDir.connections) do
+										if backId == id then
+											bidir = true
+											break
+										end
+									end
+									if bidir then
+										break
+									end
 								end
 							end
+							-- yellow for two-way, red for one-way
 							if bidir then
-								break
+								draw.Color(255, 255, 0, 100)
+							else
+								draw.Color(255, 0, 0, 70)
 							end
+							draw.Line(s1[1], s1[2], s2[1], s2[2])
 						end
-						-- yellow for two-way, red for one-way
-						if bidir then
-							draw.Color(255, 255, 0, 100)
-						else
-							draw.Color(255, 0, 0, 70)
-						end
-						draw.Line(s1[1], s1[2], s2[1], s2[2])
 					end
 				end
 			end
