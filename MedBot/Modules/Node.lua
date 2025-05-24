@@ -397,84 +397,313 @@ end
 
 --[[ Hierarchical Pathfinding Support ]]
 
---- Generate a grid of fine-grained points within a nav area for detailed local pathfinding
----@param area table The nav area to generate points for
----@param stepSize number? Grid step size in units (default: 32)
----@param edgeBuffer number? Distance from edges (default: 16)
----@return table[] Array of point objects with pos, neighbors, and id
-local function generateAreaPoints(area, stepSize, edgeBuffer)
-	stepSize = stepSize or 32 -- Smaller step size for better accuracy
-	edgeBuffer = edgeBuffer or 16
+--- Calculate Z coordinate on the plane defined by the 4 corners of the nav area
+---@param x number X coordinate
+---@param y number Y coordinate  
+---@param nw Vector3 North-west corner
+---@param ne Vector3 North-east corner
+---@param se Vector3 South-east corner
+---@param sw Vector3 South-west corner
+---@return number Z coordinate on the plane
+local function calculateZOnPlane(x, y, nw, ne, se, sw)
+	-- Use bilinear interpolation to find Z on the plane defined by 4 corners
+	local width = se.x - nw.x
+	local height = se.y - nw.y
 	
+	if width == 0 or height == 0 then
+		return nw.z -- Fallback to corner Z if area is degenerate
+	end
+	
+	-- Normalize coordinates (0,0) to (1,1)
+	local u = (x - nw.x) / width
+	local v = (y - nw.y) / height
+	
+	-- Clamp to valid range
+	u = math.max(0, math.min(1, u))
+	v = math.max(0, math.min(1, v))
+	
+	-- Bilinear interpolation
+	local z1 = nw.z * (1 - u) + ne.z * u  -- North edge interpolation
+	local z2 = sw.z * (1 - u) + se.z * u  -- South edge interpolation
+	local z = z1 * (1 - v) + z2 * v       -- Final interpolation
+	
+	return z
+end
+
+--- Check if a 2D line from point A to point B stays within the walkable areas (2D top-down view)
+---@param pointA Vector3 Start point
+---@param pointB Vector3 End point
+---@param areaA table Source area
+---@param areaB table Target area
+---@return boolean True if line stays within walkable space
+local function canConnect2D(pointA, pointB, areaA, areaB)
+	-- For adjacent nav areas, be more permissive - if they're already connected in the nav mesh,
+	-- they should be able to connect via fine points
+	local samples = 3 -- Reduced samples for performance
+	local stepX = (pointB.x - pointA.x) / samples
+	local stepY = (pointB.y - pointA.y) / samples
+	
+	local validSamples = 0
+	for i = 0, samples do
+		local testX = pointA.x + i * stepX
+		local testY = pointA.y + i * stepY
+		
+		-- Check if this sample point is within either area (2D)
+		local inAreaA = isPointInArea2D(testX, testY, areaA)
+		local inAreaB = isPointInArea2D(testX, testY, areaB)
+		
+		if inAreaA or inAreaB then
+			validSamples = validSamples + 1
+		end
+	end
+	
+	-- If most samples are valid, allow the connection
+	local validRatio = validSamples / (samples + 1)
+	local isValid = validRatio >= 0.6 -- Allow connection if 60% of samples are within areas
+	
+	if not isValid then
+		Log:Debug("2D connectivity check failed: only %.1f%% of samples were within areas", validRatio * 100)
+	end
+	
+	return isValid
+end
+
+--- Check if a 2D point is within a nav area (top-down view)
+---@param x number X coordinate
+---@param y number Y coordinate
+---@param area table Nav area with corners
+---@return boolean True if point is inside area
+local function isPointInArea2D(x, y, area)
 	if not area.nw or not area.se then
+		return false
+	end
+	
+	-- Simple bounding box check (could be improved for rotated areas)
+	return x >= area.nw.x and x <= area.se.x and y >= area.nw.y and y <= area.se.y
+end
+
+--- Generate a grid of fine-grained points within a nav area using fixed 24-unit spacing
+---@param area table The nav area to generate points for
+---@return table[] Array of point objects with pos, neighbors, id, and isEdge flag
+local function generateAreaPoints(area)
+	local GRID_SPACING = 24 -- Fixed 24-unit spacing as requested
+	
+	if not area.nw or not area.ne or not area.se or not area.sw then
 		-- Fallback to center point if corners are missing
-		return {{pos = area.pos, neighbors = {}, id = 1}}
+		Log:Warn("Area %d missing corners, using center point", area.id or 0)
+		return {{pos = area.pos, neighbors = {}, id = 1, parentArea = area.id, isEdge = false}}
 	end
 	
 	local points = {}
-	local nw, se = area.nw, area.se
+	local nw, ne, se, sw = area.nw, area.ne, area.se, area.sw
 	
-	-- Calculate dimensions of the area
-	local dimX = math.abs(se.x - nw.x) - 2 * edgeBuffer
-	local dimY = math.abs(se.y - nw.y) - 2 * edgeBuffer
+	-- Calculate actual area bounds (min/max coordinates)
+	local minX = math.min(nw.x, ne.x, se.x, sw.x)
+	local maxX = math.max(nw.x, ne.x, se.x, sw.x)
+	local minY = math.min(nw.y, ne.y, se.y, sw.y)
+	local maxY = math.max(nw.y, ne.y, se.y, sw.y)
 	
-	-- Skip if area is too small
-	if dimX <= 0 or dimY <= 0 then
-		return {{pos = area.pos, neighbors = {}, id = 1}}
+	-- Calculate area dimensions
+	local width = maxX - minX
+	local height = maxY - minY
+	
+	-- Skip if area is too small for even one grid point
+	if width < GRID_SPACING or height < GRID_SPACING then
+		local centerZ = calculateZOnPlane(area.pos.x, area.pos.y, nw, ne, se, sw)
+		Log:Debug("Area %d too small for 24-unit grid, using center point", area.id or 0)
+		return {{pos = Vector3(area.pos.x, area.pos.y, centerZ), neighbors = {}, id = 1, parentArea = area.id, isEdge = false}}
 	end
 	
-	-- Calculate starting points
-	local startX = nw.x + edgeBuffer
-	local startY = nw.y + edgeBuffer
+	-- Calculate number of grid points that fit perfectly
+	local gridPointsX = math.floor(width / GRID_SPACING) + 1
+	local gridPointsY = math.floor(height / GRID_SPACING) + 1
 	
-	-- Calculate number of steps
-	local stepsX = math.floor(dimX / stepSize)
-	local stepsY = math.floor(dimY / stepSize)
-	
-	-- Center the grid
-	local extraSpaceX = dimX - stepsX * stepSize
-	local extraSpaceY = dimY - stepsY * stepSize
-	
-	startX = startX + extraSpaceX / 2
-	startY = startY + extraSpaceY / 2
-	
-	-- Generate points
-	for i = 0, stepsX do
-		for j = 0, stepsY do
-			local pointX = startX + i * stepSize
-			local pointY = startY + j * stepSize
-			local pointZ = nw.z -- Assume flat area, could be improved with ground tracing
+	-- Generate ALL points covering the whole plane with 24-unit spacing
+	local allPoints = {}
+	for i = 0, gridPointsX - 1 do
+		for j = 0, gridPointsY - 1 do
+			local pointX = minX + i * GRID_SPACING
+			local pointY = minY + j * GRID_SPACING
+			local pointZ = calculateZOnPlane(pointX, pointY, nw, ne, se, sw)
 			
-			table.insert(points, {
+			table.insert(allPoints, {
 				pos = Vector3(pointX, pointY, pointZ),
 				neighbors = {},
-				id = #points + 1,
-				parentArea = area.id
+				id = #allPoints + 1,
+				parentArea = area.id,
+				isEdge = false,
+				gridX = i,
+				gridY = j
 			})
 		end
 	end
 	
-	-- Assign neighbors to each point
-	for i, pointA in ipairs(points) do
-		for j, pointB in ipairs(points) do
-			if i ~= j then
+	-- FIRST PASS: Remove edge points (points on the boundary of the grid)
+	for _, point in ipairs(allPoints) do
+		local isOnBoundary = (point.gridX == 0 or point.gridX == gridPointsX - 1 or 
+		                      point.gridY == 0 or point.gridY == gridPointsY - 1)
+		if not isOnBoundary then
+			table.insert(points, point)
+		end
+	end
+	
+	-- SECOND PASS: Mark new boundary points as edges for later calculations
+	if #points > 1 then
+		-- Find the new min/max grid coordinates after removing boundary
+		local minGridX, maxGridX = math.huge, -math.huge
+		local minGridY, maxGridY = math.huge, -math.huge
+		
+		for _, point in ipairs(points) do
+			minGridX = math.min(minGridX, point.gridX)
+			maxGridX = math.max(maxGridX, point.gridX)
+			minGridY = math.min(minGridY, point.gridY)
+			maxGridY = math.max(maxGridY, point.gridY)
+		end
+		
+		-- Mark points that are now on the new boundary as edges
+		for _, point in ipairs(points) do
+			point.isEdge = (point.gridX == minGridX or point.gridX == maxGridX or 
+			                point.gridY == minGridY or point.gridY == maxGridY)
+		end
+	end
+	
+	-- Re-assign IDs after filtering
+	for i, point in ipairs(points) do
+		point.id = i
+	end
+	
+	-- If no points generated, add center point
+	if #points == 0 then
+		local centerZ = calculateZOnPlane(area.pos.x, area.pos.y, nw, ne, se, sw)
+		table.insert(points, {pos = Vector3(area.pos.x, area.pos.y, centerZ), neighbors = {}, id = 1, parentArea = area.id, isEdge = false})
+		Log:Debug("Added fallback center point for area %d", area.id or 0)
+	end
+	
+	Log:Debug("Generated %d points for area %d (removed boundary, marked %d as edges)", 
+		#points, area.id or 0, #points > 0 and (function()
+			local edgeCount = 0
+			for _, p in ipairs(points) do
+				if p.isEdge then edgeCount = edgeCount + 1 end
+			end
+			return edgeCount
+		end)() or 0)
+	return points
+end
+
+--- Add internal connections within an area after points are generated
+---@param points table[] Array of points in the area
+local function addInternalConnections(points)
+	local GRID_SPACING = 24
+	local connectionsAdded = 0
+	
+	-- Add connections between ALL remaining points (not just adjacent grid points)
+	for _, pointA in ipairs(points) do
+		for _, pointB in ipairs(points) do
+			if pointA.id ~= pointB.id then
 				local distance = (pointA.pos - pointB.pos):Length()
-				if distance <= (stepSize * 1.5) then -- Allow diagonal connections
-					table.insert(pointA.neighbors, {point = pointB, cost = distance})
+				
+				-- Connect to immediate neighbors and diagonals
+				if distance <= GRID_SPACING * 1.5 then -- Allow for diagonal connections
+					table.insert(pointA.neighbors, {point = pointB, cost = distance, isInterArea = false})
+					connectionsAdded = connectionsAdded + 1
 				end
 			end
 		end
 	end
 	
-	-- If no points generated, add center point
-	if #points == 0 then
-		table.insert(points, {pos = area.pos, neighbors = {}, id = 1, parentArea = area.id})
+	-- Ensure all points have at least one connection (connectivity guarantee)
+	for _, point in ipairs(points) do
+		if #point.neighbors == 0 then
+			-- Find the closest point and force a connection
+			local closestPoint = nil
+			local closestDistance = math.huge
+			for _, otherPoint in ipairs(points) do
+				if otherPoint.id ~= point.id then
+					local distance = (point.pos - otherPoint.pos):Length()
+					if distance < closestDistance then
+						closestDistance = distance
+						closestPoint = otherPoint
+					end
+				end
+			end
+			if closestPoint then
+				table.insert(point.neighbors, {point = closestPoint, cost = closestDistance, isInterArea = false})
+				table.insert(closestPoint.neighbors, {point = point, cost = closestDistance, isInterArea = false})
+				connectionsAdded = connectionsAdded + 2
+				Log:Debug("Force-connected isolated point %d to point %d in area %d", point.id, closestPoint.id, point.parentArea)
+			end
+		end
 	end
 	
-	return points
+	return connectionsAdded
 end
 
---- Generate fine-grained points for a specific nav area and cache them
+--- Connect edge points between two adjacent areas using Manhattan distance for performance
+---@param areaA table First area
+---@param areaB table Second area
+---@param pointsA table[] Fine points from area A
+---@param pointsB table[] Fine points from area B
+---@return number Number of connections created
+local function connectAdjacentAreas(areaA, areaB, pointsA, pointsB)
+	local connections = 0
+	
+	-- Get edge points from both areas
+	local edgePointsA = {}
+	local edgePointsB = {}
+	
+	for _, point in ipairs(pointsA) do
+		if point.isEdge then
+			table.insert(edgePointsA, point)
+		end
+	end
+	
+	for _, point in ipairs(pointsB) do
+		if point.isEdge then
+			table.insert(edgePointsB, point)
+		end
+	end
+	
+	Log:Debug("Area %d has %d edge points, Area %d has %d edge points", 
+		areaA.id, #edgePointsA, areaB.id, #edgePointsB)
+	
+	if #edgePointsA == 0 or #edgePointsB == 0 then
+		Log:Debug("One of the areas has no edge points, skipping connection")
+		return 0
+	end
+	
+	-- For each edge point in A, find closest edge point in B using Manhattan distance
+	for _, pointA in ipairs(edgePointsA) do
+		local closestB = nil
+		local closestDistance = math.huge
+		
+		for _, pointB in ipairs(edgePointsB) do
+			-- Use Manhattan distance for performance as requested
+			local manhattanDist = math.abs(pointA.pos.x - pointB.pos.x) + math.abs(pointA.pos.y - pointB.pos.y)
+			
+			if manhattanDist < closestDistance then
+				closestDistance = manhattanDist
+				closestB = pointB
+			end
+		end
+		
+		if closestB then
+			-- Use actual 3D distance for connection cost
+			local distance3D = (pointA.pos - closestB.pos):Length()
+			
+			-- Add bidirectional connection
+			table.insert(pointA.neighbors, {point = closestB, cost = distance3D, isInterArea = true})
+			table.insert(closestB.neighbors, {point = pointA, cost = distance3D, isInterArea = true})
+			connections = connections + 1
+			
+			Log:Debug("Created inter-area connection: Area %d Point %d <-> Area %d Point %d (distance: %.1f)", 
+				pointA.parentArea, pointA.id, closestB.parentArea, closestB.id, distance3D)
+		end
+	end
+	
+	return connections
+end
+
+--- Generate fine-grained points for a specific nav area and cache them (no parameters for spacing)
 ---@param areaId number The area ID to generate points for
 ---@return table[]|nil Array of points or nil if area not found
 function Node.GenerateAreaPoints(areaId)
@@ -485,8 +714,14 @@ function Node.GenerateAreaPoints(areaId)
 	
 	local area = nodes[areaId]
 	if not area.finePoints then
+		-- Generate points with fixed 24-unit spacing
 		area.finePoints = generateAreaPoints(area)
-		Log:Info("Generated %d fine points for area %d", #area.finePoints, areaId)
+		
+		-- Add internal connections after point generation
+		local connectionsAdded = addInternalConnections(area.finePoints)
+		
+		Log:Info("Generated %d fine points for area %d with %d internal connections", 
+			#area.finePoints, areaId, connectionsAdded)
 	end
 	
 	return area.finePoints
@@ -549,4 +784,85 @@ function Node.ClearAreaPoints()
 	Log:Info("Cleared fine points cache for %d areas", clearedCount)
 end
 
+--- Generate fine points for all areas and create inter-area connections with separate passes
+---@param maxAreas number? Maximum number of areas to process (for performance)
+function Node.GenerateHierarchicalNetwork(maxAreas)
+	maxAreas = maxAreas or 50 -- Limit for performance
+	local nodes = Node.GetNodes()
+	if not nodes then
+		Log:Warn("No nodes available for hierarchical network generation")
+		return
+	end
+	
+	Log:Info("=== Starting hierarchical network generation ===")
+	local processedAreas = {}
+	local areaCount = 0
+	
+	-- PASS 1: Generate fine points for each area with internal connections
+	Log:Info("Pass 1: Generating points and internal connections...")
+	for areaId, area in pairs(nodes) do
+		if areaCount >= maxAreas then
+			break
+		end
+		
+		local points = Node.GenerateAreaPoints(areaId)
+		if points and #points > 0 then
+			processedAreas[areaId] = {area = area, points = points}
+			areaCount = areaCount + 1
+			Log:Debug("Processed area %d with %d points", areaId, #points)
+		end
+	end
+	
+	Log:Info("Generated fine points for %d areas", areaCount)
+	
+	-- PASS 2: Create inter-area connections between adjacent areas
+	Log:Info("Pass 2: Creating inter-area connections...")
+	local totalConnections = 0
+	local checkedPairs = 0
+	
+	for areaIdA, dataA in pairs(processedAreas) do
+		-- Check connections to adjacent areas - iterate through all 4 directions
+		for dir = 1, 4 do
+			local connectionDir = dataA.area.c[dir]
+			if connectionDir and connectionDir.connections and #connectionDir.connections > 0 then
+				for _, targetAreaId in ipairs(connectionDir.connections) do
+					local dataB = processedAreas[targetAreaId]
+					if dataB and targetAreaId ~= areaIdA then -- Avoid self-connections
+						checkedPairs = checkedPairs + 1
+						Log:Debug("Connecting area %d to area %d", areaIdA, targetAreaId)
+						
+						local connections = connectAdjacentAreas(dataA.area, dataB.area, dataA.points, dataB.points)
+						totalConnections = totalConnections + connections
+						
+						if connections > 0 then
+							Log:Info("✓ Connected areas %d <-> %d with %d fine point connections", areaIdA, targetAreaId, connections)
+						else
+							Log:Warn("✗ No connections created between areas %d <-> %d", areaIdA, targetAreaId)
+						end
+					end
+				end
+			end
+		end
+	end
+	
+	Log:Info("=== Network generation complete ===")
+	Log:Info("Checked pairs: %d", checkedPairs)  
+	Log:Info("Created %d inter-area fine point connections", totalConnections)
+	
+	-- Verify connections were actually created
+	local verificationCount = 0
+	for areaId, data in pairs(processedAreas) do
+		for _, point in ipairs(data.points) do
+			for _, neighbor in ipairs(point.neighbors) do
+				if neighbor.isInterArea then
+					verificationCount = verificationCount + 1
+				end
+			end
+		end
+	end
+	Log:Info("Verification: Found %d inter-area connections in the data structure", verificationCount)
+end
+
 return Node
+
+

@@ -523,6 +523,98 @@ Commands.Register("pf_auto", function(args)
 end)
 
 -- Debug command to check node connections
+Commands.Register("pf_hierarchical", function(args)
+	if args:size() == 0 then
+		print("Usage: pf_hierarchical <generate|network|clear|info> [areaId|maxAreas]")
+		print("  generate [areaId] - Generate fine points for specific area or all visible areas (24-unit grid)")
+		print("  network [maxAreas] - Generate full hierarchical network with inter-area connections") 
+		print("  clear - Clear all cached fine points")
+		print("  info [areaId] - Show info about area's fine points")
+		return
+	end
+
+	local Node = require("MedBot.Modules.Node")
+	local command = args:popFront()
+
+	if command == "generate" then
+		local areaId = args:size() > 0 and tonumber(args:popFront()) or nil
+		if areaId then
+			local points = Node.GenerateAreaPoints(areaId)
+			if points then
+				local edgeCount = 0
+				for _, point in ipairs(points) do
+					if point.isEdge then
+						edgeCount = edgeCount + 1
+					end
+				end
+				print(string.format("Generated %d fine points for area %d (%d edge points)", #points, areaId, edgeCount))
+			else
+				print("Area " .. areaId .. " not found!")
+			end
+		else
+			-- Generate for all visible areas
+			local nodes = Node.GetNodes()
+			if not nodes then
+				print("No nodes loaded!")
+				return
+			end
+			local generated = 0
+			local totalPoints = 0
+			for id, _ in pairs(nodes) do
+				local points = Node.GenerateAreaPoints(id)
+				if points then
+					generated = generated + 1
+					totalPoints = totalPoints + #points
+				end
+			end
+			print(string.format("Generated fine points for %d areas (%d total points)", generated, totalPoints))
+		end
+	elseif command == "network" then
+		local maxAreas = args:size() > 0 and tonumber(args:popFront()) or 50
+		Node.GenerateHierarchicalNetwork(maxAreas)
+		print("Hierarchical network generation complete. Check console for details.")
+	elseif command == "clear" then
+		Node.ClearAreaPoints()
+	elseif command == "info" then
+		local areaId = args:size() > 0 and tonumber(args:popFront()) or nil
+		if areaId then
+			local points = Node.GetAreaPoints(areaId)
+			if points then
+				local edgeCount = 0
+				local interAreaConnections = 0
+				for _, point in ipairs(points) do
+					if point.isEdge then
+						edgeCount = edgeCount + 1
+					end
+					for _, neighbor in ipairs(point.neighbors) do
+						if neighbor.isInterArea then
+							interAreaConnections = interAreaConnections + 1
+						end
+					end
+				end
+				print(string.format("Area %d: %d fine points (%d edge points)", areaId, #points, edgeCount))
+				print(string.format("  Inter-area connections: %d", interAreaConnections))
+				-- Show first few points
+				for i = 1, math.min(3, #points) do
+					local p = points[i]
+					local edgeStr = p.isEdge and " [EDGE]" or ""
+					print(string.format("  Point %d: %s (%d neighbors)%s", i, tostring(p.pos), #p.neighbors, edgeStr))
+				end
+				if #points > 3 then
+					print(string.format("  ... and %d more points", #points - 3))
+				end
+			else
+				print("Area " .. areaId .. " not found or has no fine points!")
+			end
+		else
+			print("Please specify an area ID")
+		end
+	else
+		print("Unknown command: " .. command)
+		print("Available commands: generate, network, clear, info")
+	end
+end)
+
 Commands.Register("pf_debug", function(args)
 	if args:size() ~= 1 then
 		print("Usage: pf_debug <NodeID>")
@@ -653,6 +745,48 @@ Commands.Register("pf_debug", function(args)
 	end
 	if #adjacent > 5 then
 		print("  ... and " .. (#adjacent - 5) .. " more")
+	end
+end)
+
+Commands.Register("pf_test_connections", function(args)
+	local Node = require("MedBot.Modules.Node")
+	local nodes = Node.GetNodes()
+	if not nodes then
+		print("No nodes loaded!")
+		return
+	end
+	
+	if args:size() == 0 then
+		-- Show first few areas and their connections
+		local count = 0
+		for areaId, area in pairs(nodes) do
+			if count >= 5 then break end
+			print(string.format("Area %d connections:", areaId))
+			for dir = 1, 4 do
+				local cDir = area.c[dir]
+				if cDir and cDir.connections and #cDir.connections > 0 then
+					print(string.format("  Dir %d: %s", dir, table.concat(cDir.connections, ", ")))
+				end
+			end
+			count = count + 1
+		end
+	else
+		-- Show specific area
+		local areaId = tonumber(args:popFront())
+		local area = nodes[areaId]
+		if area then
+			print(string.format("Area %d connections:", areaId))
+			for dir = 1, 4 do
+				local cDir = area.c[dir]
+				if cDir and cDir.connections and #cDir.connections > 0 then
+					print(string.format("  Dir %d: %s", dir, table.concat(cDir.connections, ", ")))
+				else
+					print(string.format("  Dir %d: no connections", dir))
+				end
+			end
+		else
+			print("Area not found: " .. areaId)
+		end
 	end
 end)
 

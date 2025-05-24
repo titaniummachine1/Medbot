@@ -40,6 +40,7 @@ local function OnDrawMenu()
 			G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
 			TimMenu.NextLine()
 
+			G.Menu.Main.smoothFactor = G.Menu.Main.smoothFactor or 0.1
 			G.Menu.Main.smoothFactor = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 0.1, 0.01)
 			TimMenu.NextLine()
 
@@ -58,6 +59,13 @@ local function OnDrawMenu()
 			G.Menu.Main.AllowExpensiveChecks =
 				TimMenu.Checkbox("Allow Expensive Walkability Checks", G.Menu.Main.AllowExpensiveChecks or false)
 			TimMenu.Tooltip("Enable expensive trace-based walkability validation (rarely needed)")
+			TimMenu.NextLine()
+
+			G.Menu.Main.UseHierarchicalPathfinding =
+				TimMenu.Checkbox("Use Hierarchical Pathfinding", G.Menu.Main.UseHierarchicalPathfinding or false)
+			TimMenu.Tooltip("Generate fine-grained points within areas for more accurate local pathfinding")
+			TimMenu.NextLine()
+
 			TimMenu.EndSector()
 		elseif G.Menu.Tab == "Visuals" then
 			-- Visual Settings Section
@@ -65,24 +73,40 @@ local function OnDrawMenu()
 			G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 			TimMenu.NextLine()
 
-			G.Menu.Visuals.renderDistance =
-				TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
+			G.Menu.Visuals.renderDistance = G.Menu.Visuals.renderDistance or 800
+			G.Menu.Visuals.renderDistance = TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
 			TimMenu.EndSector()
 
 			TimMenu.NextLine()
 
 			-- Node Display Section
-			TimMenu.BeginSector("Node Display")
-			G.Menu.Visuals.drawNodes = TimMenu.Checkbox("Show Nodes", G.Menu.Visuals.drawNodes)
+			TimMenu.BeginSector("Display Options")
+			-- Basic display options
+			local basicOptions = {"Show Nodes", "Show Node IDs", "Show Nav Connections", "Show Areas", "Show Fine Points"}
+			G.Menu.Visuals.basicDisplay = G.Menu.Visuals.basicDisplay or {true, true, true, true, false}
+			G.Menu.Visuals.basicDisplay = TimMenu.Combo("Basic Display", G.Menu.Visuals.basicDisplay, basicOptions)
 			TimMenu.NextLine()
+			
+			-- Update individual settings based on combo selection
+			G.Menu.Visuals.drawNodes = G.Menu.Visuals.basicDisplay[1]
+			G.Menu.Visuals.drawNodeIDs = G.Menu.Visuals.basicDisplay[2]
+			G.Menu.Visuals.showConnections = G.Menu.Visuals.basicDisplay[3]
+			G.Menu.Visuals.showAreas = G.Menu.Visuals.basicDisplay[4]
+			G.Menu.Visuals.showFinePoints = G.Menu.Visuals.basicDisplay[5]
 
-			G.Menu.Visuals.drawNodeIDs = TimMenu.Checkbox("Show Node IDs", G.Menu.Visuals.drawNodeIDs)
-			TimMenu.NextLine()
-
-			G.Menu.Visuals.showConnections = TimMenu.Checkbox("Show Connections", G.Menu.Visuals.showConnections)
-			TimMenu.NextLine()
-
-			G.Menu.Visuals.showAreas = TimMenu.Checkbox("Show Areas", G.Menu.Visuals.showAreas)
+			-- Fine Point Connection Options (only show if fine points are enabled)
+			if G.Menu.Visuals.showFinePoints then
+				local connectionOptions = {"Intra-Area Connections", "Inter-Area Connections", "Edge-to-Edge Connections"}
+				G.Menu.Visuals.connectionDisplay = G.Menu.Visuals.connectionDisplay or {true, true, true}
+				G.Menu.Visuals.connectionDisplay = TimMenu.Combo("Fine Point Connections", G.Menu.Visuals.connectionDisplay, connectionOptions)
+				TimMenu.Tooltip("Blue: intra-area, Orange: inter-area, Bright blue: edge-to-edge")
+				TimMenu.NextLine()
+				
+				-- Update individual connection settings
+				G.Menu.Visuals.showIntraConnections = G.Menu.Visuals.connectionDisplay[1]
+				G.Menu.Visuals.showInterConnections = G.Menu.Visuals.connectionDisplay[2]
+				G.Menu.Visuals.showEdgeConnections = G.Menu.Visuals.connectionDisplay[3]
+			end
 			TimMenu.EndSector()
 		end
 	end
