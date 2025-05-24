@@ -31,7 +31,7 @@ G.World_Default = {
 G.World = G.World_Default
 
 G.Misc = {
-	NodeTouchDistance = 10,
+	NodeTouchDistance = 17,
 	NodeTouchHeight = 82,
 	workLimit = 1,
 }

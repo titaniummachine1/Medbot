@@ -308,7 +308,7 @@ function moveTowardsNode(userCmd, node)
 	local angles = Lib.Utils.Math.PositionAngles(pLocalWrapped:GetEyePos(), node.pos)
 	angles.x = 0
 
-	if G.Menu.Movement.smoothLookAtPath then
+	if G.Menu.Main.LookingAhead then
 		local currentAngles = userCmd.viewangles
 		local deltaAngles = { x = angles.x - currentAngles.x, y = angles.y - currentAngles.y }
 
@@ -337,80 +337,132 @@ function moveTowardsNode(userCmd, node)
 			G.currentState = G.States.IDLE
 		end
 	else
+		-- Simple node skipping logic - check if we can walk directly to next node
 		if G.Menu.Main.Skip_Nodes and WorkManager.attemptWork(2, "node skip") then
 			local path = G.Navigation.path
-			local currentIdx = G.Navigation.currentNodeIndex
-			-- Check if we can skip to the next node (index 2)
 			if path and #path > 1 then
-				local nextNode = path[2] -- Next node in normal order
+				local nextNode = path[2] -- Next node after current
 				if nextNode then
-					local nextHorizontalDist = math.abs(LocalOrigin.x - nextNode.pos.x)
-						+ math.abs(LocalOrigin.y - nextNode.pos.y)
-					local nextVerticalDist = math.abs(LocalOrigin.z - nextNode.pos.z)
-					if nextHorizontalDist < horizontalDist and nextVerticalDist <= G.Misc.NodeTouchHeight then
-						Log:Info("Skipping to closer node (index 2)")
+					-- Choose walkability check based on aggressive skipping setting
+					local canSkip = false
+					if G.Menu.Main.AggressivePathSkipping then
+						-- Aggressive mode: allow jumping (use full walkability)
+						canSkip = Navigation.isWalkable(LocalOrigin, nextNode.pos)
+					else
+						-- Conservative mode: only allow stepping (18-unit height limit)
+						canSkip = Navigation.isStepOnlyWalkable(LocalOrigin, nextNode.pos)
+					end
+
+					if canSkip then
+						Log:Info(
+							"Node skip: Can walk directly to next node (aggressive: %s)",
+							tostring(G.Menu.Main.AggressivePathSkipping)
+						)
 						Navigation.RemoveCurrentNode()
 					end
 				end
 			end
-		elseif G.Menu.Main.Optymise_Path and WorkManager.attemptWork(4, "Optymise Path") then
-			Navigation.OptimizePath()
+		end
+
+		-- Advanced features only if looking ahead is not disabled
+		if not G.Menu.Main.DisableLookingAhead then
+			-- A* internal navigation for smoother movement within large areas
+			if G.Menu.Main.UseHierarchicalPathfinding and WorkManager.attemptWork(8, "internal nav") then
+				local path = G.Navigation.path
+				if path and #path > 1 then
+					local currentNode = path[1]
+					local targetNode = path[math.min(3, #path)] -- Look 2-3 nodes ahead
+
+					if currentNode and targetNode then
+						local internalPath = Navigation.GetInternalPath(LocalOrigin, targetNode.pos, 200)
+						if internalPath and #internalPath > 2 then
+							-- Replace current movement target with internal path
+							Log:Debug("Using A* internal navigation with %d waypoints", #internalPath)
+							-- For now, just move to the second point in the internal path for smoother movement
+							local internalTarget = internalPath[2]
+							if internalTarget then
+								Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, internalTarget.pos)
+							else
+								Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+							end
+						else
+							Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+						end
+					else
+						Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+					end
+				else
+					Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+				end
+			elseif G.Menu.Main.Optymise_Path and WorkManager.attemptWork(4, "Optymise Path") then
+				Navigation.OptimizePath()
+				Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+			else
+				Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+			end
+		else
+			-- Simple movement when looking ahead is disabled
+			Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
 		end
 
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
-		Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-	end
 
-	-- Use SmartJump for intelligent obstacle detection and jumping
-	SmartJump.Main(userCmd)
-
-	-- Apply jump if SmartJump determined it's needed
-	if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
-		userCmd:SetButtons(userCmd.buttons | IN_JUMP)
-		userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
-	end
-
-	-- Enhanced emergency jump logic using SmartJump intelligence
-	if G.pLocal.flags & FL_ONGROUND == 1 or G.pLocal.entity:EstimateAbsVelocity():Length() < 50 then
-		local currentTick = globals.TickCount()
-		-- Use SmartJump's emergency logic instead of simple timer
-		if SmartJump.ShouldEmergencyJump(currentTick, G.Navigation.currentNodeTicks) then
-			if not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
-				userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
-				userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
-				userCmd:SetButtons(userCmd.buttons | IN_JUMP)
-				Log:Info("Emergency jump triggered - obstacle detected but SmartJump inactive")
-			end
+		-- Continuous path optimization - check every tick if we can skip to next node
+		if G.Menu.Main.ContinuousOptimization then
+			Navigation.OptimizePathStep(LocalOrigin)
 		end
 
-		local path = G.Navigation.path
-		local currentIdx = G.Navigation.currentNodeIndex
-		if
-			path
-			and (
-				G.Navigation.currentNodeTicks > 264
-				or (G.Navigation.currentNodeTicks > 22 and horizontalDist < G.Misc.NodeTouchDistance)
-					and WorkManager.attemptWork(66, "pathCheck")
-			)
-		then
-			-- Check if path is blocked
-			local currentNode = path[currentIdx] -- Current node (index 1)
-			local nextNode = path[currentIdx + 1] -- Next node (index 2)
+		-- Use SmartJump for intelligent obstacle detection and jumping
+		SmartJump.Main(userCmd)
 
-			if not Navigation.isWalkable(LocalOrigin, currentNode.pos) then
-				Log:Warn("Path to current node is blocked, adding high cost to connection and repathing...")
-				if currentNode and nextNode then
-					-- Add high cost instead of removing connection entirely - pathfinding will avoid but keep as backup
-					Navigation.AddCostToConnection(currentNode, nextNode, 1000)
+		-- Apply jump if SmartJump determined it's needed
+		if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
+			userCmd:SetButtons(userCmd.buttons | IN_JUMP)
+			userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
+		end
+
+		-- Enhanced emergency jump logic using SmartJump intelligence
+		if G.pLocal.flags & FL_ONGROUND == 1 or G.pLocal.entity:EstimateAbsVelocity():Length() < 50 then
+			local currentTick = globals.TickCount()
+			-- Use SmartJump's emergency logic instead of simple timer
+			if SmartJump.ShouldEmergencyJump(currentTick, G.Navigation.currentNodeTicks) then
+				if not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
+					userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
+					userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
+					userCmd:SetButtons(userCmd.buttons | IN_JUMP)
+					Log:Info("Emergency jump triggered - obstacle detected but SmartJump inactive")
 				end
-				Navigation.ClearPath()
-				Navigation.ResetTickTimer()
-				G.currentState = G.States.IDLE
-			elseif not WorkManager.attemptWork(5, "pathCheck") then
-				Log:Warn("Path is stuck but not blocked, repathing...")
-				Navigation.ClearPath()
-				Navigation.ResetTickTimer()
-				G.currentState = G.States.IDLE
+			end
+
+			local path = G.Navigation.path
+			local currentIdx = G.Navigation.currentNodeIndex
+			if
+				path
+				and (
+					G.Navigation.currentNodeTicks > 264
+					or (G.Navigation.currentNodeTicks > 22 and horizontalDist < G.Misc.NodeTouchDistance)
+						and WorkManager.attemptWork(66, "pathCheck")
+				)
+			then
+				-- Check if path is blocked
+				local currentNode = path[currentIdx] -- Current node (index 1)
+				local nextNode = path[currentIdx + 1] -- Next node (index 2)
+
+				if not Navigation.isWalkable(LocalOrigin, currentNode.pos) then
+					Log:Warn("Path to current node is blocked, adding high cost to connection and repathing...")
+					if currentNode and nextNode then
+						-- Add high cost instead of removing connection entirely - pathfinding will avoid but keep as backup
+						Navigation.AddCostToConnection(currentNode, nextNode, 1000)
+					end
+					Navigation.ClearPath()
+					Navigation.ResetTickTimer()
+					G.currentState = G.States.IDLE
+				elseif not WorkManager.attemptWork(5, "pathCheck") then
+					Log:Warn("Path is stuck but not blocked, repathing...")
+					Navigation.ClearPath()
+					Navigation.ResetTickTimer()
+					G.currentState = G.States.IDLE
+				end
 			end
 		end
 	end
@@ -546,6 +598,86 @@ Commands.Register("pf_test_hierarchical", function()
 		print(string.format("Total: %d edge points, %d inter-area connections", totalEdgePoints, totalConnections))
 	else
 		print("No hierarchical data available. Run 'pf_hierarchical network' first.")
+	end
+end)
+
+Commands.Register("pf_connections", function(args)
+	local Node = require("MedBot.Modules.Node")
+
+	if args[1] == "status" then
+		local status = Node.GetConnectionProcessingStatus()
+		if status.isProcessing then
+			local phaseNames = {
+				[1] = "Basic validation",
+				[2] = "Expensive fallback",
+				[3] = "Fine point stitching",
+			}
+			print(string.format("Connection Processing Active:"))
+			print(string.format("  Phase: %d (%s)", status.currentPhase, phaseNames[status.currentPhase] or "Unknown"))
+			print(string.format("  Progress: %d/%d nodes processed", status.processedNodes, status.totalNodes))
+			print(string.format("  Connections found: %d", status.connectionsFound))
+			print(string.format("  Expensive checks used: %d", status.expensiveChecksUsed))
+			print(string.format("  Fine point connections added: %d", status.finePointConnectionsAdded))
+			print(string.format("  Current FPS: %.1f (batch size: %d)", status.currentFPS, status.currentBatchSize))
+		else
+			print("Connection processing is not active")
+		end
+	elseif args[1] == "stop" then
+		Node.StopConnectionProcessing()
+		print("Stopped connection processing")
+	elseif args[1] == "start" then
+		local nodes = Node.GetNodes()
+		if nodes and next(nodes) then
+			-- Trigger connection processing by calling the internal function
+			-- This is a bit of a hack but allows manual restart
+			print("Starting connection processing...")
+			Node.CleanupConnections()
+		else
+			print("No nodes loaded")
+		end
+	else
+		print("Usage: pf_connections status | stop | start")
+		print("  status - Show current processing status")
+		print("  stop   - Stop background processing")
+		print("  start  - Start/restart connection processing")
+	end
+end)
+
+Commands.Register("pf_optimize", function(args)
+	if args[1] == "test" then
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal and pLocal:IsAlive() then
+			local origin = pLocal:GetAbsOrigin()
+			local optimized = Navigation.OptimizePathStep(origin)
+			if optimized then
+				print("Path optimization successful - skipped to next node")
+			else
+				print("Path optimization failed - no skip performed")
+			end
+		else
+			print("Player not available for testing")
+		end
+	elseif args[1] == "info" then
+		print(
+			string.format("Continuous Optimization: %s", G.Menu.Main.ContinuousOptimization and "Enabled" or "Disabled")
+		)
+		print(
+			string.format(
+				"Aggressive Path Skipping: %s",
+				G.Menu.Main.AggressivePathSkipping and "Enabled (full walkability)" or "Disabled (18-unit steps only)"
+			)
+		)
+
+		local path = G.Navigation.path
+		if path and #path > 0 then
+			print(string.format("Current path: %d nodes remaining", #path))
+		else
+			print("No active path")
+		end
+	else
+		print("Usage: pf_optimize test | info")
+		print("  test - Test path optimization with current position")
+		print("  info - Show optimization settings and path status")
 	end
 end)
 

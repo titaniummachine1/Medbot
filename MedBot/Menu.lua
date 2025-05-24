@@ -41,7 +41,7 @@ local function OnDrawMenu()
 			TimMenu.NextLine()
 
 			G.Menu.Main.smoothFactor = G.Menu.Main.smoothFactor or 0.1
-			G.Menu.Main.smoothFactor = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 0.1, 0.01)
+			G.Menu.Main.smoothFactor = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 1, 0.01)
 			TimMenu.NextLine()
 
 			G.Menu.Main.SelfHealTreshold =
@@ -66,6 +66,60 @@ local function OnDrawMenu()
 			TimMenu.Tooltip("Generate fine-grained points within areas for more accurate local pathfinding")
 			TimMenu.NextLine()
 
+			G.Menu.Main.AggressivePathSkipping =
+				TimMenu.Checkbox("Aggressive Path Skipping", G.Menu.Main.AggressivePathSkipping or false)
+			TimMenu.Tooltip("Skip multiple nodes aggressively for shorter paths, may require more jumping")
+			TimMenu.NextLine()
+
+			G.Menu.Main.ContinuousOptimization =
+				TimMenu.Checkbox("Continuous Path Optimization", G.Menu.Main.ContinuousOptimization or true)
+			TimMenu.Tooltip("Check every tick if next node can be reached directly (18-unit steps when not aggressive)")
+			TimMenu.NextLine()
+
+
+			G.Menu.Main.LookingAhead = TimMenu.Checkbox("Look Ahead", G.Menu.Main.LookingAhead or false)
+			TimMenu.Tooltip("Disable complex looking ahead logic for simpler, more direct pathfinding")
+			TimMenu.NextLine()
+
+			-- Connection processing status display
+			if G.Menu.Main.CleanupConnections then
+				local Node = require("MedBot.Modules.Node")
+				local status = Node.GetConnectionProcessingStatus()
+				if status.isProcessing then
+					local phaseNames = {
+						[1] = "Basic validation",
+						[2] = "Expensive fallback",
+						[3] = "Fine point stitching",
+					}
+					TimMenu.Text(
+						string.format(
+							"Processing Connections: Phase %d (%s)",
+							status.currentPhase,
+							phaseNames[status.currentPhase] or "Unknown"
+						)
+					)
+					TimMenu.NextLine()
+					TimMenu.Text(
+						string.format(
+							"Progress: %d/%d nodes (FPS: %.1f)",
+							status.processedNodes,
+							status.totalNodes,
+							status.currentFPS
+						)
+					)
+					TimMenu.NextLine()
+					TimMenu.Text(
+						string.format(
+							"Found: %d connections, Expensive: %d, Fine points: %d",
+							status.connectionsFound,
+							status.expensiveChecksUsed,
+							status.finePointConnectionsAdded
+						)
+					)
+					TimMenu.NextLine()
+				end
+			end
+
 			TimMenu.EndSector()
 		elseif G.Menu.Tab == "Visuals" then
 			-- Visual Settings Section
@@ -74,7 +128,8 @@ local function OnDrawMenu()
 			TimMenu.NextLine()
 
 			G.Menu.Visuals.renderDistance = G.Menu.Visuals.renderDistance or 800
-			G.Menu.Visuals.renderDistance = TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
+			G.Menu.Visuals.renderDistance =
+				TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
 			TimMenu.EndSector()
 
 			TimMenu.NextLine()
@@ -82,11 +137,12 @@ local function OnDrawMenu()
 			-- Node Display Section
 			TimMenu.BeginSector("Display Options")
 			-- Basic display options
-			local basicOptions = {"Show Nodes", "Show Node IDs", "Show Nav Connections", "Show Areas", "Show Fine Points"}
-			G.Menu.Visuals.basicDisplay = G.Menu.Visuals.basicDisplay or {true, true, true, true, false}
+			local basicOptions =
+				{ "Show Nodes", "Show Node IDs", "Show Nav Connections", "Show Areas", "Show Fine Points" }
+			G.Menu.Visuals.basicDisplay = G.Menu.Visuals.basicDisplay or { true, true, true, true, false }
 			G.Menu.Visuals.basicDisplay = TimMenu.Combo("Basic Display", G.Menu.Visuals.basicDisplay, basicOptions)
 			TimMenu.NextLine()
-			
+
 			-- Update individual settings based on combo selection
 			G.Menu.Visuals.drawNodes = G.Menu.Visuals.basicDisplay[1]
 			G.Menu.Visuals.drawNodeIDs = G.Menu.Visuals.basicDisplay[2]
@@ -96,12 +152,14 @@ local function OnDrawMenu()
 
 			-- Fine Point Connection Options (only show if fine points are enabled)
 			if G.Menu.Visuals.showFinePoints then
-				local connectionOptions = {"Intra-Area Connections", "Inter-Area Connections", "Edge-to-Edge Connections"}
-				G.Menu.Visuals.connectionDisplay = G.Menu.Visuals.connectionDisplay or {true, true, true}
-				G.Menu.Visuals.connectionDisplay = TimMenu.Combo("Fine Point Connections", G.Menu.Visuals.connectionDisplay, connectionOptions)
+				local connectionOptions =
+					{ "Intra-Area Connections", "Inter-Area Connections", "Edge-to-Edge Connections" }
+				G.Menu.Visuals.connectionDisplay = G.Menu.Visuals.connectionDisplay or { true, true, true }
+				G.Menu.Visuals.connectionDisplay =
+					TimMenu.Combo("Fine Point Connections", G.Menu.Visuals.connectionDisplay, connectionOptions)
 				TimMenu.Tooltip("Blue: intra-area, Orange: inter-area, Bright blue: edge-to-edge")
 				TimMenu.NextLine()
-				
+
 				-- Update individual connection settings
 				G.Menu.Visuals.showIntraConnections = G.Menu.Visuals.connectionDisplay[1]
 				G.Menu.Visuals.showInterConnections = G.Menu.Visuals.connectionDisplay[2]

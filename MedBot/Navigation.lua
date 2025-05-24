@@ -400,52 +400,137 @@ function Navigation.isWalkable(startPos, endPos)
 	return true -- Path is walkable
 end
 
-function Navigation.OptimizePath()
-	local path = G.Navigation.path
-	if not path then
-		return
+-- Step-focused walkability check optimized for node skipping (18-unit steps, not high jumps)
+function Navigation.isStepWalkable(startPos, endPos)
+	local direction = Common.Normalize(endPos - startPos)
+	local totalDistance = (endPos - startPos):Length()
+	local stepSize = math.min(24, totalDistance / 5) -- Smaller steps for precision
+	local currentPosition = startPos
+	local maxStepHeight = 18 -- Only allow 18-unit steps, not full jumps
+
+	-- Quick height check first
+	local heightDiff = endPos.z - startPos.z
+	if heightDiff > maxStepHeight then
+		return false -- Too high to step up
 	end
 
-	local currentIndex = G.Navigation.FirstAgentNode
-	local checkingIndex = G.Navigation.SecondAgentNode
-	local currentNode = G.Navigation.currentNode -- Assuming this is correctly set somewhere in your game logic
-	local optimizationLimit = G.Menu.Main.OptimizationLimit or 10 -- Default limit if not specified
+	local steps = math.max(3, math.ceil(totalDistance / stepSize))
 
-	-- Only proceed if the first agent is not too far ahead of the current node
-	if currentIndex - currentNode <= optimizationLimit then
-		-- Check visibility between the current node and the checking node
-		if checkingIndex <= #path and G.Navigation.isWalkable(path[currentIndex].pos, path[checkingIndex].pos) then
-			-- If the current node can directly walk to the checking node, move to check the next node
-			checkingIndex = checkingIndex + 1
-		else
-			-- Once we find a node that cannot be directly walked to, we place all nodes in a straight line
-			-- from currentIndex to the last directly walkable node (checkingIndex - 1)
-			if checkingIndex > currentIndex + 1 then
-				local startX, startY = path[currentIndex].pos.x, path[currentIndex].pos.y
-				local endX, endY = path[checkingIndex - 1].pos.x, path[checkingIndex - 1].pos.y
-				local numSteps = checkingIndex - currentIndex - 1
-				local stepX = (endX - startX) / (numSteps + 1)
-				local stepY = (endY - startY) / (numSteps + 1)
-				for i = 1, numSteps do
-					local nodeIndex = currentIndex + i
-					local node = path[nodeIndex]
-					node.pos.x = startX + stepX * i
-					node.pos.y = startY + stepY * i
-					Navigation.FixNode(nodeIndex)
-				end
+	for i = 1, steps do
+		local progress = i / steps
+		local nextPosition = startPos + direction * (totalDistance * progress)
+
+		-- Check if path is clear at this step
+		local pathTrace = isPathClear(currentPosition, nextPosition)
+		if pathTrace.fraction < 0.9 then
+			-- Small obstacle, check if we can step over it
+			local obstacleHeight = pathTrace.endpos.z - currentPosition.z
+			if obstacleHeight > maxStepHeight then
+				return false -- Obstacle too high to step over
 			end
 
-			-- Update the indices in the G module to start a new segment of optimization
-			G.Navigation.FirstAgentNode = checkingIndex - 1
-			G.Navigation.SecondAgentNode = G.Navigation.FirstAgentNode + 1
+			-- Try stepping up by the obstacle height + small margin
+			local stepUpHeight = math.min(maxStepHeight, obstacleHeight + 2)
+			local stepUpPos = currentPosition + Vector3(0, 0, stepUpHeight)
+			local stepOverTrace = isPathClear(stepUpPos, nextPosition + Vector3(0, 0, stepUpHeight))
 
-			-- Reset the indices to the beginning if we've reached or exceeded the last node
-			if G.Navigation.FirstAgentNode >= #path - 1 then
-				G.Navigation.FirstAgentNode = 1
-				G.Navigation.SecondAgentNode = G.Navigation.FirstAgentNode + 1
+			if stepOverTrace.fraction < 0.9 then
+				return false -- Can't step over obstacle
 			end
 		end
+
+		currentPosition = nextPosition
 	end
+
+	return true -- Path is step-walkable
+end
+
+-- Conservative walkability check - only allows 18-unit steps, no jumping
+function Navigation.isStepOnlyWalkable(startPos, endPos)
+	local direction = Common.Normalize(endPos - startPos)
+	local totalDistance = (endPos - startPos):Length()
+	local stepSize = math.min(16, totalDistance / 8) -- Smaller steps for precision
+	local currentPosition = startPos
+	local maxStepHeight = 18 -- Only 18-unit steps, no jumps allowed
+
+	-- Quick height check first - reject anything requiring more than stepping
+	local heightDiff = endPos.z - startPos.z
+	if heightDiff > maxStepHeight then
+		return false -- Too high to step up
+	end
+
+	local steps = math.max(5, math.ceil(totalDistance / stepSize))
+
+	for i = 1, steps do
+		local progress = i / steps
+		local nextPosition = startPos + direction * (totalDistance * progress)
+
+		-- Check if path is clear at this step
+		local pathTrace = isPathClear(currentPosition, nextPosition)
+		if pathTrace.fraction < 0.95 then -- Very strict - must be almost completely clear
+			-- Small obstacle, check if we can step over it (no jumping)
+			local obstacleHeight = pathTrace.endpos.z - currentPosition.z
+			if obstacleHeight > maxStepHeight then
+				return false -- Obstacle too high to step over
+			end
+
+			-- Try stepping up by the obstacle height (small margin only)
+			local stepUpHeight = math.min(maxStepHeight, obstacleHeight + 1)
+			local stepUpPos = currentPosition + Vector3(0, 0, stepUpHeight)
+			local stepOverTrace = isPathClear(stepUpPos, nextPosition + Vector3(0, 0, stepUpHeight))
+
+			if stepOverTrace.fraction < 0.95 then
+				return false -- Can't step over obstacle cleanly
+			end
+		end
+
+		currentPosition = nextPosition
+	end
+
+	return true -- Path is walkable with steps only
+end
+
+-- Continuous path optimization - check if we can skip to next node every tick
+function Navigation.OptimizePathStep(localOrigin)
+	local path = G.Navigation.path
+	if not path or #path < 2 then
+		return false -- No path or too short to optimize
+	end
+
+	local currentNode = path[1]
+	local nextNode = path[2]
+
+	if not currentNode or not nextNode then
+		return false
+	end
+
+	-- Check if next node is closer than current (basic skip condition)
+	local currentDist = (localOrigin - currentNode.pos):Length()
+	local nextDist = (localOrigin - nextNode.pos):Length()
+
+	if nextDist < currentDist then
+		-- Choose walkability check based on aggressive optimization setting
+		local canSkip = false
+
+		if G.Menu.Main.AggressivePathSkipping then
+			-- Aggressive mode: allow jumping (use full walkability)
+			canSkip = Navigation.isWalkable(localOrigin, nextNode.pos)
+		else
+			-- Conservative mode: only allow stepping (no jumping)
+			canSkip = Navigation.isStepOnlyWalkable(localOrigin, nextNode.pos)
+		end
+
+		if canSkip then
+			Log:Debug(
+				"Path optimization: Skipping to next node (aggressive: %s)",
+				tostring(G.Menu.Main.AggressivePathSkipping)
+			)
+			Navigation.RemoveCurrentNode()
+			return true -- Successfully optimized
+		end
+	end
+
+	return false -- No optimization performed
 end
 
 -- Function to get forward speed by class
@@ -583,6 +668,63 @@ function Navigation.FindPath(startNode, goalNode)
 	end
 
 	return Navigation
+end
+
+-- A* internal navigation for smooth movement within larger areas
+function Navigation.GetInternalPath(startPos, endPos, maxDistance)
+	maxDistance = maxDistance or 200 -- Maximum distance to consider internal navigation
+
+	local distance = (endPos - startPos):Length()
+	if distance < 50 then
+		return nil -- Too close, direct movement is fine
+	end
+
+	if distance > maxDistance then
+		return nil -- Too far, use regular pathfinding
+	end
+
+	-- Check if we're in the same area and have hierarchical data
+	if G.Navigation.hierarchical then
+		local startArea, endArea = nil, nil
+
+		-- Find which areas contain our start and end positions
+		for areaId, areaInfo in pairs(G.Navigation.hierarchical.areas) do
+			local areaNode = G.Navigation.nodes[areaId]
+			if areaNode then
+				local distToStart = (areaNode.pos - startPos):Length()
+				local distToEnd = (areaNode.pos - endPos):Length()
+
+				-- Check if positions are within reasonable distance of area center
+				if distToStart < 150 then
+					startArea = areaInfo
+				end
+				if distToEnd < 150 then
+					endArea = areaInfo
+				end
+			end
+		end
+
+		-- If both positions are in the same area, use fine points for internal navigation
+		if startArea and endArea and startArea.id == endArea.id then
+			local Node = require("MedBot.Modules.Node")
+			local AStar = require("MedBot.Utils.A-Star")
+
+			-- Find closest fine points to start and end
+			local startPoint = Node.GetClosestAreaPoint(startArea.id, startPos)
+			local endPoint = Node.GetClosestAreaPoint(startArea.id, endPos)
+
+			if startPoint and endPoint and startPoint.id ~= endPoint.id then
+				-- Use A* on fine points for smooth internal navigation
+				local finePath = AStar.AStarOnFinePoints(startPoint, endPoint, startArea.points)
+				if finePath and #finePath > 2 then
+					Log:Debug("Using A* internal navigation with %d fine points", #finePath)
+					return finePath
+				end
+			end
+		end
+	end
+
+	return nil -- No internal path available
 end
 
 return Navigation

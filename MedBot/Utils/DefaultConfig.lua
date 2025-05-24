@@ -20,14 +20,17 @@ defaultconfig = {
 		AllowExpensiveChecks = false, -- Allow expensive walkability checks (rarely needed)
 		-- Hierarchical pathfinding settings (fixed 24-unit spacing)
 		UseHierarchicalPathfinding = false, -- Enable fine-grained points within areas for better accuracy
+		AggressivePathSkipping = false, -- Skip multiple nodes aggressively for shorter paths, may require more jumping
+		ContinuousOptimization = true, -- Check every tick if next node can be reached directly
+		DisableLookingAhead = false, -- Disable complex looking ahead logic for simpler pathfinding
 	},
 	Visuals = {
 		renderDistance = 800,
 		EnableVisuals = true,
 		memoryUsage = true,
 		-- Combo-based display options
-		basicDisplay = {true, true, true, true, false}, -- Show Nodes, Node IDs, Nav Connections, Areas, Fine Points
-		connectionDisplay = {true, true, true}, -- Intra-Area, Inter-Area, Edge-to-Edge connections
+		basicDisplay = { true, true, true, true, false }, -- Show Nodes, Node IDs, Nav Connections, Areas, Fine Points
+		connectionDisplay = { true, true, true }, -- Intra-Area, Inter-Area, Edge-to-Edge connections
 		-- Individual settings (automatically set by combo selections)
 		drawNodes = true, -- Draws all nodes on the map
 		drawNodeIDs = true, -- Show node IDs  [[ Used by: MedBot.Visuals ]]

@@ -142,8 +142,9 @@ end
 --- Allows going down from any height, but restricts upward movement to 72 units
 ---@param nodeA table First node (source)
 ---@param nodeB table Second node (destination)
+---@param allowExpensive boolean Optional override to allow expensive checks
 ---@return boolean True if nodes are accessible to each other
-local function isNodeAccessible(nodeA, nodeB)
+local function isNodeAccessible(nodeA, nodeB, allowExpensive)
 	local heightDiff = nodeB.pos.z - nodeA.pos.z -- Positive = going up, negative = going down
 
 	-- Always allow going downward (falling) regardless of height
@@ -170,12 +171,12 @@ local function isNodeAccessible(nodeA, nodeB)
 		end
 	end
 
-	-- Third pass: Expensive walkability check (only if allowed and previous checks failed)
-	if G.Menu.Main.AllowExpensiveChecks then
+	-- EXPENSIVE FALLBACK: Only use if explicitly allowed (not during normal setup)
+	if allowExpensive and G.Menu.Main.AllowExpensiveChecks then
 		return isWalkable.Path(nodeA.pos, nodeB.pos)
 	end
 
-	-- If expensive checks are disabled and previous checks failed, assume invalid
+	-- Default: assume invalid if we can't prove it's accessible cheaply
 	return false
 end
 
@@ -219,99 +220,416 @@ function Node.GetConnectionCost(connection)
 	return getConnectionCost(connection)
 end
 
---- Remove invalid connections between nodes (expensive validation at setup time)
----@param nodes table All navigation nodes
-local function pruneInvalidConnections(nodes)
-	local prunedCount = 0
-	local totalChecked = 0
-	local penalizedCount = 0
+--==========================================================================
+--  Dynamic batch processing system with frame time monitoring
+--==========================================================================
 
-	Log:Info("Starting connection cleanup with height penalty precomputation...")
+local ConnectionProcessor = {
+	-- Current processing state
+	isProcessing = false,
+	currentPhase = 1, -- 1 = basic connections, 2 = expensive fallback, 3 = fine point expensive stitching
+	processedNodes = {},
+	pendingNodes = {},
+	nodeQueue = {},
 
+	-- Performance monitoring
+	targetFPS = 24,
+	maxFrameTime = 1.0 / 24, -- ~41.7ms for 24 FPS
+	currentBatchSize = 5,
+	minBatchSize = 1,
+	maxBatchSize = 20,
+
+	-- Statistics
+	totalProcessed = 0,
+	connectionsFound = 0,
+	expensiveChecksUsed = 0,
+	finePointConnectionsAdded = 0,
+}
+
+--- Calculate current FPS and adjust batch size dynamically
+local function adjustBatchSize()
+	local frameTime = globals.FrameTime()
+	local currentFPS = 1 / frameTime
+
+	-- If FPS is too low, reduce batch size
+	if currentFPS < ConnectionProcessor.targetFPS then
+		ConnectionProcessor.currentBatchSize =
+			math.max(ConnectionProcessor.minBatchSize, ConnectionProcessor.currentBatchSize - 1)
+	-- If FPS is good, try to increase batch size for faster processing
+	elseif currentFPS > ConnectionProcessor.targetFPS * 1.5 and frameTime < ConnectionProcessor.maxFrameTime * 0.8 then
+		ConnectionProcessor.currentBatchSize =
+			math.min(ConnectionProcessor.maxBatchSize, ConnectionProcessor.currentBatchSize + 1)
+	end
+
+	return currentFPS
+end
+
+--- Initialize connection processing
+local function initializeConnectionProcessing(nodes)
+	ConnectionProcessor.isProcessing = true
+	ConnectionProcessor.currentPhase = 1
+	ConnectionProcessor.processedNodes = {}
+	ConnectionProcessor.pendingNodes = {}
+	ConnectionProcessor.nodeQueue = {}
+
+	-- Build queue of all nodes to process
 	for nodeId, node in pairs(nodes) do
-		if not node or not node.c then
-			goto continue
+		if node and node.c then
+			table.insert(ConnectionProcessor.nodeQueue, { id = nodeId, node = node })
 		end
+	end
 
-		-- Check all directions using pairs
-		for dir, connectionDir in pairs(node.c) do
-			if connectionDir and connectionDir.connections then
-				local validConnections = {}
+	ConnectionProcessor.totalProcessed = 0
+	ConnectionProcessor.connectionsFound = 0
+	ConnectionProcessor.expensiveChecksUsed = 0
 
-				-- Use pairs to iterate through connections
-				for i, connection in pairs(connectionDir.connections) do
-					totalChecked = totalChecked + 1
-					local targetNodeId = getConnectionNodeId(connection)
-					local currentCost = getConnectionCost(connection)
-					local targetNode = nodes[targetNodeId]
+	Log:Info(
+		"Started dynamic connection processing: %d nodes queued, target FPS: %d",
+		#ConnectionProcessor.nodeQueue,
+		ConnectionProcessor.targetFPS
+	)
+end
 
-					if targetNode then
-						local heightDiff = targetNode.pos.z - node.pos.z
+--- Process a batch of connections for one frame
+local function processBatch(nodes)
+	if not ConnectionProcessor.isProcessing then
+		return false
+	end
 
-						-- Check height restrictions and precompute penalties
-						if heightDiff > 72 then
-							-- Invalid connection - can't jump this high - REMOVE ENTIRELY
-							prunedCount = prunedCount + 1
-							Log:Debug(
-								"Pruned high jump connection: %d -> %d (%.1f units up)",
-								nodeId,
-								targetNodeId,
-								heightDiff
-							)
-						elseif not isNodeAccessible(node, targetNode) then
-							-- Use expensive accessibility check for thorough validation at setup
-							prunedCount = prunedCount + 1
-							Log:Debug("Pruned inaccessible connection: %d -> %d", nodeId, targetNodeId)
-						else
-							-- Valid connection - precompute final cost including height penalty
-							local finalCost = currentCost
-							if heightDiff > 18 then
-								-- Add 100 unit penalty for steep climbs to the cost
-								finalCost = currentCost + 100
-								penalizedCount = penalizedCount + 1
-								Log:Debug(
-									"Applied height penalty to connection: %d -> %d (%.1f units up, cost: %d)",
-									nodeId,
-									targetNodeId,
-									heightDiff,
-									finalCost
-								)
-							end
+	local startTime = globals.FrameTime()
+	local processed = 0
 
-							-- Store connection with precomputed cost
-							if finalCost > 1 then
-								-- Store as cost object if cost is not default
-								table.insert(validConnections, {
-									node = targetNodeId,
-									cost = finalCost,
-								})
-							else
-								-- Keep as simple integer if default cost
-								table.insert(validConnections, targetNodeId)
+	-- Phase 1: Basic connection validation (no expensive checks)
+	if ConnectionProcessor.currentPhase == 1 then
+		while processed < ConnectionProcessor.currentBatchSize and #ConnectionProcessor.nodeQueue > 0 do
+			local nodeData = table.remove(ConnectionProcessor.nodeQueue, 1)
+			local nodeId, node = nodeData.id, nodeData.node
+
+			if node and node.c then
+				-- Process all directions for this node
+				for dir, connectionDir in pairs(node.c) do
+					if connectionDir and connectionDir.connections then
+						local validConnections = {}
+
+						for _, connection in pairs(connectionDir.connections) do
+							local targetNodeId = getConnectionNodeId(connection)
+							local currentCost = getConnectionCost(connection)
+							local targetNode = nodes[targetNodeId]
+
+							if targetNode then
+								-- Use basic accessibility check (no expensive fallback)
+								if isNodeAccessible(node, targetNode, false) then
+									local heightDiff = targetNode.pos.z - node.pos.z
+									local finalCost = currentCost
+
+									-- Apply height penalty
+									if heightDiff > 18 then
+										finalCost = currentCost + 100
+									end
+
+									-- Store connection with precomputed cost
+									if finalCost > 1 then
+										table.insert(validConnections, { node = targetNodeId, cost = finalCost })
+									else
+										table.insert(validConnections, targetNodeId)
+									end
+
+									ConnectionProcessor.connectionsFound = ConnectionProcessor.connectionsFound + 1
+								else
+									-- Mark for potential expensive check in phase 2
+									if not ConnectionProcessor.pendingNodes[nodeId] then
+										ConnectionProcessor.pendingNodes[nodeId] = {}
+									end
+									table.insert(ConnectionProcessor.pendingNodes[nodeId], {
+										dir = dir,
+										targetId = targetNodeId,
+										originalCost = currentCost,
+									})
+								end
 							end
 						end
-					else
-						-- Remove connections to non-existent nodes
-						prunedCount = prunedCount + 1
-						Log:Debug("Pruned connection to non-existent node: %d -> %d", nodeId, targetNodeId)
+
+						-- Update connections
+						connectionDir.connections = validConnections
+						connectionDir.count = #validConnections
 					end
 				end
 
-				-- Update the connections array
-				connectionDir.connections = validConnections
-				connectionDir.count = #validConnections
+				ConnectionProcessor.processedNodes[nodeId] = true
+			end
+
+			processed = processed + 1
+			ConnectionProcessor.totalProcessed = ConnectionProcessor.totalProcessed + 1
+		end
+
+		-- Check if phase 1 is complete
+		if #ConnectionProcessor.nodeQueue == 0 then
+			Log:Info(
+				"Phase 1 complete: %d basic connections found, %d nodes need expensive checks",
+				ConnectionProcessor.connectionsFound,
+				table.getn and table.getn(ConnectionProcessor.pendingNodes) or #ConnectionProcessor.pendingNodes
+			)
+
+			ConnectionProcessor.currentPhase = 2
+			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 4) -- Slower for expensive checks
+		end
+
+	-- Phase 2: Expensive fallback checks for missing connections
+	elseif ConnectionProcessor.currentPhase == 2 then
+		local pendingProcessed = 0
+
+		for nodeId, pendingConnections in pairs(ConnectionProcessor.pendingNodes) do
+			if pendingProcessed >= ConnectionProcessor.currentBatchSize then
+				break
+			end
+
+			local node = nodes[nodeId]
+			if node and #pendingConnections > 0 then
+				local connectionData = table.remove(pendingConnections, 1)
+				local targetNode = nodes[connectionData.targetId]
+
+				if targetNode then
+					-- NOW use expensive check as last resort
+					if isNodeAccessible(node, targetNode, true) then
+						local dir = connectionData.dir
+						local connectionDir = node.c[dir]
+
+						if connectionDir and connectionDir.connections then
+							local heightDiff = targetNode.pos.z - node.pos.z
+							local finalCost = connectionData.originalCost
+
+							if heightDiff > 18 then
+								finalCost = finalCost + 100
+							end
+
+							-- Add the recovered connection
+							if finalCost > 1 then
+								table.insert(
+									connectionDir.connections,
+									{ node = connectionData.targetId, cost = finalCost }
+								)
+							else
+								table.insert(connectionDir.connections, connectionData.targetId)
+							end
+
+							connectionDir.count = connectionDir.count + 1
+							ConnectionProcessor.connectionsFound = ConnectionProcessor.connectionsFound + 1
+							ConnectionProcessor.expensiveChecksUsed = ConnectionProcessor.expensiveChecksUsed + 1
+						end
+					end
+				end
+
+				pendingProcessed = pendingProcessed + 1
+
+				-- Clean up empty pending lists
+				if #pendingConnections == 0 then
+					ConnectionProcessor.pendingNodes[nodeId] = nil
+				end
 			end
 		end
 
-		::continue::
+		-- Check if all processing is complete
+		local hasPending = false
+		for _, pendingList in pairs(ConnectionProcessor.pendingNodes) do
+			if #pendingList > 0 then
+				hasPending = true
+				break
+			end
+		end
+
+		if not hasPending then
+			Log:Info(
+				"Phase 2 complete: %d total connections, %d expensive checks used, starting fine point stitching",
+				ConnectionProcessor.connectionsFound,
+				ConnectionProcessor.expensiveChecksUsed
+			)
+			ConnectionProcessor.currentPhase = 3
+			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 2) -- Moderate speed for fine points
+		end
+
+	-- Phase 3: Fine point expensive stitching for missing inter-area connections
+	elseif ConnectionProcessor.currentPhase == 3 then
+		if G.Navigation.hierarchical and G.Navigation.hierarchical.areas then
+			local processed = 0
+			local maxProcessPerFrame = ConnectionProcessor.currentBatchSize
+
+			-- Process fine point connections between adjacent areas
+			for areaId, areaInfo in pairs(G.Navigation.hierarchical.areas) do
+				if processed >= maxProcessPerFrame then
+					break
+				end
+
+				-- Get adjacent areas for this area
+				local area = areaInfo.area
+				if area and area.c then
+					local adjacentAreas = Node.GetAdjacentNodesOnly(area, nodes)
+
+					-- Check each edge point against edge points in adjacent areas
+					for _, edgePoint in pairs(areaInfo.edgePoints) do
+						if processed >= maxProcessPerFrame then
+							break
+						end
+
+						for _, adjacentArea in pairs(adjacentAreas) do
+							local adjacentAreaInfo = G.Navigation.hierarchical.areas[adjacentArea.id]
+							if adjacentAreaInfo then
+								-- Check connections to edge points in adjacent area
+								for _, adjacentEdgePoint in pairs(adjacentAreaInfo.edgePoints) do
+									-- Check if connection already exists
+									local connectionExists = false
+									for _, neighbor in pairs(edgePoint.neighbors) do
+										if
+											neighbor.point
+											and neighbor.point.id == adjacentEdgePoint.id
+											and neighbor.point.parentArea == adjacentEdgePoint.parentArea
+										then
+											connectionExists = true
+											break
+										end
+									end
+
+									-- If no connection exists, try expensive check
+									if not connectionExists then
+										local distance = (edgePoint.pos - adjacentEdgePoint.pos):Length()
+
+										-- Only check reasonable distances (not too far apart)
+										if distance < 150 and distance > 5 then
+											-- Use expensive walkability check
+											if isWalkable.Path(edgePoint.pos, adjacentEdgePoint.pos) then
+												-- Add bidirectional connection
+												table.insert(edgePoint.neighbors, {
+													point = adjacentEdgePoint,
+													cost = distance,
+													isInterArea = true,
+												})
+												table.insert(adjacentEdgePoint.neighbors, {
+													point = edgePoint,
+													cost = distance,
+													isInterArea = true,
+												})
+
+												ConnectionProcessor.finePointConnectionsAdded = ConnectionProcessor.finePointConnectionsAdded
+													+ 1
+												ConnectionProcessor.expensiveChecksUsed = ConnectionProcessor.expensiveChecksUsed
+													+ 1
+
+												Log:Debug(
+													"Added fine point connection: Area %d point %d <-> Area %d point %d (dist: %.1f)",
+													areaId,
+													edgePoint.id,
+													adjacentArea.id,
+													adjacentEdgePoint.id,
+													distance
+												)
+											end
+										end
+									end
+								end
+							end
+						end
+						processed = processed + 1
+					end
+				end
+			end
+
+			-- Check if Phase 3 is complete (when we've processed all areas)
+			if processed == 0 then
+				Log:Info(
+					"Fine point stitching complete: %d connections added with expensive checks",
+					ConnectionProcessor.finePointConnectionsAdded
+				)
+				ConnectionProcessor.isProcessing = false
+				return false -- Processing finished
+			end
+		else
+			-- No hierarchical data, skip Phase 3
+			Log:Info("No hierarchical data available, skipping fine point stitching")
+			ConnectionProcessor.isProcessing = false
+			return false
+		end
 	end
 
-	Log:Info(
-		"Connection cleanup complete: %d/%d connections pruned, %d penalized for height (all costs precomputed)",
-		prunedCount,
-		totalChecked,
-		penalizedCount
-	)
+	-- Adjust batch size based on frame time
+	adjustBatchSize()
+
+	return true -- Continue processing
+end
+
+--- Replace the old pruneInvalidConnections with dynamic processing
+local function pruneInvalidConnections(nodes)
+	-- Don't do expensive processing during initial setup
+	Log:Info("Starting optimized connection cleanup (expensive checks moved to background)")
+
+	-- Quick pass: remove obvious invalid connections
+	local quickPruned = 0
+	for nodeId, node in pairs(nodes) do
+		if node and node.c then
+			for dir, connectionDir in pairs(node.c) do
+				if connectionDir and connectionDir.connections then
+					local validConnections = {}
+
+					for _, connection in pairs(connectionDir.connections) do
+						local targetNodeId = getConnectionNodeId(connection)
+						local targetNode = nodes[targetNodeId]
+
+						if targetNode then
+							local heightDiff = targetNode.pos.z - node.pos.z
+							-- Only remove obviously impossible connections (>72 unit jumps)
+							if heightDiff <= 72 then
+								table.insert(validConnections, connection)
+							else
+								quickPruned = quickPruned + 1
+							end
+						else
+							quickPruned = quickPruned + 1
+						end
+					end
+
+					connectionDir.connections = validConnections
+					connectionDir.count = #validConnections
+				end
+			end
+		end
+	end
+
+	Log:Info("Quick cleanup complete: %d obviously invalid connections removed", quickPruned)
+
+	-- Initialize background processing for detailed connection validation
+	if G.Menu.Main.CleanupConnections then
+		initializeConnectionProcessing(nodes)
+	end
+end
+
+--- Process connections in background (called from OnDraw)
+function Node.ProcessConnectionsBackground()
+	if ConnectionProcessor.isProcessing then
+		local nodes = Node.GetNodes()
+		if nodes then
+			return processBatch(nodes)
+		end
+	end
+	return false
+end
+
+--- Get connection processing status
+function Node.GetConnectionProcessingStatus()
+	return {
+		isProcessing = ConnectionProcessor.isProcessing,
+		currentPhase = ConnectionProcessor.currentPhase,
+		totalNodes = #ConnectionProcessor.nodeQueue + ConnectionProcessor.totalProcessed,
+		processedNodes = ConnectionProcessor.totalProcessed,
+		connectionsFound = ConnectionProcessor.connectionsFound,
+		expensiveChecksUsed = ConnectionProcessor.expensiveChecksUsed,
+		finePointConnectionsAdded = ConnectionProcessor.finePointConnectionsAdded,
+		currentBatchSize = ConnectionProcessor.currentBatchSize,
+		currentFPS = ConnectionProcessor.isProcessing and (1 / globals.FrameTime()) or 0,
+	}
+end
+
+--- Force stop connection processing
+function Node.StopConnectionProcessing()
+	ConnectionProcessor.isProcessing = false
+	Log:Info("Connection processing stopped by user")
 end
 
 ------------------------------------------------------------------------
@@ -341,9 +659,58 @@ local function generateAreaPoints(area)
 	area.minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
 	area.maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
 
-	local gx = math.floor((area.maxX - area.minX) / GRID) + 1
-	local gy = math.floor((area.maxY - area.minY) / GRID) + 1
-	if gx == 0 or gy == 0 then -- degenerate
+	local areaWidth = area.maxX - area.minX
+	local areaHeight = area.maxY - area.minY
+
+	-- If area is smaller than grid size in either dimension, treat as minor node
+	if areaWidth < GRID or areaHeight < GRID then
+		Log:Debug("Area %d too small (%dx%d), treating as minor node", area.id, areaWidth, areaHeight)
+		return {
+			{
+				id = 1,
+				gridX = 0,
+				gridY = 0,
+				pos = area.pos,
+				neighbors = {},
+				parentArea = area.id,
+				ring = 0,
+				isEdge = true,
+				isInner = false,
+				dirTags = {},
+			},
+		}
+	end
+
+	-- Use larger edge buffer to prevent grid points from being placed too close to walls
+	local edgeBuffer = math.max(16, GRID * 0.75) -- At least 16 units or 75% of grid size
+	local usableWidth = areaWidth - (2 * edgeBuffer)
+	local usableHeight = areaHeight - (2 * edgeBuffer)
+
+	-- If usable area after edge buffer is too small, treat as minor node
+	if usableWidth < GRID or usableHeight < GRID then
+		Log:Debug("Area %d usable space too small after edge buffer, treating as minor node", area.id)
+		return {
+			{
+				id = 1,
+				gridX = 0,
+				gridY = 0,
+				pos = area.pos,
+				neighbors = {},
+				parentArea = area.id,
+				ring = 0,
+				isEdge = true,
+				isInner = false,
+				dirTags = {},
+			},
+		}
+	end
+
+	local gx = math.floor(usableWidth / GRID) + 1
+	local gy = math.floor(usableHeight / GRID) + 1
+
+	-- Double-check for degenerate cases
+	if gx <= 0 or gy <= 0 then
+		Log:Debug("Area %d grid calculation resulted in degenerate dimensions (%dx%d)", area.id, gx, gy)
 		return {
 			{
 				id = 1,
@@ -1243,5 +1610,13 @@ function Node.GetInterAreaConnections(areaId)
 
 	return G.Navigation.hierarchical.areas[areaId].interAreaConnections or {}
 end
+
+-- Register OnDraw callback for background connection processing
+local function OnDrawConnectionProcessing()
+	Node.ProcessConnectionsBackground()
+end
+
+callbacks.Unregister("Draw", "Node.ConnectionProcessing")
+callbacks.Register("Draw", "Node.ConnectionProcessing", OnDrawConnectionProcessing)
 
 return Node
