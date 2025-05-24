@@ -146,12 +146,12 @@ end
 ---@return boolean True if nodes are accessible to each other
 local function isNodeAccessible(nodeA, nodeB, allowExpensive)
 	local heightDiff = nodeB.pos.z - nodeA.pos.z -- Positive = going up, negative = going down
-
+	
 	-- Always allow going downward (falling) regardless of height
 	if heightDiff <= 0 then
 		return true
 	end
-
+	
 	-- For upward movement, check if it's within duck jump height (72 units)
 	if heightDiff <= 72 then
 		return true -- Fast path: upward movement is within jump height
@@ -308,15 +308,15 @@ local function processBatch(nodes)
 			if node and node.c then
 				-- Process all directions for this node
 				for dir, connectionDir in pairs(node.c) do
-					if connectionDir and connectionDir.connections then
-						local validConnections = {}
+			if connectionDir and connectionDir.connections then
+				local validConnections = {}
 
 						for _, connection in pairs(connectionDir.connections) do
 							local targetNodeId = getConnectionNodeId(connection)
 							local currentCost = getConnectionCost(connection)
-							local targetNode = nodes[targetNodeId]
+					local targetNode = nodes[targetNodeId]
 
-							if targetNode then
+					if targetNode then
 								-- Use basic accessibility check (no expensive fallback)
 								if isNodeAccessible(node, targetNode, false) then
 									local heightDiff = targetNode.pos.z - node.pos.z
@@ -346,14 +346,14 @@ local function processBatch(nodes)
 										originalCost = currentCost,
 									})
 								end
-							end
-						end
-
-						-- Update connections
-						connectionDir.connections = validConnections
-						connectionDir.count = #validConnections
 					end
 				end
+
+						-- Update connections
+				connectionDir.connections = validConnections
+				connectionDir.count = #validConnections
+			end
+		end
 
 				ConnectionProcessor.processedNodes[nodeId] = true
 			end
@@ -415,8 +415,8 @@ local function processBatch(nodes)
 							connectionDir.count = connectionDir.count + 1
 							ConnectionProcessor.connectionsFound = ConnectionProcessor.connectionsFound + 1
 							ConnectionProcessor.expensiveChecksUsed = ConnectionProcessor.expensiveChecksUsed + 1
-						end
-					end
+		end
+	end
 				end
 
 				pendingProcessed = pendingProcessed + 1
@@ -433,9 +433,9 @@ local function processBatch(nodes)
 		for _, pendingList in pairs(ConnectionProcessor.pendingNodes) do
 			if #pendingList > 0 then
 				hasPending = true
-				break
-			end
+			break
 		end
+	end
 
 		if not hasPending then
 			Log:Info(
@@ -484,9 +484,9 @@ local function processBatch(nodes)
 											and neighbor.point.parentArea == adjacentEdgePoint.parentArea
 										then
 											connectionExists = true
-											break
-										end
-									end
+					break
+				end
+			end
 
 									-- If no connection exists, try expensive check
 									if not connectionExists then
@@ -521,16 +521,16 @@ local function processBatch(nodes)
 													adjacentEdgePoint.id,
 													distance
 												)
-											end
-										end
-									end
+		end
+	end
+end
 								end
 							end
 						end
 						processed = processed + 1
-					end
-				end
-			end
+		end
+	end
+end
 
 			-- Check if Phase 3 is complete (when we've processed all areas)
 			if processed == 0 then
@@ -546,8 +546,8 @@ local function processBatch(nodes)
 			Log:Info("No hierarchical data available, skipping fine point stitching")
 			ConnectionProcessor.isProcessing = false
 			return false
-		end
-	end
+					end
+				end
 
 	-- Adjust batch size based on frame time
 	adjustBatchSize()
@@ -665,20 +665,33 @@ local function generateAreaPoints(area)
 	-- If area is smaller than grid size in either dimension, treat as minor node
 	if areaWidth < GRID or areaHeight < GRID then
 		Log:Debug("Area %d too small (%dx%d), treating as minor node", area.id, areaWidth, areaHeight)
-		return {
-			{
-				id = 1,
-				gridX = 0,
-				gridY = 0,
-				pos = area.pos,
-				neighbors = {},
-				parentArea = area.id,
-				ring = 0,
-				isEdge = true,
-				isInner = false,
-				dirTags = {},
-			},
+		local minorPoint = {
+			id = 1,
+			gridX = 0,
+			gridY = 0,
+			pos = area.pos,
+			neighbors = {},
+			parentArea = area.id,
+			ring = 0,
+			isEdge = true,
+			isInner = false,
+			dirTags = { "N", "S", "E", "W" }, -- Minor area connects in all directions
+			dirMask = Node.DIR.N | Node.DIR.S | Node.DIR.E | Node.DIR.W,
 		}
+
+		-- Create edgeSets for minor areas - single point represents all directions
+		area.edgeSets = {
+			N = { minorPoint },
+			S = { minorPoint },
+			E = { minorPoint },
+			W = { minorPoint },
+		}
+
+		-- Set grid extents for minor areas
+		area.gridMinX, area.gridMaxX = 0, 0
+		area.gridMinY, area.gridMaxY = 0, 0
+
+		return { minorPoint }
 	end
 
 	-- Use larger edge buffer to prevent grid points from being placed too close to walls
@@ -689,20 +702,33 @@ local function generateAreaPoints(area)
 	-- If usable area after edge buffer is too small, treat as minor node
 	if usableWidth < GRID or usableHeight < GRID then
 		Log:Debug("Area %d usable space too small after edge buffer, treating as minor node", area.id)
-		return {
-			{
-				id = 1,
-				gridX = 0,
-				gridY = 0,
-				pos = area.pos,
-				neighbors = {},
-				parentArea = area.id,
-				ring = 0,
-				isEdge = true,
-				isInner = false,
-				dirTags = {},
-			},
+		local minorPoint = {
+			id = 1,
+			gridX = 0,
+			gridY = 0,
+			pos = area.pos,
+			neighbors = {},
+			parentArea = area.id,
+			ring = 0,
+			isEdge = true,
+			isInner = false,
+			dirTags = { "N", "S", "E", "W" }, -- Minor area connects in all directions
+			dirMask = Node.DIR.N | Node.DIR.S | Node.DIR.E | Node.DIR.W,
 		}
+
+		-- Create edgeSets for minor areas - single point represents all directions
+		area.edgeSets = {
+			N = { minorPoint },
+			S = { minorPoint },
+			E = { minorPoint },
+			W = { minorPoint },
+		}
+
+		-- Set grid extents for minor areas
+		area.gridMinX, area.gridMaxX = 0, 0
+		area.gridMinY, area.gridMaxY = 0, 0
+
+		return { minorPoint }
 	end
 
 	local gx = math.floor(usableWidth / GRID) + 1
@@ -711,20 +737,33 @@ local function generateAreaPoints(area)
 	-- Double-check for degenerate cases
 	if gx <= 0 or gy <= 0 then
 		Log:Debug("Area %d grid calculation resulted in degenerate dimensions (%dx%d)", area.id, gx, gy)
-		return {
-			{
-				id = 1,
-				gridX = 0,
-				gridY = 0,
-				pos = area.pos,
-				neighbors = {},
-				parentArea = area.id,
-				ring = 0,
-				isEdge = true,
-				isInner = false,
-				dirTags = {},
-			},
+		local minorPoint = {
+			id = 1,
+			gridX = 0,
+			gridY = 0,
+			pos = area.pos,
+			neighbors = {},
+			parentArea = area.id,
+			ring = 0,
+			isEdge = true,
+			isInner = false,
+			dirTags = { "N", "S", "E", "W" }, -- Minor area connects in all directions
+			dirMask = Node.DIR.N | Node.DIR.S | Node.DIR.E | Node.DIR.W,
 		}
+
+		-- Create edgeSets for minor areas - single point represents all directions
+		area.edgeSets = {
+			N = { minorPoint },
+			S = { minorPoint },
+			E = { minorPoint },
+			W = { minorPoint },
+		}
+
+		-- Set grid extents for minor areas
+		area.gridMinX, area.gridMaxX = 0, 0
+		area.gridMinY, area.gridMaxY = 0, 0
+
+		return { minorPoint }
 	end
 
 	------------------------------------------------------------
@@ -733,8 +772,9 @@ local function generateAreaPoints(area)
 	local raw = {}
 	for ix = 0, gx - 1 do
 		for iy = 0, gy - 1 do
-			local x = area.minX + ix * GRID
-			local y = area.minY + iy * GRID
+			-- Place grid points within the usable area, starting from edgeBuffer offset
+			local x = area.minX + edgeBuffer + ix * GRID
+			local y = area.minY + edgeBuffer + iy * GRID
 			raw[#raw + 1] = {
 				gridX = ix,
 				gridY = iy,
@@ -752,6 +792,7 @@ local function generateAreaPoints(area)
 	local points = {}
 	if keepFull then
 		points = raw
+		Log:Debug("Area %d keeping full grid (%dx%d points) - too small to peel border", area.id, gx, gy)
 	else
 		for _, p in ipairs(raw) do
 			if not (p.gridX == 0 or p.gridX == gx - 1 or p.gridY == 0 or p.gridY == gy - 1) then
@@ -760,6 +801,9 @@ local function generateAreaPoints(area)
 		end
 		if #points == 0 then -- pathological L-shape → revert
 			points, keepFull = raw, true
+			Log:Debug("Area %d reverting to full grid - peeling resulted in no points", area.id)
+		else
+			Log:Debug("Area %d peeled border: %d -> %d points", area.id, #raw, #points)
 		end
 	end
 
@@ -890,7 +934,7 @@ local function generateAreaPoints(area)
 
 	Log:Debug("Area %d grid %dx%d  kept %d pts  links %d", area.id, gx, gy, #points, added)
 
-	-- Cache grid extents for edge detection
+	-- Cache grid extents for edge detection (use actual grid dimensions, not area bounds)
 	area.gridMinX, area.gridMaxX, area.gridMinY, area.gridMaxY = minGX, maxGX, minGY, maxGY
 
 	return points
@@ -899,6 +943,26 @@ end
 --==========================================================================
 --  Area point cache helpers  (unchanged API)
 --==========================================================================
+
+--- Check if an area should be treated as a minor node (too small for grid)
+---@param area table The area to check
+---@return boolean True if area should be treated as minor node
+function Node.IsMinorArea(area)
+	if not area then
+		return true
+	end
+
+	local minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+	local maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+	local minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+	local maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+
+	local areaWidth = maxX - minX
+	local areaHeight = maxY - minY
+
+	return areaWidth < GRID or areaHeight < GRID
+end
+
 function Node.GenerateAreaPoints(id)
 	local nodes = G.Navigation.nodes
 	if not (nodes and nodes[id]) then
@@ -909,8 +973,15 @@ function Node.GenerateAreaPoints(id)
 		return area.finePoints
 	end
 	area.finePoints = generateAreaPoints(area)
+
+	-- Log whether this area was treated as minor
+	if area.finePoints and #area.finePoints == 1 then
+		Log:Debug("Area %d treated as minor node (single point)", id)
+	end
+
 	return area.finePoints
 end
+
 function Node.GetAreaPoints(id)
 	return Node.GenerateAreaPoints(id)
 end
@@ -954,7 +1025,35 @@ local function connectPair(areaA, areaB)
 		return 0
 	end
 	local edgeA, edgeB = edgePoints(areaA, sideA), edgePoints(areaB, sideB)
-	-- reject pure corner contact
+
+	-- Handle minor areas (single point areas) with simple direct connection
+	local isMinorA = #edgeA == 1
+		and edgeA[1]
+		and edgeA[1].dirMask
+		and (edgeA[1].dirMask & (Node.DIR.N | Node.DIR.S | Node.DIR.E | Node.DIR.W)) > 0
+	local isMinorB = #edgeB == 1
+		and edgeB[1]
+		and edgeB[1].dirMask
+		and (edgeB[1].dirMask & (Node.DIR.N | Node.DIR.S | Node.DIR.E | Node.DIR.W)) > 0
+
+	if isMinorA or isMinorB then
+		-- For minor areas, use simple connection logic
+		if #edgeA > 0 and #edgeB > 0 then
+			local pointA = edgeA[1]
+			local pointB = edgeB[1]
+
+			-- Check if connection is reasonable distance and accessible
+			local distance = (pointA.pos - pointB.pos):Length()
+			if distance < 200 and isNodeAccessible(pointA, pointB) then
+				link(pointA, pointB)
+				Log:Debug("Connected minor areas %d <-> %d (dist: %.1f)", areaA.id, areaB.id, distance)
+				return 1
+				end
+			end
+		return 0
+	end
+
+	-- reject pure corner contact for regular areas
 	if #edgeA == 1 and #edgeB == 1 then
 		return 0
 	end
@@ -1053,7 +1152,7 @@ local function buildHierarchicalStructure(processedAreas)
 
 		-- Categorize points as edge or internal
 		for _, point in pairs(data.points) do
-			if point.isEdge then
+		if point.isEdge then
 				table.insert(areaInfo.edgePoints, point)
 				-- Add to global edge point registry with area reference
 				G.Navigation.hierarchical.edgePoints[point.id .. "_" .. areaId] = {
@@ -1077,9 +1176,9 @@ local function buildHierarchicalStructure(processedAreas)
 						cost = neighbor.cost,
 					})
 				end
-			end
 		end
-
+	end
+	
 		G.Navigation.hierarchical.areas[areaId] = areaInfo
 		Log:Debug(
 			"Area %d: %d edge points, %d internal points, %d inter-area connections",
@@ -1134,9 +1233,9 @@ local function applyHeightPenaltiesToConnections(processedAreas)
 				else
 					-- Normal connection
 					table.insert(validNeighbors, neighbor)
-				end
 			end
-
+		end
+		
 			point.neighbors = validNeighbors
 		end
 	end
@@ -1229,8 +1328,8 @@ local function processSetupTick()
 				if SetupState.processedAreas[adjacentArea.id] then
 					local connections = connectPair(area, adjacentArea)
 					Log:Debug("Connected %d fine points between areas %d and %d", connections, areaId, adjacentArea.id)
-				end
 			end
+		end
 			processed = processed + 1
 		end
 
@@ -1353,7 +1452,7 @@ function Node.RemoveConnection(nodeA, nodeB)
 				if targetNodeId == nodeB.id then
 					table.remove(cDir.connections, i)
 					cDir.count = cDir.count - 1
-					break
+			break
 				end
 			end
 		end
@@ -1379,9 +1478,9 @@ function Node.AddCostToConnection(nodeA, nodeB, cost)
 				end
 			end
 		end
+		end
 	end
-end
-
+	
 --- Get adjacent nodes with accessibility checks (expensive, for pathfinding)
 ---@param node table First node (source)
 ---@param nodes table All navigation nodes
@@ -1404,11 +1503,11 @@ function Node.GetAdjacentNodes(node, nodes)
 					-- Use centralized accessibility check (EXPENSIVE)
 					if isNodeAccessible(node, targetNode) then
 						table.insert(adjacent, targetNode)
+							end
+						end
 					end
 				end
 			end
-		end
-	end
 	return adjacent
 end
 
@@ -1547,9 +1646,9 @@ function Node.GetClosestAreaPoint(areaId, position)
 		if dist < minDist then
 			minDist = dist
 			closest = point
+			end
 		end
-	end
-
+		
 	return closest
 end
 
@@ -1585,10 +1684,10 @@ function Node.GetClosestEdgePoint(areaId, position)
 	if not G.Navigation.hierarchical or not G.Navigation.hierarchical.areas[areaId] then
 		return nil
 	end
-
+	
 	local areaInfo = G.Navigation.hierarchical.areas[areaId]
 	local closest, minDist = nil, math.huge
-
+	
 	for _, edgePoint in pairs(areaInfo.edgePoints) do
 		local dist = (edgePoint.pos - position):Length()
 		if dist < minDist then
@@ -1596,7 +1695,7 @@ function Node.GetClosestEdgePoint(areaId, position)
 			closest = edgePoint
 		end
 	end
-
+	
 	return closest
 end
 
@@ -1607,7 +1706,7 @@ function Node.GetInterAreaConnections(areaId)
 	if not G.Navigation.hierarchical or not G.Navigation.hierarchical.areas[areaId] then
 		return {}
 	end
-
+	
 	return G.Navigation.hierarchical.areas[areaId].interAreaConnections or {}
 end
 

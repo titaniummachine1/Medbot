@@ -302,7 +302,7 @@ function findGoalNode(currentTask)
 	return nil
 end
 
--- Function to move towards the current node
+-- Function to move towards the current node (simplified for better FPS)
 function moveTowardsNode(userCmd, node)
 	local pLocalWrapped = WPlayer.GetLocal()
 	local angles = Lib.Utils.Math.PositionAngles(pLocalWrapped:GetEyePos(), node.pos)
@@ -311,9 +311,7 @@ function moveTowardsNode(userCmd, node)
 	if G.Menu.Main.LookingAhead then
 		local currentAngles = userCmd.viewangles
 		local deltaAngles = { x = angles.x - currentAngles.x, y = angles.y - currentAngles.y }
-
 		deltaAngles.y = ((deltaAngles.y + 180) % 360) - 180
-
 		angles = EulerAngles(
 			currentAngles.x + deltaAngles.x * 0.05,
 			currentAngles.y + deltaAngles.y * G.Menu.Main.smoothFactor,
@@ -326,6 +324,7 @@ function moveTowardsNode(userCmd, node)
 	local horizontalDist = math.abs(LocalOrigin.x - node.pos.x) + math.abs(LocalOrigin.y - node.pos.y)
 	local verticalDist = math.abs(LocalOrigin.z - node.pos.z)
 
+	-- Check if we've reached the current node
 	if (horizontalDist < G.Misc.NodeTouchDistance) and verticalDist <= G.Misc.NodeTouchHeight then
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
@@ -337,133 +336,33 @@ function moveTowardsNode(userCmd, node)
 			G.currentState = G.States.IDLE
 		end
 	else
-		-- Simple node skipping logic - check if we can walk directly to next node
-		if G.Menu.Main.Skip_Nodes and WorkManager.attemptWork(2, "node skip") then
-			local path = G.Navigation.path
-			if path and #path > 1 then
-				local nextNode = path[2] -- Next node after current
-				if nextNode then
-					-- Choose walkability check based on aggressive skipping setting
-					local canSkip = false
-					if G.Menu.Main.AggressivePathSkipping then
-						-- Aggressive mode: allow jumping (use full walkability)
-						canSkip = Navigation.isWalkable(LocalOrigin, nextNode.pos)
-					else
-						-- Conservative mode: only allow stepping (18-unit height limit)
-						canSkip = Navigation.isStepOnlyWalkable(LocalOrigin, nextNode.pos)
-					end
-
-					if canSkip then
-						Log:Info(
-							"Node skip: Can walk directly to next node (aggressive: %s)",
-							tostring(G.Menu.Main.AggressivePathSkipping)
-						)
-						Navigation.RemoveCurrentNode()
-					end
-				end
+		-- Simple node skipping - only look 1 node ahead for better FPS
+		local path = G.Navigation.path
+		if path and #path > 1 then
+			local nextNode = path[2] -- Next node after current
+			if nextNode and Navigation.isWalkable(LocalOrigin, nextNode.pos) then
+				Log:Debug("Skipping current node - can walk directly to next node")
+				Navigation.RemoveCurrentNode()
 			end
 		end
 
-		-- Advanced features only if looking ahead is not disabled
-		if not G.Menu.Main.DisableLookingAhead then
-			-- A* internal navigation for smoother movement within large areas
-			if G.Menu.Main.UseHierarchicalPathfinding and WorkManager.attemptWork(8, "internal nav") then
-				local path = G.Navigation.path
-				if path and #path > 1 then
-					local currentNode = path[1]
-					local targetNode = path[math.min(3, #path)] -- Look 2-3 nodes ahead
-
-					if currentNode and targetNode then
-						local internalPath = Navigation.GetInternalPath(LocalOrigin, targetNode.pos, 200)
-						if internalPath and #internalPath > 2 then
-							-- Replace current movement target with internal path
-							Log:Debug("Using A* internal navigation with %d waypoints", #internalPath)
-							-- For now, just move to the second point in the internal path for smoother movement
-							local internalTarget = internalPath[2]
-							if internalTarget then
-								Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, internalTarget.pos)
-							else
-								Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-							end
-						else
-							Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-						end
-					else
-						Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-					end
-				else
-					Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-				end
-			elseif G.Menu.Main.Optymise_Path and WorkManager.attemptWork(4, "Optymise Path") then
-				Navigation.OptimizePath()
-				Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-			else
-				Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-			end
-		else
-			-- Simple movement when looking ahead is disabled
-			Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-		end
-
+		-- Simple movement without complex optimizations
+		Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-		-- Continuous path optimization - check every tick if we can skip to next node
-		if G.Menu.Main.ContinuousOptimization then
-			Navigation.OptimizePathStep(LocalOrigin)
-		end
-
-		-- Use SmartJump for intelligent obstacle detection and jumping
+		-- Use SmartJump for jumping
 		SmartJump.Main(userCmd)
-
-		-- Apply jump if SmartJump determined it's needed
 		if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
 			userCmd:SetButtons(userCmd.buttons | IN_JUMP)
 			userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
 		end
 
-		-- Enhanced emergency jump logic using SmartJump intelligence
-		if G.pLocal.flags & FL_ONGROUND == 1 or G.pLocal.entity:EstimateAbsVelocity():Length() < 50 then
-			local currentTick = globals.TickCount()
-			-- Use SmartJump's emergency logic instead of simple timer
-			if SmartJump.ShouldEmergencyJump(currentTick, G.Navigation.currentNodeTicks) then
-				if not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
-					userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
-					userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
-					userCmd:SetButtons(userCmd.buttons | IN_JUMP)
-					Log:Info("Emergency jump triggered - obstacle detected but SmartJump inactive")
-				end
-			end
-
-			local path = G.Navigation.path
-			local currentIdx = G.Navigation.currentNodeIndex
-			if
-				path
-				and (
-					G.Navigation.currentNodeTicks > 264
-					or (G.Navigation.currentNodeTicks > 22 and horizontalDist < G.Misc.NodeTouchDistance)
-						and WorkManager.attemptWork(66, "pathCheck")
-				)
-			then
-				-- Check if path is blocked
-				local currentNode = path[currentIdx] -- Current node (index 1)
-				local nextNode = path[currentIdx + 1] -- Next node (index 2)
-
-				if not Navigation.isWalkable(LocalOrigin, currentNode.pos) then
-					Log:Warn("Path to current node is blocked, adding high cost to connection and repathing...")
-					if currentNode and nextNode then
-						-- Add high cost instead of removing connection entirely - pathfinding will avoid but keep as backup
-						Navigation.AddCostToConnection(currentNode, nextNode, 1000)
-					end
-					Navigation.ClearPath()
-					Navigation.ResetTickTimer()
-					G.currentState = G.States.IDLE
-				elseif not WorkManager.attemptWork(5, "pathCheck") then
-					Log:Warn("Path is stuck but not blocked, repathing...")
-					Navigation.ClearPath()
-					Navigation.ResetTickTimer()
-					G.currentState = G.States.IDLE
-				end
-			end
+		-- Simple stuck detection and repathing
+		if G.Navigation.currentNodeTicks > 264 then
+			Log:Warn("Stuck for too long, repathing...")
+			Navigation.ClearPath()
+			Navigation.ResetTickTimer()
+			G.currentState = G.States.IDLE
 		end
 	end
 end
