@@ -508,28 +508,46 @@ local function connectPair(areaA, areaB)
 		return 0
 	end
 
-	-- minority-greedy
-	local P, Q = (#edgeA <= #edgeB) and edgeA or edgeB, (#edgeA <= #edgeB) and edgeB or edgeA
-	table.sort(P, function(u, v)
-		return (sideA == "N" or sideA == "S") and u.pos.x < v.pos.x or u.pos.y < v.pos.y
-	end)
-	table.sort(Q, function(u, v)
-		return (sideA == "N" or sideA == "S") and u.pos.x < v.pos.x or u.pos.y < v.pos.y
-	end)
-	local j, c = 1, 0
-	for _, p in ipairs(P) do
-		while
-			j < #Q
-			and (
-				(sideA == "N" or sideA == "S")
-					and math.abs(Q[j + 1].pos.x - p.pos.x) <= math.abs(Q[j].pos.x - p.pos.x)
-				or math.abs(Q[j + 1].pos.y - p.pos.y) <= math.abs(Q[j].pos.y - p.pos.y)
-			)
-		do
-			j = j + 1
+	-- robust one-to-one inter-area linking using nearest-neighbor per axis
+	local P = (#edgeA <= #edgeB) and edgeA or edgeB
+	local Qfull = (#edgeA <= #edgeB) and edgeB or edgeA
+	-- copy Q for matching
+	local remaining = {}
+	for i = 1, #Qfull do
+		remaining[i] = Qfull[i]
+	end
+	local c = 0
+	-- axis-based nearest neighbor matching
+	if sideA == "N" or sideA == "S" then
+		-- match by X coordinate
+		for _, p in ipairs(P) do
+			local bestIdx, bestDelta = 1, math.abs(remaining[1].pos.x - p.pos.x)
+			for i = 2, #remaining do
+				local delta = math.abs(remaining[i].pos.x - p.pos.x)
+				if delta < bestDelta then
+					bestDelta, bestIdx = delta, i
+				end
+			end
+			local q = remaining[bestIdx]
+			link(p, q)
+			table.remove(remaining, bestIdx)
+			c = c + 1
 		end
-		link(p, Q[j])
-		j, c = j + 1, c + 1
+	else
+		-- match by Y coordinate
+		for _, p in ipairs(P) do
+			local bestIdx, bestDelta = 1, math.abs(remaining[1].pos.y - p.pos.y)
+			for i = 2, #remaining do
+				local delta = math.abs(remaining[i].pos.y - p.pos.y)
+				if delta < bestDelta then
+					bestDelta, bestIdx = delta, i
+				end
+			end
+			local q = remaining[bestIdx]
+			link(p, q)
+			table.remove(remaining, bestIdx)
+			c = c + 1
+		end
 	end
 	return c
 end
