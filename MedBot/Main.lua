@@ -304,11 +304,14 @@ end
 
 -- Function to move towards the current node (simplified for better FPS)
 function moveTowardsNode(userCmd, node)
-	local pLocalWrapped = WPlayer.GetLocal()
-	local angles = Lib.Utils.Math.PositionAngles(pLocalWrapped:GetEyePos(), node.pos)
-	angles.x = 0
+	local LocalOrigin = G.pLocal.Origin
 
+	-- Only rotate camera if LookingAhead is enabled
 	if G.Menu.Main.LookingAhead then
+		local pLocalWrapped = WPlayer.GetLocal()
+		local angles = Lib.Utils.Math.PositionAngles(pLocalWrapped:GetEyePos(), node.pos)
+		angles.x = 0
+
 		local currentAngles = userCmd.viewangles
 		local deltaAngles = { x = angles.x - currentAngles.x, y = angles.y - currentAngles.y }
 		deltaAngles.y = ((deltaAngles.y + 180) % 360) - 180
@@ -317,10 +320,9 @@ function moveTowardsNode(userCmd, node)
 			currentAngles.y + deltaAngles.y * G.Menu.Main.smoothFactor,
 			0
 		)
+		engine.SetViewAngles(angles)
 	end
-	engine.SetViewAngles(angles)
 
-	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = math.abs(LocalOrigin.x - node.pos.x) + math.abs(LocalOrigin.y - node.pos.y)
 	local verticalDist = math.abs(LocalOrigin.z - node.pos.z)
 
@@ -336,13 +338,63 @@ function moveTowardsNode(userCmd, node)
 			G.currentState = G.States.IDLE
 		end
 	else
-		-- Simple node skipping - only look 1 node ahead for better FPS
-		local path = G.Navigation.path
-		if path and #path > 1 then
-			local nextNode = path[2] -- Next node after current
-			if nextNode and Navigation.isWalkable(LocalOrigin, nextNode.pos) then
-				Log:Debug("Skipping current node - can walk directly to next node")
-				Navigation.RemoveCurrentNode()
+		-- Node skipping - only if enabled via Skip Nodes setting
+		if G.Menu.Main.Skip_Nodes then
+			local path = G.Navigation.path
+			if path and #path > 1 then
+				local currentNode = path[1]
+				local nextNode = path[2] -- Next node after current
+				-- Check walkability from current position (LocalOrigin) to next node position
+				if nextNode and nextNode.pos and currentNode and currentNode.pos then
+					-- Check if we're closer to next node than current (basic skip condition)
+					local currentDist = (LocalOrigin - currentNode.pos):Length()
+					local nextDist = (LocalOrigin - nextNode.pos):Length()
+
+					if nextDist < currentDist then
+						local canWalkToNext = Navigation.isWalkable(LocalOrigin, nextNode.pos)
+						local walkableMode = G.Menu.Main.WalkableMode or "Step"
+						local heightDiff = nextNode.pos.z - LocalOrigin.z
+
+						if canWalkToNext then
+							Log:Debug(
+								"Skip OK [%s]: pos(%.1f,%.1f,%.1f) -> node %d(%.1f,%.1f,%.1f) height:%.1f curr_dist:%.1f next_dist:%.1f",
+								walkableMode,
+								LocalOrigin.x,
+								LocalOrigin.y,
+								LocalOrigin.z,
+								nextNode.id or 0,
+								nextNode.pos.x,
+								nextNode.pos.y,
+								nextNode.pos.z,
+								heightDiff,
+								currentDist,
+								nextDist
+							)
+							Navigation.RemoveCurrentNode()
+						else
+							Log:Debug(
+								"Skip BLOCKED [%s]: pos(%.1f,%.1f,%.1f) -> node %d(%.1f,%.1f,%.1f) height:%.1f curr_dist:%.1f next_dist:%.1f",
+								walkableMode,
+								LocalOrigin.x,
+								LocalOrigin.y,
+								LocalOrigin.z,
+								nextNode.id or 0,
+								nextNode.pos.x,
+								nextNode.pos.y,
+								nextNode.pos.z,
+								heightDiff,
+								currentDist,
+								nextDist
+							)
+						end
+					else
+						Log:Debug(
+							"Skip SKIPPED: current node closer (curr_dist:%.1f vs next_dist:%.1f)",
+							currentDist,
+							nextDist
+						)
+					end
+				end
 			end
 		end
 
@@ -547,25 +599,23 @@ Commands.Register("pf_optimize", function(args)
 		local pLocal = entities.GetLocalPlayer()
 		if pLocal and pLocal:IsAlive() then
 			local origin = pLocal:GetAbsOrigin()
-			local optimized = Navigation.OptimizePathStep(origin)
-			if optimized then
-				print("Path optimization successful - skipped to next node")
+			local path = G.Navigation.path
+			if path and #path > 1 then
+				local nextNode = path[2]
+				if nextNode and Navigation.isWalkable(origin, nextNode.pos) then
+					print("Path optimization successful - can skip to next node")
+				else
+					print("Path optimization failed - cannot skip current node")
+				end
 			else
-				print("Path optimization failed - no skip performed")
+				print("No path or insufficient nodes to test")
 			end
 		else
 			print("Player not available for testing")
 		end
 	elseif args[1] == "info" then
-		print(
-			string.format("Continuous Optimization: %s", G.Menu.Main.ContinuousOptimization and "Enabled" or "Disabled")
-		)
-		print(
-			string.format(
-				"Aggressive Path Skipping: %s",
-				G.Menu.Main.AggressivePathSkipping and "Enabled (full walkability)" or "Disabled (18-unit steps only)"
-			)
-		)
+		print(string.format("Skip Nodes: %s", G.Menu.Main.Skip_Nodes and "Enabled" or "Disabled"))
+		print(string.format("Walkable Mode: %s", G.Menu.Main.WalkableMode or "Step"))
 
 		local path = G.Navigation.path
 		if path and #path > 0 then
@@ -575,8 +625,8 @@ Commands.Register("pf_optimize", function(args)
 		end
 	else
 		print("Usage: pf_optimize test | info")
-		print("  test - Test path optimization with current position")
-		print("  info - Show optimization settings and path status")
+		print("  test - Test if current node can be skipped")
+		print("  info - Show node skipping settings and path status")
 	end
 end)
 

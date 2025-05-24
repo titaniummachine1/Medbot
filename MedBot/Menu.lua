@@ -37,23 +37,57 @@ local function OnDrawMenu()
 			G.Menu.Main.Enable = TimMenu.Checkbox("Enable Bot", G.Menu.Main.Enable)
 			TimMenu.NextLine()
 
-			G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
+			G.Menu.Main.SelfHealTreshold =
+				TimMenu.Slider("Self Heal Threshold", G.Menu.Main.SelfHealTreshold, 0, 100, 1)
+			TimMenu.NextLine()
+
+			G.Menu.Main.LookingAhead = TimMenu.Checkbox("Auto Rotate Camera", G.Menu.Main.LookingAhead or false)
+			TimMenu.Tooltip("Enable automatic camera rotation towards target node (disable for manual camera control)")
 			TimMenu.NextLine()
 
 			G.Menu.Main.smoothFactor = G.Menu.Main.smoothFactor or 0.1
 			G.Menu.Main.smoothFactor = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 1, 0.01)
-			TimMenu.NextLine()
-
-			G.Menu.Main.SelfHealTreshold =
-				TimMenu.Slider("Self Heal Threshold", G.Menu.Main.SelfHealTreshold, 0, 100, 1)
+			TimMenu.Tooltip("Camera rotation smoothness (only when Auto Rotate Camera is enabled)")
 			TimMenu.EndSector()
 
 			TimMenu.NextLine()
 
-			-- Navigation Section
-			TimMenu.BeginSector("Navigation Settings")
+			-- Movement & Pathfinding Section
+			TimMenu.BeginSector("Movement & Pathfinding")
+			G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
+			TimMenu.Tooltip("Allow skipping nodes when direct path is walkable (handles all optimization)")
+			TimMenu.NextLine()
+
+			G.Menu.Movement = G.Menu.Movement or {}
+			G.Menu.Movement.Smart_Jump = TimMenu.Checkbox("Smart Jump", G.Menu.Movement.Smart_Jump ~= false)
+			TimMenu.Tooltip("Enable intelligent jumping over obstacles")
+			TimMenu.NextLine()
+
+			G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Step"
+			local walkableModes = { "Step", "Jump" }
+			-- Create boolean table for TimMenu.Combo
+			local walkableSelection = {
+				G.Menu.Main.WalkableMode == "Step",
+				G.Menu.Main.WalkableMode == "Jump",
+			}
+			walkableSelection = TimMenu.Combo("Walkable Mode", walkableSelection, walkableModes)
+
+			-- Update the mode based on selection
+			if walkableSelection[1] then
+				G.Menu.Main.WalkableMode = "Step"
+			elseif walkableSelection[2] then
+				G.Menu.Main.WalkableMode = "Jump"
+			end
+			TimMenu.Tooltip("Step: Only 18-unit steps (smooth), Jump: Allow duck jumps up to 72 units (physical)")
+			TimMenu.EndSector()
+
+			TimMenu.NextLine()
+
+			-- Advanced Settings Section
+			TimMenu.BeginSector("Advanced Settings")
 			G.Menu.Main.CleanupConnections =
 				TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections)
+			TimMenu.Tooltip("Clean up navigation connections on map load (disable if causing crashes)")
 			TimMenu.NextLine()
 
 			G.Menu.Main.AllowExpensiveChecks =
@@ -64,21 +98,6 @@ local function OnDrawMenu()
 			G.Menu.Main.UseHierarchicalPathfinding =
 				TimMenu.Checkbox("Use Hierarchical Pathfinding", G.Menu.Main.UseHierarchicalPathfinding or false)
 			TimMenu.Tooltip("Generate fine-grained points within areas for more accurate local pathfinding")
-			TimMenu.NextLine()
-
-			G.Menu.Main.AggressivePathSkipping =
-				TimMenu.Checkbox("Aggressive Path Skipping", G.Menu.Main.AggressivePathSkipping or false)
-			TimMenu.Tooltip("Skip multiple nodes aggressively for shorter paths, may require more jumping")
-			TimMenu.NextLine()
-
-			G.Menu.Main.ContinuousOptimization =
-				TimMenu.Checkbox("Continuous Path Optimization", G.Menu.Main.ContinuousOptimization or true)
-			TimMenu.Tooltip("Check every tick if next node can be reached directly (18-unit steps when not aggressive)")
-			TimMenu.NextLine()
-
-
-			G.Menu.Main.LookingAhead = TimMenu.Checkbox("Look Ahead", G.Menu.Main.LookingAhead or false)
-			TimMenu.Tooltip("Disable complex looking ahead logic for simpler, more direct pathfinding")
 			TimMenu.NextLine()
 
 			-- Connection processing status display
@@ -167,6 +186,8 @@ local function OnDrawMenu()
 			end
 			TimMenu.EndSector()
 		end
+
+		TimMenu.End() -- Properly close the menu
 	end
 end
 

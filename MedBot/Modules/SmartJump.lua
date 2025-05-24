@@ -115,7 +115,7 @@ function SmartJump.Main(cmd)
 	end
 
 	-- Check if smart jump is enabled in MedBot menu
-	if not G.Menu.Movement.Smart_Jump then
+	if G.Menu.Movement.Smart_Jump == false then
 		G.ShouldJump = false
 		G.ObstacleDetected = false
 		return false

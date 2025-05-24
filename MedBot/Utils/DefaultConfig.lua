@@ -11,18 +11,15 @@ defaultconfig = {
 	Main = {
 		Enable = false,
 		Skip_Nodes = false, --skips nodes if it can go directly to ones closer to target.
-		Optymise_Path = false, --straighten the nodes into segments so you would go in straight line
-		OptimizationLimit = 20, --how many nodes ahead to optymise
 		shouldfindhealth = true, -- Path to health
 		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
 		smoothFactor = 0.05,
+		LookingAhead = false, -- Enable automatic camera rotation towards target node
+		WalkableMode = "Step", -- "Step" for 18-unit steps only, "Jump" for 72-unit duck jumps
 		CleanupConnections = false, -- Cleanup invalid connections during map load (disable to prevent crashes)
 		AllowExpensiveChecks = false, -- Allow expensive walkability checks (rarely needed)
 		-- Hierarchical pathfinding settings (fixed 24-unit spacing)
 		UseHierarchicalPathfinding = false, -- Enable fine-grained points within areas for better accuracy
-		AggressivePathSkipping = false, -- Skip multiple nodes aggressively for shorter paths, may require more jumping
-		ContinuousOptimization = true, -- Check every tick if next node can be reached directly
-		DisableLookingAhead = false, -- Disable complex looking ahead logic for simpler pathfinding
 	},
 	Visuals = {
 		renderDistance = 800,

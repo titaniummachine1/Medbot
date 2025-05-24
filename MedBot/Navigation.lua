@@ -372,7 +372,7 @@ function Navigation.isWalkable(startPos, endPos)
 
 			-- Determine if we can step up or jump over the obstacle
 			local canStepUp = traceDownResult.fraction >= requiredFraction
-			local canJumpOver = traceDownResult.fraction > 0 and G.Menu.Movement.Smart_Jump
+			local canJumpOver = traceDownResult.fraction > 0 and (G.Menu.Movement.Smart_Jump ~= false)
 
 			-- Update the current position based on step up or jump over
 			currentPosition = (canStepUp or canJumpOver) and traceDownResult.endpos or currentPosition
@@ -443,94 +443,6 @@ function Navigation.isStepWalkable(startPos, endPos)
 	end
 
 	return true -- Path is step-walkable
-end
-
--- Conservative walkability check - only allows 18-unit steps, no jumping
-function Navigation.isStepOnlyWalkable(startPos, endPos)
-	local direction = Common.Normalize(endPos - startPos)
-	local totalDistance = (endPos - startPos):Length()
-	local stepSize = math.min(16, totalDistance / 8) -- Smaller steps for precision
-	local currentPosition = startPos
-	local maxStepHeight = 18 -- Only 18-unit steps, no jumps allowed
-
-	-- Quick height check first - reject anything requiring more than stepping
-	local heightDiff = endPos.z - startPos.z
-	if heightDiff > maxStepHeight then
-		return false -- Too high to step up
-	end
-
-	local steps = math.max(5, math.ceil(totalDistance / stepSize))
-
-	for i = 1, steps do
-		local progress = i / steps
-		local nextPosition = startPos + direction * (totalDistance * progress)
-
-		-- Check if path is clear at this step
-		local pathTrace = isPathClear(currentPosition, nextPosition)
-		if pathTrace.fraction < 0.95 then -- Very strict - must be almost completely clear
-			-- Small obstacle, check if we can step over it (no jumping)
-			local obstacleHeight = pathTrace.endpos.z - currentPosition.z
-			if obstacleHeight > maxStepHeight then
-				return false -- Obstacle too high to step over
-			end
-
-			-- Try stepping up by the obstacle height (small margin only)
-			local stepUpHeight = math.min(maxStepHeight, obstacleHeight + 1)
-			local stepUpPos = currentPosition + Vector3(0, 0, stepUpHeight)
-			local stepOverTrace = isPathClear(stepUpPos, nextPosition + Vector3(0, 0, stepUpHeight))
-
-			if stepOverTrace.fraction < 0.95 then
-				return false -- Can't step over obstacle cleanly
-			end
-		end
-
-		currentPosition = nextPosition
-	end
-
-	return true -- Path is walkable with steps only
-end
-
--- Continuous path optimization - check if we can skip to next node every tick
-function Navigation.OptimizePathStep(localOrigin)
-	local path = G.Navigation.path
-	if not path or #path < 2 then
-		return false -- No path or too short to optimize
-	end
-
-	local currentNode = path[1]
-	local nextNode = path[2]
-
-	if not currentNode or not nextNode then
-		return false
-	end
-
-	-- Check if next node is closer than current (basic skip condition)
-	local currentDist = (localOrigin - currentNode.pos):Length()
-	local nextDist = (localOrigin - nextNode.pos):Length()
-
-	if nextDist < currentDist then
-		-- Choose walkability check based on aggressive optimization setting
-		local canSkip = false
-
-		if G.Menu.Main.AggressivePathSkipping then
-			-- Aggressive mode: allow jumping (use full walkability)
-			canSkip = Navigation.isWalkable(localOrigin, nextNode.pos)
-		else
-			-- Conservative mode: only allow stepping (no jumping)
-			canSkip = Navigation.isStepOnlyWalkable(localOrigin, nextNode.pos)
-		end
-
-		if canSkip then
-			Log:Debug(
-				"Path optimization: Skipping to next node (aggressive: %s)",
-				tostring(G.Menu.Main.AggressivePathSkipping)
-			)
-			Navigation.RemoveCurrentNode()
-			return true -- Successfully optimized
-		end
-	end
-
-	return false -- No optimization performed
 end
 
 -- Function to get forward speed by class
