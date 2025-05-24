@@ -486,6 +486,54 @@ Commands.Register("pf_reload", function()
 	Navigation.Setup()
 end)
 
+Commands.Register("pf_hierarchical", function(args)
+	if args[1] == "network" then
+		local Node = require("MedBot.Modules.Node")
+		Node.GenerateHierarchicalNetwork()
+		Notify.Simple("Generated hierarchical network", "Check console for details", 3)
+	elseif args[1] == "info" then
+		local areaId = tonumber(args[2])
+		if areaId then
+			local Node = require("MedBot.Modules.Node")
+			local points = Node.GetAreaPoints(areaId)
+			if points then
+				print(string.format("Area %d: %d fine points", areaId, #points))
+				local edgeCount = 0
+				for _, point in ipairs(points) do
+					if point.isEdge then
+						edgeCount = edgeCount + 1
+					end
+				end
+				print(string.format("  - %d edge points, %d internal points", edgeCount, #points - edgeCount))
+			else
+				print("Area not found or no points generated")
+			end
+		else
+			print("Usage: pf_hierarchical info <areaId>")
+		end
+	else
+		print("Usage: pf_hierarchical network | info <areaId>")
+	end
+end)
+
+Commands.Register("pf_test_hierarchical", function()
+	local hierarchical = G.Navigation.hierarchical
+	if hierarchical then
+		print(
+			string.format("Hierarchical data available for %d areas", hierarchical.areas and #hierarchical.areas or 0)
+		)
+		local totalEdgePoints = 0
+		local totalConnections = 0
+		for areaId, areaInfo in pairs(hierarchical.areas or {}) do
+			totalEdgePoints = totalEdgePoints + #areaInfo.edgePoints
+			totalConnections = totalConnections + #areaInfo.interAreaConnections
+		end
+		print(string.format("Total: %d edge points, %d inter-area connections", totalEdgePoints, totalConnections))
+	else
+		print("No hierarchical data available. Run 'pf_hierarchical network' first.")
+	end
+end)
+
 Notify.Alert("MedBot loaded!")
 if entities.GetLocalPlayer() then
 	-- Add safety check to prevent crashes when no map is loaded

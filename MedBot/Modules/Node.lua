@@ -179,13 +179,13 @@ local function isNodeAccessible(nodeA, nodeB)
 	return false
 end
 
---- Remove invalid connections between nodes (simple version to prevent crashes)
+--- Remove invalid connections between nodes (expensive validation at setup time)
 ---@param nodes table All navigation nodes
 local function pruneInvalidConnections(nodes)
 	local prunedCount = 0
 	local totalChecked = 0
 
-	Log:Info("Starting connection cleanup...")
+	Log:Info("Starting connection cleanup (expensive validation at setup time)...")
 
 	for nodeId, node in pairs(nodes) do
 		if not node or not node.c then
@@ -203,15 +203,17 @@ local function pruneInvalidConnections(nodes)
 					local targetNode = nodes[targetNodeId]
 
 					if targetNode then
-						-- Use proper accessibility check that considers up/down movement
+						-- Use expensive accessibility check for thorough validation at setup
 						if isNodeAccessible(node, targetNode) then
 							table.insert(validConnections, targetNodeId)
 						else
 							prunedCount = prunedCount + 1
+							Log:Debug("Pruned inaccessible connection: %d -> %d", nodeId, targetNodeId)
 						end
 					else
 						-- Remove connections to non-existent nodes
 						prunedCount = prunedCount + 1
+						Log:Debug("Pruned connection to non-existent node: %d -> %d", nodeId, targetNodeId)
 					end
 				end
 
@@ -508,7 +510,7 @@ local function connectPair(areaA, areaB)
 		return 0
 	end
 
-	-- robust one-to-one inter-area linking using nearest-neighbor per axis
+	-- robust one-to-one inter-area linking with accessibility filtering
 	local P = (#edgeA <= #edgeB) and edgeA or edgeB
 	local Qfull = (#edgeA <= #edgeB) and edgeB or edgeA
 	-- copy Q for matching
@@ -517,36 +519,56 @@ local function connectPair(areaA, areaB)
 		remaining[i] = Qfull[i]
 	end
 	local c = 0
-	-- axis-based nearest neighbor matching
+	-- for each p, pick closest accessible q
 	if sideA == "N" or sideA == "S" then
-		-- match by X coordinate
+		-- sort by X proximity when matching
 		for _, p in ipairs(P) do
-			local bestIdx, bestDelta = 1, math.abs(remaining[1].pos.x - p.pos.x)
-			for i = 2, #remaining do
-				local delta = math.abs(remaining[i].pos.x - p.pos.x)
-				if delta < bestDelta then
-					bestDelta, bestIdx = delta, i
+			-- build sorted candidate list
+			local candidates = {}
+			for i, q in ipairs(remaining) do
+				candidates[#candidates + 1] = { i = i, delta = math.abs(q.pos.x - p.pos.x) }
+			end
+			table.sort(candidates, function(a, b)
+				return a.delta < b.delta
+			end)
+			-- select first accessible candidate
+			local selIdx
+			for _, cand in ipairs(candidates) do
+				local q = remaining[cand.i]
+				if isNodeAccessible(p, q) then
+					selIdx = cand.i
+					break
 				end
 			end
-			local q = remaining[bestIdx]
-			link(p, q)
-			table.remove(remaining, bestIdx)
-			c = c + 1
+			if selIdx then
+				link(p, remaining[selIdx])
+				table.remove(remaining, selIdx)
+				c = c + 1
+			end
 		end
 	else
-		-- match by Y coordinate
+		-- sort by Y proximity when matching
 		for _, p in ipairs(P) do
-			local bestIdx, bestDelta = 1, math.abs(remaining[1].pos.y - p.pos.y)
-			for i = 2, #remaining do
-				local delta = math.abs(remaining[i].pos.y - p.pos.y)
-				if delta < bestDelta then
-					bestDelta, bestIdx = delta, i
+			local candidates = {}
+			for i, q in ipairs(remaining) do
+				candidates[#candidates + 1] = { i = i, delta = math.abs(q.pos.y - p.pos.y) }
+			end
+			table.sort(candidates, function(a, b)
+				return a.delta < b.delta
+			end)
+			local selIdx
+			for _, cand in ipairs(candidates) do
+				local q = remaining[cand.i]
+				if isNodeAccessible(p, q) then
+					selIdx = cand.i
+					break
 				end
 			end
-			local q = remaining[bestIdx]
-			link(p, q)
-			table.remove(remaining, bestIdx)
-			c = c + 1
+			if selIdx then
+				link(p, remaining[selIdx])
+				table.remove(remaining, selIdx)
+				c = c + 1
+			end
 		end
 	end
 	return c
@@ -624,7 +646,7 @@ local function buildHierarchicalStructure(processedAreas)
 end
 
 --==========================================================================
---  Hierarchical network generation  (Pass-2 rewritten)
+--  Hierarchical network generation  (Fixed to use actual nav connections)
 --==========================================================================
 function Node.GenerateHierarchicalNetwork(maxAreas)
 	local nodes = G.Navigation.nodes
@@ -642,25 +664,29 @@ function Node.GenerateHierarchicalNetwork(maxAreas)
 	Log:Info("Pass-1 fine points ready in %d areas", areas)
 
 	------------------------------------------------------------
-	-- PASS-2  :  geometry-based inter-area links
+	-- PASS-2: Connect fine points between actually adjacent areas
 	------------------------------------------------------------
-	local totalPairs, totalLinks = 0, 0
-	local ids = {}
-	for id in pairs(processed) do
-		ids[#ids + 1] = id
-	end
-	for i = 1, #ids - 1 do
-		local A = processed[ids[i]].area
-		for j = i + 1, #ids do
-			local B = processed[ids[j]].area
-			totalPairs = totalPairs + 1
-			totalLinks = totalLinks + connectPair(A, B)
+	local totalConnections = 0
+	for areaId, data in pairs(processed) do
+		local area = data.area
+
+		-- Get actually adjacent areas using nav mesh connections
+		local adjacentAreas = Node.GetAdjacentNodesSimple(area, nodes)
+
+		for _, adjacentArea in ipairs(adjacentAreas) do
+			-- Only connect if the adjacent area was also processed
+			if processed[adjacentArea.id] then
+				local connections = connectPair(area, adjacentArea)
+				totalConnections = totalConnections + connections
+				Log:Debug("Connected %d fine points between areas %d and %d", connections, areaId, adjacentArea.id)
+			end
 		end
 	end
-	Log:Info("Pass-2 linked %d touching pairs  –  %d fine-point edges", totalPairs, totalLinks)
+
+	Log:Info("Pass-2 connected %d fine-point edges between adjacent areas", totalConnections)
 
 	------------------------------------------------------------
-	-- PASS-3  :  build HPA* structure (same as before)
+	-- PASS-3: Build HPA* structure
 	------------------------------------------------------------
 	buildHierarchicalStructure(processed)
 end
@@ -766,22 +792,54 @@ function Node.AddCostToConnection(nodeA, nodeB, cost)
 	end
 end
 
+--- Get adjacent nodes with accessibility checks (expensive, for pathfinding)
+---@param node table First node (source)
+---@param nodes table All navigation nodes
+---@return table[] Array of accessible adjacent nodes
+--- NOTE: This function is EXPENSIVE due to accessibility checks.
+--- Use GetAdjacentNodesSimple for pathfinding after setup validation is complete.
 function Node.GetAdjacentNodes(node, nodes)
 	local adjacent = {}
 	if not node or not node.c or not nodes then
 		return adjacent
 	end
 
-	-- Check all directions using pairs for connections
-	for d, cDir in pairs(node.c) do
+	-- Check all directions using ipairs for connections
+	for _, cDir in ipairs(node.c) do
 		if cDir and cDir.connections then
-			for _, cid in pairs(cDir.connections) do
+			for _, cid in ipairs(cDir.connections) do
 				local targetNode = nodes[cid]
 				if targetNode and targetNode.pos then
-					-- Use centralized accessibility check
+					-- Use centralized accessibility check (EXPENSIVE)
 					if isNodeAccessible(node, targetNode) then
 						table.insert(adjacent, targetNode)
 					end
+				end
+			end
+		end
+	end
+	return adjacent
+end
+
+--- Get adjacent nodes without accessibility checks (fast, for finding connections)
+---@param node table First node (source)
+---@param nodes table All navigation nodes
+---@return table[] Array of connected adjacent nodes
+--- NOTE: This function is FAST and should be used for pathfinding.
+--- Assumes connections are already validated during setup time.
+function Node.GetAdjacentNodesSimple(node, nodes)
+	local adjacent = {}
+	if not node or not node.c or not nodes then
+		return adjacent
+	end
+
+	-- Check all directions using ipairs for connections
+	for _, cDir in ipairs(node.c) do
+		if cDir and cDir.connections then
+			for _, cid in ipairs(cDir.connections) do
+				local targetNode = nodes[cid]
+				if targetNode and targetNode.pos then
+					table.insert(adjacent, targetNode)
 				end
 			end
 		end

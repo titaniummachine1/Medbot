@@ -3,6 +3,15 @@
 ---@class Pathfinding
 ---@field pathFound boolean
 ---@field pathFailed boolean
+
+--[[
+PERFORMANCE OPTIMIZATION STRATEGY:
+- Heavy validation (accessibility checks) happens at setup time via pruneInvalidConnections()
+- Pathfinding uses Node.GetAdjacentNodesSimple() for speed (no expensive trace checks)
+- Invalid connections are removed during setup, so pathfinding can trust remaining connections
+- This moves computational load to beginning rather than during gameplay
+]]
+
 local Navigation = {}
 
 local Common = require("MedBot.Common")
@@ -535,14 +544,15 @@ function Navigation.FindPath(startNode, goalNode)
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
+	-- Use simple adjacent nodes function for faster pathfinding (validation done at setup)
 	if horizontalDistance <= 100 and verticalDistance <= 18 then --attempt to avoid work
-		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodes)
+		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 	elseif
 		(horizontalDistance <= 700 and verticalDistance <= 18) or Navigation.isWalkable(startNode.pos, goalNode.pos)
 	then --didnt work try doing less work
-		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodes)
+		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 	else --damn it then do it propertly at least
-		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodes)
+		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 	end
 
 	if not G.Navigation.path or #G.Navigation.path == 0 then
