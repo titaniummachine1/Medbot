@@ -46,6 +46,9 @@ G.Navigation = {
 	lastKnownTargetPosition = nil, -- Remember last position of follow target
 }
 
+-- SmartJump integration
+G.ShouldJump = false -- Set by SmartJump module when jump should be performed
+
 G.Tasks = {
 	None = 0,
 	Objective = 1,

@@ -2,6 +2,8 @@
     "recommendations": [
         "sumneko.lua",
         "rc.lmaobox-lua-api-snippets",
-        "notnoobmaster.lua-beautifier"
+        "notnoobmaster.lua-beautifier",
+        "emeraldwalk.runonsave",
+        "formulahendry.code-runner"
     ]
 }

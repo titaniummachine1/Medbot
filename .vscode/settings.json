@@ -13,12 +13,8 @@
                 "isAsync": true,
                 "cmd": "${workspaceFolder}/BundleAndDeploy.bat",
                 "message": "Attempting to run default build task for ${fileBasename}...",
-                "autoShowOutputPanel": "error"
             }
         ]
     },
-    "Lua.workspace.userThirdParty": [
-        "C:/Users/Terminatort8000/AppData/Local/Lmaobox-Annotations-master/library"
-    ],
     "stylua.targetReleaseVersion": "latest"
 }

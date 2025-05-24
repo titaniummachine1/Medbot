@@ -28,52 +28,62 @@ local function OnDrawMenu()
 
 	if TimMenu.Begin("MedBot Control") then
 		-- Tab control
-		G.Menu.Tab, _ = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, G.Menu.Tab)
+		G.Menu.Tab = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, G.Menu.Tab)
 		TimMenu.NextLine()
 
 		if G.Menu.Tab == "Main" then
-			-- Enable bot
+			-- Bot Control Section
+			TimMenu.BeginSector("Bot Control")
 			G.Menu.Main.Enable = TimMenu.Checkbox("Enable Bot", G.Menu.Main.Enable)
 			TimMenu.NextLine()
 
-			-- Skip nodes optimization
 			G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
 			TimMenu.NextLine()
 
-			-- Connection cleanup
+			G.Menu.Main.smoothFactor = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 0.1, 0.01)
+			TimMenu.NextLine()
+
+			G.Menu.Main.SelfHealTreshold =
+				TimMenu.Slider("Self Heal Threshold", G.Menu.Main.SelfHealTreshold, 0, 100, 1)
+			TimMenu.EndSector()
+
+			TimMenu.NextLine()
+
+			-- Navigation Section
+			TimMenu.BeginSector("Navigation Settings")
 			G.Menu.Main.CleanupConnections =
 				TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections)
 			TimMenu.NextLine()
 
-			-- Cleanup aggressiveness
-			G.Menu.Main.CleanupAggressiveness, _ =
-				TimMenu.Slider("Cleanup Aggressiveness", G.Menu.Main.CleanupAggressiveness, 0, 2, 1)
-			TimMenu.NextLine()
-
-			-- Smooth look factor for path following
-			G.Menu.Main.smoothFactor, _ = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 0.1, 0.01)
-			TimMenu.NextLine()
-
-			-- Self-heal threshold
-			G.Menu.Main.SelfHealTreshold, _ =
-				TimMenu.Slider("Self Heal Threshold", G.Menu.Main.SelfHealTreshold, 0, 100, 1)
-			TimMenu.NextLine()
+			G.Menu.Main.AllowExpensiveChecks =
+				TimMenu.Checkbox("Allow Expensive Walkability Checks", G.Menu.Main.AllowExpensiveChecks or false)
+			TimMenu.Tooltip("Enable expensive trace-based walkability validation (rarely needed)")
+			TimMenu.EndSector()
 		elseif G.Menu.Tab == "Visuals" then
-			-- Visuals settings
+			-- Visual Settings Section
+			TimMenu.BeginSector("Visual Settings")
 			G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 			TimMenu.NextLine()
+
+			G.Menu.Visuals.renderDistance =
+				TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
+			TimMenu.EndSector()
+
+			TimMenu.NextLine()
+
+			-- Node Display Section
+			TimMenu.BeginSector("Node Display")
 			G.Menu.Visuals.drawNodes = TimMenu.Checkbox("Show Nodes", G.Menu.Visuals.drawNodes)
 			TimMenu.NextLine()
+
 			G.Menu.Visuals.drawNodeIDs = TimMenu.Checkbox("Show Node IDs", G.Menu.Visuals.drawNodeIDs)
 			TimMenu.NextLine()
+
 			G.Menu.Visuals.showConnections = TimMenu.Checkbox("Show Connections", G.Menu.Visuals.showConnections)
 			TimMenu.NextLine()
+
 			G.Menu.Visuals.showAreas = TimMenu.Checkbox("Show Areas", G.Menu.Visuals.showAreas)
-			TimMenu.NextLine()
-			-- Maximum render distance for visuals
-			G.Menu.Visuals.renderDistance, _ =
-				TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
-			TimMenu.NextLine()
+			TimMenu.EndSector()
 		end
 	end
 end

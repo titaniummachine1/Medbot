@@ -298,7 +298,7 @@ local function OnDraw()
 			end
 
 			if node1Pos and node2Pos then
-				ArrowLine(node1Pos, node2Pos, 22, 15, true) -- Adjust the size for the perpendicular segment as needed
+				ArrowLine(node1Pos, node2Pos, 22, 15, false) -- Adjust the size for the perpendicular segment as needed
 			end
 			::continue::
 		end

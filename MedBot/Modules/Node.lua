@@ -164,9 +164,8 @@ local function pruneInvalidConnections(nodes)
 	local fastPassCount = 0
 	local mediumPassCount = 0
 	local slowPassCount = 0
-	local aggressiveness = G.Menu.Main.CleanupAggressiveness or 1
 
-	Log:Info("Starting optimized connection cleanup (aggressiveness: %d)...", aggressiveness)
+	Log:Info("Starting connection cleanup...")
 
 	for nodeId, node in pairs(nodes) do
 		if not node or not node.c then
@@ -193,8 +192,8 @@ local function pruneInvalidConnections(nodes)
 							-- Fast path: center Z distance is acceptable
 							isValid = true
 							fastPassCount = fastPassCount + 1
-						elseif aggressiveness >= 1 then
-							-- Check corners for stairs/ramps (only if aggressiveness >= 1)
+						else
+							-- Check corners for stairs/ramps
 							local cornersA = getNodeCorners(node)
 							local cornersB = getNodeCorners(targetNode)
 							local cornerMatch = false
@@ -216,8 +215,8 @@ local function pruneInvalidConnections(nodes)
 								-- Medium path: corners are within range
 								isValid = true
 								mediumPassCount = mediumPassCount + 1
-							elseif aggressiveness >= 2 then
-								-- Slow path: expensive walkability check (only if aggressiveness >= 2)
+							elseif G.Menu.Main.AllowExpensiveChecks then
+								-- Slow path: expensive walkability check (only if allowed)
 								isValid = isWalkable.Path(node.pos, targetNode.pos)
 								slowPassCount = slowPassCount + 1
 								if not isValid then
@@ -228,12 +227,9 @@ local function pruneInvalidConnections(nodes)
 									)
 								end
 							else
-								-- Skip expensive check, assume valid
-								isValid = true
+								-- Skip expensive check, assume invalid if other checks failed
+								isValid = false
 							end
-						else
-							-- Skip all checks beyond fast pass, assume valid
-							isValid = true
 						end
 
 						-- Keep valid connections
@@ -470,22 +466,50 @@ function Node.GetAdjacentNodes(node, nodes)
 	for d = 1, 4 do
 		local cDir = node.c[d]
 		if cDir and cDir.connections then
-			for _, cid in ipairs(cDir.connections) do -- Use ipairs instead of hardcoded loop
-				local nnodes = nodes[cid]
-				if nnodes then
-					local h = (nnodes.nw.x - node.se.x)
-							* (node.nw.x - nnodes.se.x)
-							* (nnodes.nw.y - node.se.y)
-							* (node.nw.y - nnodes.se.y)
-						<= 0
-					local v = (nnodes.pos.z >= (node.pos.z - 70) and nnodes.pos.z <= (node.pos.z + 70))
-					if h and v then
-						local sp = { x = node.pos.x, y = node.pos.y, z = node.pos.z + 72 }
-						local ep = { x = nnodes.pos.x, y = nnodes.pos.y, z = nnodes.pos.z }
-						local tr = engine.TraceLine(Vector3(sp.x, sp.y, sp.z), Vector3(ep.x, ep.y, ep.z), TRACE_MASK)
-						if tr.fraction == 1 then
-							table.insert(adjacent, nnodes)
+			for _, cid in ipairs(cDir.connections) do
+				local targetNode = nodes[cid]
+				if targetNode and targetNode.pos then
+					-- Three-tier accessibility check (same as pruning logic)
+					local isValid = false
+
+					-- First pass: Fast center Z distance check
+					local centerZDiff = math.abs(node.pos.z - targetNode.pos.z)
+					if centerZDiff <= 72 then
+						isValid = true -- Fast path: nodes are close enough in height
+					else
+						-- Second pass: Check if any corners are within range (stairs/ramp scenario)
+						local cornersA = getNodeCorners(node)
+						local cornersB = getNodeCorners(targetNode)
+						local cornerMatch = false
+
+						for _, cornerA in ipairs(cornersA) do
+							for _, cornerB in ipairs(cornersB) do
+								local cornerZDiff = math.abs(cornerA.z - cornerB.z)
+								if cornerZDiff <= 72 then
+									cornerMatch = true
+									break
+								end
+							end
+							if cornerMatch then
+								break
+							end
 						end
+
+						if cornerMatch then
+							isValid = true -- Medium path: corners are within range
+						elseif G.Menu.Main.AllowExpensiveChecks then
+							-- Third pass: Expensive walkability check (only if allowed)
+							local isWalkable = require("MedBot.Modules.ISWalkable")
+							isValid = isWalkable.Path(node.pos, targetNode.pos)
+						else
+							-- Skip expensive check, assume invalid if other checks failed
+							isValid = false
+						end
+					end
+
+					-- Only add if connection passes all checks
+					if isValid then
+						table.insert(adjacent, targetNode)
 					end
 				end
 			end

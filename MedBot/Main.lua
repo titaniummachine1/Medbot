@@ -7,6 +7,7 @@ local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
+local SmartJump = require("MedBot.Modules.SmartJump")
 
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
@@ -131,7 +132,17 @@ end
 
 -- Function to handle the STUCK state
 function handleStuckState(userCmd)
-	if WorkManager.attemptWork(132, "Unstuck_Jump") then
+	-- Use SmartJump for intelligent obstacle detection
+	SmartJump.Main(userCmd)
+
+	-- Apply jump if SmartJump determined it's needed
+	if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
+		userCmd:SetButtons(userCmd.buttons | IN_JUMP)
+		userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
+	end
+
+	-- Fallback emergency jump for extreme stuck situations
+	if WorkManager.attemptWork(150, "Emergency_Stuck_Jump") then
 		if not G.pLocal.entity:InCond(TFCond_Zoomed) and G.pLocal.flags & FL_ONGROUND == 1 then
 			userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
 			userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
@@ -321,9 +332,19 @@ function moveTowardsNode(userCmd, node)
 		Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
 	end
 
+	-- Use SmartJump for intelligent obstacle detection and jumping
+	SmartJump.Main(userCmd)
+
+	-- Apply jump if SmartJump determined it's needed
+	if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
+		userCmd:SetButtons(userCmd.buttons | IN_JUMP)
+		userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
+	end
+
+	-- Fallback unstuck jump for extreme cases when SmartJump might not trigger
 	if G.pLocal.flags & FL_ONGROUND == 1 or G.pLocal.entity:EstimateAbsVelocity():Length() < 50 then
-		if G.Navigation.currentNodeTicks > 66 then
-			if WorkManager.attemptWork(132, "Unstuck_Jump") then
+		if G.Navigation.currentNodeTicks > 132 then -- Increased threshold since SmartJump should handle most cases
+			if WorkManager.attemptWork(200, "Emergency_Unstuck_Jump") then -- Longer delay, renamed for clarity
 				if not G.pLocal.entity:InCond(TFCond_Zoomed) and G.pLocal.flags & FL_ONGROUND == 1 then
 					userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
 					userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
@@ -468,6 +489,140 @@ end)
 Commands.Register("pf_auto", function(args)
 	G.Menu.Navigation.autoPath = G.Menu.Navigation.autoPath
 	print("Auto path: " .. tostring(G.Menu.Navigation.autoPath))
+end)
+
+-- Debug command to check node connections
+Commands.Register("pf_debug", function(args)
+	if args:size() ~= 1 then
+		print("Usage: pf_debug <NodeID>")
+		return
+	end
+
+	local nodeId = tonumber(args:popFront())
+	if not nodeId then
+		print("NodeID must be a number!")
+		return
+	end
+
+	local Node = require("MedBot.Modules.Node")
+	local node = Node.GetNodeByID(nodeId)
+	if not node then
+		print("Node " .. nodeId .. " not found!")
+		return
+	end
+
+	print("=== Debug info for Node " .. nodeId .. " ===")
+	print("Position: " .. tostring(node.pos))
+
+	-- Check connections in all directions
+	local totalConnections = 0
+	local fastPassCount = 0
+	local mediumPassCount = 0
+	local slowPassCount = 0
+	local failedCount = 0
+
+	for dir = 1, 4 do
+		local cDir = node.c[dir]
+		if cDir and cDir.connections then
+			print("Direction " .. dir .. ": " .. #cDir.connections .. " connections")
+			totalConnections = totalConnections + #cDir.connections
+
+			-- Test filtering for each connection
+			for _, targetId in ipairs(cDir.connections) do
+				local targetNode = Node.GetNodeByID(targetId)
+				if targetNode and targetNode.pos then
+					-- Same filtering logic as GetAdjacentNodes
+					local centerZDiff = math.abs(node.pos.z - targetNode.pos.z)
+					if centerZDiff <= 72 then
+						fastPassCount = fastPassCount + 1
+					else
+						-- Check corners
+						local cornersA = {}
+						if node.nw then
+							table.insert(cornersA, node.nw)
+						end
+						if node.ne then
+							table.insert(cornersA, node.ne)
+						end
+						if node.se then
+							table.insert(cornersA, node.se)
+						end
+						if node.sw then
+							table.insert(cornersA, node.sw)
+						end
+						if node.pos then
+							table.insert(cornersA, node.pos)
+						end
+
+						local cornersB = {}
+						if targetNode.nw then
+							table.insert(cornersB, targetNode.nw)
+						end
+						if targetNode.ne then
+							table.insert(cornersB, targetNode.ne)
+						end
+						if targetNode.se then
+							table.insert(cornersB, targetNode.se)
+						end
+						if targetNode.sw then
+							table.insert(cornersB, targetNode.sw)
+						end
+						if targetNode.pos then
+							table.insert(cornersB, targetNode.pos)
+						end
+
+						local cornerMatch = false
+						for _, cornerA in ipairs(cornersA) do
+							for _, cornerB in ipairs(cornersB) do
+								local cornerZDiff = math.abs(cornerA.z - cornerB.z)
+								if cornerZDiff <= 72 then
+									cornerMatch = true
+									break
+								end
+							end
+							if cornerMatch then
+								break
+							end
+						end
+
+						if cornerMatch then
+							mediumPassCount = mediumPassCount + 1
+						else
+							-- Walkability check
+							local isWalkable = require("MedBot.Modules.ISWalkable")
+							if G.Menu.Main.AllowExpensiveChecks and isWalkable.Path(node.pos, targetNode.pos) then
+								slowPassCount = slowPassCount + 1
+							else
+								failedCount = failedCount + 1
+							end
+						end
+					end
+				else
+					failedCount = failedCount + 1
+				end
+			end
+		else
+			print("Direction " .. dir .. ": 0 connections")
+		end
+	end
+	print("Total raw connections: " .. totalConnections)
+	print("Filtering results:")
+	print("  Fast pass (Z <= 72): " .. fastPassCount)
+	print("  Medium pass (corners): " .. mediumPassCount)
+	print("  Slow pass (walkable): " .. slowPassCount)
+	print("  Failed/blocked: " .. failedCount)
+	print("  Valid connections: " .. (fastPassCount + mediumPassCount + slowPassCount))
+	print("Expensive checks enabled: " .. tostring(G.Menu.Main.AllowExpensiveChecks or false))
+
+	-- Check adjacent nodes (after filtering)
+	local adjacent = Node.GetAdjacentNodes(node, Node.GetNodes())
+	print("Adjacent nodes after filtering: " .. #adjacent)
+	for i = 1, math.min(5, #adjacent) do
+		print("  Adjacent: " .. adjacent[i].id)
+	end
+	if #adjacent > 5 then
+		print("  ... and " .. (#adjacent - 5) .. " more")
+	end
 end)
 
 Notify.Alert("MedBot loaded!")
