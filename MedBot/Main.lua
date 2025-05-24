@@ -162,15 +162,16 @@ function handleStuckState(userCmd)
 
 	if G.Navigation.currentNodeTicks > 264 then
 		Log:Warn("Stuck for too long, repathing...")
-		-- Add high cost to current connection if we have one
+		-- Add failure penalty to current connection if we have one
 		local path = G.Navigation.path
 		if path and #path > 1 then
 			local currentNode = path[1]
 			local nextNode = path[2]
 			if currentNode and nextNode then
-				Navigation.AddCostToConnection(currentNode, nextNode, 1000)
+				local Node = require("MedBot.Modules.Node")
+				Node.AddFailurePenalty(currentNode, nextNode)
 				Log:Debug(
-					"Added high cost to connection %d -> %d due to prolonged stuck state",
+					"Added failure penalty to connection %d -> %d due to prolonged stuck state",
 					currentNode.id,
 					nextNode.id
 				)
@@ -412,6 +413,21 @@ function moveTowardsNode(userCmd, node)
 		-- Simple stuck detection and repathing
 		if G.Navigation.currentNodeTicks > 264 then
 			Log:Warn("Stuck for too long, repathing...")
+			-- Add failure penalty to current connection if we have one
+			local path = G.Navigation.path
+			if path and #path > 1 then
+				local currentNode = path[1]
+				local nextNode = path[2]
+				if currentNode and nextNode then
+					local Node = require("MedBot.Modules.Node")
+					Node.AddFailurePenalty(currentNode, nextNode)
+					Log:Debug(
+						"Added failure penalty to connection %d -> %d due to simple stuck detection",
+						currentNode.id,
+						nextNode.id
+					)
+				end
+			end
 			Navigation.ClearPath()
 			Navigation.ResetTickTimer()
 			G.currentState = G.States.IDLE
@@ -561,7 +577,8 @@ Commands.Register("pf_connections", function(args)
 			local phaseNames = {
 				[1] = "Basic validation",
 				[2] = "Expensive fallback",
-				[3] = "Fine point stitching",
+				[3] = "Stair patching",
+				[4] = "Fine point stitching",
 			}
 			print(string.format("Connection Processing Active:"))
 			print(string.format("  Phase: %d (%s)", status.currentPhase, phaseNames[status.currentPhase] or "Unknown"))
@@ -627,6 +644,71 @@ Commands.Register("pf_optimize", function(args)
 		print("Usage: pf_optimize test | info")
 		print("  test - Test if current node can be skipped")
 		print("  info - Show node skipping settings and path status")
+	end
+end)
+
+Commands.Register("pf_stairs", function(args)
+	local Node = require("MedBot.Modules.Node")
+	local nodes = Node.GetNodes()
+
+	if not nodes or not next(nodes) then
+		print("No navigation nodes loaded")
+		return
+	end
+
+	if args[1] == "check" then
+		-- Check for one-directional connections
+		local oneWayConnections = 0
+		local totalConnections = 0
+		local existingConnections = {}
+
+		-- Build connection lookup
+		for nodeId, node in pairs(nodes) do
+			if node and node.c then
+				for dir, connectionDir in pairs(node.c) do
+					if connectionDir and connectionDir.connections then
+						for _, connection in ipairs(connectionDir.connections) do
+							local targetNodeId = Node.GetConnectionNodeId(connection)
+							local key = nodeId .. "->" .. targetNodeId
+							existingConnections[key] = true
+							totalConnections = totalConnections + 1
+						end
+					end
+				end
+			end
+		end
+
+		-- Check for missing reverse connections
+		for nodeId, node in pairs(nodes) do
+			if node and node.c then
+				for dir, connectionDir in pairs(node.c) do
+					if connectionDir and connectionDir.connections then
+						for _, connection in ipairs(connectionDir.connections) do
+							local targetNodeId = Node.GetConnectionNodeId(connection)
+							local targetNode = nodes[targetNodeId]
+
+							if targetNode then
+								local reverseKey = targetNodeId .. "->" .. nodeId
+								if not existingConnections[reverseKey] then
+									local heightDiff = targetNode.pos.z - node.pos.z
+									if math.abs(heightDiff) > 18 and math.abs(heightDiff) <= 200 then
+										oneWayConnections = oneWayConnections + 1
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+
+		print(string.format("Connection Analysis:"))
+		print(string.format("  Total connections: %d", totalConnections))
+		print(string.format("  One-way stair connections: %d", oneWayConnections))
+		print(string.format("  Potential patches: %d", oneWayConnections))
+	else
+		print("Usage: pf_stairs check")
+		print("  check - Analyze one-directional stair connections")
 	end
 end)
 

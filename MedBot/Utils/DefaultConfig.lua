@@ -17,7 +17,7 @@ defaultconfig = {
 		LookingAhead = false, -- Enable automatic camera rotation towards target node
 		WalkableMode = "Step", -- "Step" for 18-unit steps only, "Jump" for 72-unit duck jumps
 		CleanupConnections = false, -- Cleanup invalid connections during map load (disable to prevent crashes)
-		AllowExpensiveChecks = false, -- Allow expensive walkability checks (rarely needed)
+		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
 		-- Hierarchical pathfinding settings (fixed 24-unit spacing)
 		UseHierarchicalPathfinding = false, -- Enable fine-grained points within areas for better accuracy
 	},

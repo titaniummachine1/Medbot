@@ -108,7 +108,8 @@ local function OnDrawMenu()
 					local phaseNames = {
 						[1] = "Basic validation",
 						[2] = "Expensive fallback",
-						[3] = "Fine point stitching",
+						[3] = "Stair patching",
+						[4] = "Fine point stitching",
 					}
 					TimMenu.Text(
 						string.format(

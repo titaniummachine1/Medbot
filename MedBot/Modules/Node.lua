@@ -138,46 +138,66 @@ local function getNodeCorners(node)
 	return corners
 end
 
---- Check if two nodes are accessible using optimized three-tier fallback approach
---- Allows going down from any height, but restricts upward movement to 72 units
+--- Check if two nodes are accessible and return cost multiplier
+--- Follows proper accessibility checking order as specified
 ---@param nodeA table First node (source)
 ---@param nodeB table Second node (destination)
 ---@param allowExpensive boolean Optional override to allow expensive checks
----@return boolean True if nodes are accessible to each other
+---@return boolean, number accessibility status and cost multiplier (1 = normal, >1 = penalty)
 local function isNodeAccessible(nodeA, nodeB, allowExpensive)
 	local heightDiff = nodeB.pos.z - nodeA.pos.z -- Positive = going up, negative = going down
-	
-	-- Always allow going downward (falling) regardless of height
+
+	-- Always allow going downward (falling) regardless of height - no penalty
 	if heightDiff <= 0 then
-		return true
-	end
-	
-	-- For upward movement, check if it's within duck jump height (72 units)
-	if heightDiff <= 72 then
-		return true -- Fast path: upward movement is within jump height
+		return true, 1
 	end
 
-	-- If upward movement > 72 units, check corners for stairs/ramps
-	local cornersA = getNodeCorners(nodeA)
-	local cornersB = getNodeCorners(nodeB)
+	-- Step 1: Check if destination is higher than 72 units
+	if heightDiff > 72 then
+		-- Step 2: Check if any of 4 corners of area A to any 4 corners of area B is within 72 units
+		local cornersA = getNodeCorners(nodeA)
+		local cornersB = getNodeCorners(nodeB)
 
-	for _, cornerA in pairs(cornersA) do
-		for _, cornerB in pairs(cornersB) do
-			local cornerHeightDiff = cornerB.z - cornerA.z
-			-- Allow if any corner-to-corner connection is within jump height
-			if cornerHeightDiff <= 72 then
-				return true -- Medium path: corners indicate possible stairs/ramp
+		local foundValidCornerPath = false
+		for _, cornerA in pairs(cornersA) do
+			for _, cornerB in pairs(cornersB) do
+				local cornerHeightDiff = cornerB.z - cornerA.z
+				-- Allow if any corner-to-corner connection is within jump height
+				if cornerHeightDiff <= 72 then
+					foundValidCornerPath = true
+					break
+				end
+			end
+			if foundValidCornerPath then
+				break
 			end
 		end
-	end
 
-	-- EXPENSIVE FALLBACK: Only use if explicitly allowed (not during normal setup)
-	if allowExpensive and G.Menu.Main.AllowExpensiveChecks then
-		return isWalkable.Path(nodeA.pos, nodeB.pos)
+		if not foundValidCornerPath then
+			-- Step 3: Last resort - check isWalkable if expensive checks allowed
+			if allowExpensive and G.Menu.Main.AllowExpensiveChecks then
+				if isWalkable.Path(nodeA.pos, nodeB.pos) then
+					return true, 3 -- High cost for requiring expensive walkability check
+				else
+					-- Step 4: If all fails, still keep connection but with very high penalty
+					return true, 10 -- Very high penalty instead of removing
+				end
+			else
+				-- During fast processing, assume high penalty but keep connection
+				return true, 5 -- High penalty for uncertain accessibility
+			end
+		else
+			-- Corner path found - moderate penalty for complex terrain
+			return true, 2
+		end
+	else
+		-- For upward movement within 72 units, normal cost with small penalty
+		if heightDiff > 18 then
+			return true, 1.5 -- Small penalty for significant height gain
+		else
+			return true, 1 -- Normal cost for easy height gain
+		end
 	end
-
-	-- Default: assume invalid if we can't prove it's accessible cheaply
-	return false
 end
 
 --==========================================================================
@@ -308,35 +328,30 @@ local function processBatch(nodes)
 			if node and node.c then
 				-- Process all directions for this node
 				for dir, connectionDir in pairs(node.c) do
-			if connectionDir and connectionDir.connections then
-				local validConnections = {}
+					if connectionDir and connectionDir.connections then
+						local validConnections = {}
 
 						for _, connection in pairs(connectionDir.connections) do
 							local targetNodeId = getConnectionNodeId(connection)
 							local currentCost = getConnectionCost(connection)
-					local targetNode = nodes[targetNodeId]
+							local targetNode = nodes[targetNodeId]
 
-					if targetNode then
-								-- Use basic accessibility check (no expensive fallback)
-								if isNodeAccessible(node, targetNode, false) then
-									local heightDiff = targetNode.pos.z - node.pos.z
-									local finalCost = currentCost
+							if targetNode then
+								-- Phase 1: Fast accessibility check without expensive operations
+								local isAccessible, costMultiplier = isNodeAccessible(node, targetNode, false)
+								local finalCost = currentCost * costMultiplier
 
-									-- Apply height penalty
-									if heightDiff > 18 then
-										finalCost = currentCost + 100
-									end
-
-									-- Store connection with precomputed cost
-									if finalCost > 1 then
-										table.insert(validConnections, { node = targetNodeId, cost = finalCost })
-									else
-										table.insert(validConnections, targetNodeId)
-									end
-
-									ConnectionProcessor.connectionsFound = ConnectionProcessor.connectionsFound + 1
+								-- Always keep connection but adjust cost based on accessibility
+								if finalCost > 1 then
+									table.insert(validConnections, { node = targetNodeId, cost = finalCost })
 								else
-									-- Mark for potential expensive check in phase 2
+									table.insert(validConnections, targetNodeId)
+								end
+
+								ConnectionProcessor.connectionsFound = ConnectionProcessor.connectionsFound + 1
+
+								-- If high penalty was applied, mark for potential expensive check
+								if costMultiplier >= 5 then
 									if not ConnectionProcessor.pendingNodes[nodeId] then
 										ConnectionProcessor.pendingNodes[nodeId] = {}
 									end
@@ -344,16 +359,17 @@ local function processBatch(nodes)
 										dir = dir,
 										targetId = targetNodeId,
 										originalCost = currentCost,
+										connectionIndex = #validConnections, -- Track which connection to update
 									})
 								end
-					end
-				end
+							end
+						end
 
 						-- Update connections
-				connectionDir.connections = validConnections
-				connectionDir.count = #validConnections
-			end
-		end
+						connectionDir.connections = validConnections
+						connectionDir.count = #validConnections
+					end
+				end
 
 				ConnectionProcessor.processedNodes[nodeId] = true
 			end
@@ -374,7 +390,7 @@ local function processBatch(nodes)
 			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 4) -- Slower for expensive checks
 		end
 
-	-- Phase 2: Expensive fallback checks for missing connections
+	-- Phase 2: Expensive fallback checks to improve high-penalty connections
 	elseif ConnectionProcessor.currentPhase == 2 then
 		local pendingProcessed = 0
 
@@ -389,34 +405,39 @@ local function processBatch(nodes)
 				local targetNode = nodes[connectionData.targetId]
 
 				if targetNode then
-					-- NOW use expensive check as last resort
-					if isNodeAccessible(node, targetNode, true) then
-						local dir = connectionData.dir
-						local connectionDir = node.c[dir]
+					-- Use expensive check to get better cost assessment
+					local isAccessible, costMultiplier = isNodeAccessible(node, targetNode, true)
+					local dir = connectionData.dir
+					local connectionDir = node.c[dir]
 
-						if connectionDir and connectionDir.connections then
-							local heightDiff = targetNode.pos.z - node.pos.z
-							local finalCost = connectionData.originalCost
+					if connectionDir and connectionDir.connections and connectionData.connectionIndex then
+						-- Update the existing connection with better cost information
+						local existingConnection = connectionDir.connections[connectionData.connectionIndex]
+						if existingConnection then
+							local improvedCost = connectionData.originalCost * costMultiplier
 
-							if heightDiff > 18 then
-								finalCost = finalCost + 100
-							end
-
-							-- Add the recovered connection
-							if finalCost > 1 then
-								table.insert(
-									connectionDir.connections,
-									{ node = connectionData.targetId, cost = finalCost }
-								)
+							-- Update the connection cost
+							if type(existingConnection) == "table" then
+								existingConnection.cost = improvedCost
 							else
-								table.insert(connectionDir.connections, connectionData.targetId)
+								-- Convert to table format if needed
+								connectionDir.connections[connectionData.connectionIndex] = {
+									node = connectionData.targetId,
+									cost = improvedCost,
+								}
 							end
 
-							connectionDir.count = connectionDir.count + 1
-							ConnectionProcessor.connectionsFound = ConnectionProcessor.connectionsFound + 1
 							ConnectionProcessor.expensiveChecksUsed = ConnectionProcessor.expensiveChecksUsed + 1
-		end
-	end
+
+							Log:Debug(
+								"Improved connection cost from node %d to %d: %s -> %.1f",
+								nodeId,
+								connectionData.targetId,
+								"high penalty",
+								improvedCost
+							)
+						end
+					end
 				end
 
 				pendingProcessed = pendingProcessed + 1
@@ -433,22 +454,129 @@ local function processBatch(nodes)
 		for _, pendingList in pairs(ConnectionProcessor.pendingNodes) do
 			if #pendingList > 0 then
 				hasPending = true
-			break
+				break
+			end
 		end
-	end
 
 		if not hasPending then
 			Log:Info(
-				"Phase 2 complete: %d total connections, %d expensive checks used, starting fine point stitching",
+				"Phase 2 complete: %d total connections, %d expensive checks used, starting stair patching",
 				ConnectionProcessor.connectionsFound,
 				ConnectionProcessor.expensiveChecksUsed
 			)
 			ConnectionProcessor.currentPhase = 3
-			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 2) -- Moderate speed for fine points
+			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 2) -- Moderate speed for stair patching
 		end
 
-	-- Phase 3: Fine point expensive stitching for missing inter-area connections
+	-- Phase 3: Stair connection patching - add missing reverse connections for stairs
 	elseif ConnectionProcessor.currentPhase == 3 then
+		local processed = 0
+		local maxProcessPerFrame = ConnectionProcessor.currentBatchSize
+		local patchedConnections = 0
+
+		-- Build a quick lookup of all existing connections
+		local existingConnections = {}
+		for nodeId, node in pairs(nodes) do
+			if node and node.c then
+				for dir, connectionDir in pairs(node.c) do
+					if connectionDir and connectionDir.connections then
+						for _, connection in ipairs(connectionDir.connections) do
+							local targetNodeId = getConnectionNodeId(connection)
+							local key = nodeId .. "->" .. targetNodeId
+							existingConnections[key] = true
+						end
+					end
+				end
+			end
+		end
+
+		-- Check for missing reverse connections, especially for stairs
+		for nodeId, node in pairs(nodes) do
+			if processed >= maxProcessPerFrame then
+				break
+			end
+
+			if node and node.c then
+				for dir, connectionDir in pairs(node.c) do
+					if connectionDir and connectionDir.connections then
+						for _, connection in ipairs(connectionDir.connections) do
+							local targetNodeId = getConnectionNodeId(connection)
+							local targetNode = nodes[targetNodeId]
+
+							if targetNode then
+								-- Check if reverse connection exists
+								local reverseKey = targetNodeId .. "->" .. nodeId
+								if not existingConnections[reverseKey] then
+									-- No reverse connection exists, check if we should add one
+									local heightDiff = targetNode.pos.z - node.pos.z
+
+									-- For stair-like connections (significant height difference)
+									if math.abs(heightDiff) > 18 and math.abs(heightDiff) <= 200 then
+										-- Use expensive isWalkable check for reverse direction
+										if
+											G.Menu.Main.AllowExpensiveChecks
+											and isWalkable.Path(targetNode.pos, node.pos)
+										then
+											-- Add reverse connection to target node
+											local addedToDirection = false
+											for targetDir, targetConnectionDir in pairs(targetNode.c) do
+												if
+													targetConnectionDir
+													and targetConnectionDir.connections
+													and not addedToDirection
+												then
+													-- Calculate appropriate cost for reverse connection
+													local reverseCost = 1
+													if heightDiff > 0 then
+														-- Going down - easier, lower cost
+														reverseCost = 1
+													else
+														-- Going up - harder, higher cost
+														reverseCost = math.abs(heightDiff) > 72 and 3 or 1.5
+													end
+
+													table.insert(
+														targetConnectionDir.connections,
+														{ node = nodeId, cost = reverseCost }
+													)
+													targetConnectionDir.count = targetConnectionDir.count + 1
+													patchedConnections = patchedConnections + 1
+													addedToDirection = true
+
+													-- Update our lookup to prevent duplicate patching
+													existingConnections[reverseKey] = true
+
+													Log:Debug(
+														"Patched stair connection: %d -> %d (height: %.1f, cost: %.1f)",
+														targetNodeId,
+														nodeId,
+														-heightDiff,
+														reverseCost
+													)
+													break
+												end
+											end
+										end
+									end
+								end
+							end
+							processed = processed + 1
+						end
+					end
+				end
+			end
+		end
+
+		-- Check if Phase 3 is complete
+		if processed == 0 or patchedConnections == 0 then
+			Log:Info("Stair patching complete: %d reverse connections added", patchedConnections)
+			ConnectionProcessor.currentPhase = 4
+			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 2)
+			ConnectionProcessor.finePointConnectionsAdded = patchedConnections
+		end
+
+	-- Phase 4: Fine point expensive stitching for missing inter-area connections
+	elseif ConnectionProcessor.currentPhase == 4 then
 		if G.Navigation.hierarchical and G.Navigation.hierarchical.areas then
 			local processed = 0
 			local maxProcessPerFrame = ConnectionProcessor.currentBatchSize
@@ -484,9 +612,9 @@ local function processBatch(nodes)
 											and neighbor.point.parentArea == adjacentEdgePoint.parentArea
 										then
 											connectionExists = true
-					break
-				end
-			end
+											break
+										end
+									end
 
 									-- If no connection exists, try expensive check
 									if not connectionExists then
@@ -521,16 +649,16 @@ local function processBatch(nodes)
 													adjacentEdgePoint.id,
 													distance
 												)
-		end
-	end
-end
+											end
+										end
+									end
 								end
 							end
 						end
 						processed = processed + 1
-		end
-	end
-end
+					end
+				end
+			end
 
 			-- Check if Phase 3 is complete (when we've processed all areas)
 			if processed == 0 then
@@ -546,8 +674,8 @@ end
 			Log:Info("No hierarchical data available, skipping fine point stitching")
 			ConnectionProcessor.isProcessing = false
 			return false
-					end
-				end
+		end
+	end
 
 	-- Adjust batch size based on frame time
 	adjustBatchSize()
@@ -555,46 +683,61 @@ end
 	return true -- Continue processing
 end
 
---- Replace the old pruneInvalidConnections with dynamic processing
+--- Apply proper connection cost analysis without removing connections
 local function pruneInvalidConnections(nodes)
-	-- Don't do expensive processing during initial setup
-	Log:Info("Starting optimized connection cleanup (expensive checks moved to background)")
+	Log:Info("Starting proper connection cost analysis (no connections removed)")
 
-	-- Quick pass: remove obvious invalid connections
-	local quickPruned = 0
+	-- Apply cost penalties to all connections using our proper accessibility logic
+	local processedConnections = 0
+	local penalizedConnections = 0
+
 	for nodeId, node in pairs(nodes) do
 		if node and node.c then
 			for dir, connectionDir in pairs(node.c) do
 				if connectionDir and connectionDir.connections then
-					local validConnections = {}
+					local updatedConnections = {}
 
 					for _, connection in pairs(connectionDir.connections) do
 						local targetNodeId = getConnectionNodeId(connection)
+						local currentCost = getConnectionCost(connection)
 						local targetNode = nodes[targetNodeId]
 
 						if targetNode then
-							local heightDiff = targetNode.pos.z - node.pos.z
-							-- Only remove obviously impossible connections (>72 unit jumps)
-							if heightDiff <= 72 then
-								table.insert(validConnections, connection)
+							-- Use our proper accessibility checking with expensive checks allowed
+							local isAccessible, costMultiplier = isNodeAccessible(node, targetNode, true)
+							local finalCost = currentCost * costMultiplier
+
+							-- Always keep connection, just adjust cost
+							if finalCost > 1 then
+								table.insert(updatedConnections, { node = targetNodeId, cost = finalCost })
 							else
-								quickPruned = quickPruned + 1
+								table.insert(updatedConnections, targetNodeId)
 							end
+
+							if costMultiplier > 1 then
+								penalizedConnections = penalizedConnections + 1
+							end
+							processedConnections = processedConnections + 1
 						else
-							quickPruned = quickPruned + 1
+							-- Only remove connections to non-existent nodes
+							Log:Debug("Removing connection to non-existent node %d", targetNodeId)
 						end
 					end
 
-					connectionDir.connections = validConnections
-					connectionDir.count = #validConnections
+					connectionDir.connections = updatedConnections
+					connectionDir.count = #updatedConnections
 				end
 			end
 		end
 	end
 
-	Log:Info("Quick cleanup complete: %d obviously invalid connections removed", quickPruned)
+	Log:Info(
+		"Connection analysis complete: %d processed, %d penalized, 0 removed",
+		processedConnections,
+		penalizedConnections
+	)
 
-	-- Initialize background processing for detailed connection validation
+	-- Initialize background processing for fine-tuning if enabled
 	if G.Menu.Main.CleanupConnections then
 		initializeConnectionProcessing(nodes)
 	end
@@ -1048,8 +1191,8 @@ local function connectPair(areaA, areaB)
 				link(pointA, pointB)
 				Log:Debug("Connected minor areas %d <-> %d (dist: %.1f)", areaA.id, areaB.id, distance)
 				return 1
-				end
 			end
+		end
 		return 0
 	end
 
@@ -1149,10 +1292,10 @@ local function buildHierarchicalStructure(processedAreas)
 			internalPoints = {}, -- Points inside this area
 			interAreaConnections = {}, -- Connections to other areas
 		}
-
+`
 		-- Categorize points as edge or internal
 		for _, point in pairs(data.points) do
-		if point.isEdge then
+			if point.isEdge then
 				table.insert(areaInfo.edgePoints, point)
 				-- Add to global edge point registry with area reference
 				G.Navigation.hierarchical.edgePoints[point.id .. "_" .. areaId] = {
@@ -1176,9 +1319,9 @@ local function buildHierarchicalStructure(processedAreas)
 						cost = neighbor.cost,
 					})
 				end
+			end
 		end
-	end
-	
+
 		G.Navigation.hierarchical.areas[areaId] = areaInfo
 		Log:Debug(
 			"Area %d: %d edge points, %d internal points, %d inter-area connections",
@@ -1233,9 +1376,9 @@ local function applyHeightPenaltiesToConnections(processedAreas)
 				else
 					-- Normal connection
 					table.insert(validNeighbors, neighbor)
+				end
 			end
-		end
-		
+
 			point.neighbors = validNeighbors
 		end
 	end
@@ -1328,8 +1471,8 @@ local function processSetupTick()
 				if SetupState.processedAreas[adjacentArea.id] then
 					local connections = connectPair(area, adjacentArea)
 					Log:Debug("Connected %d fine points between areas %d and %d", connections, areaId, adjacentArea.id)
+				end
 			end
-		end
 			processed = processed + 1
 		end
 
@@ -1452,7 +1595,7 @@ function Node.RemoveConnection(nodeA, nodeB)
 				if targetNodeId == nodeB.id then
 					table.remove(cDir.connections, i)
 					cDir.count = cDir.count - 1
-			break
+					break
 				end
 			end
 		end
@@ -1478,9 +1621,46 @@ function Node.AddCostToConnection(nodeA, nodeB, cost)
 				end
 			end
 		end
+	end
+end
+
+--- Add penalty to connection when pathfinding fails (adds 100 cost each failure)
+---@param nodeA table First node (source)
+---@param nodeB table Second node (destination)
+function Node.AddFailurePenalty(nodeA, nodeB)
+	if not nodeA or not nodeB then
+		return
+	end
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return
+	end
+
+	-- Find and update the connection with +100 penalty
+	for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
+		if cDir and cDir.connections then
+			for i, connection in pairs(cDir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				if targetNodeId == nodeB.id then
+					local currentCost = getConnectionCost(connection)
+					local newCost = currentCost + 100 -- Add 100 penalty each failure
+
+					cDir.connections[i] = { node = targetNodeId, cost = newCost }
+
+					Log:Debug(
+						"Added failure penalty to connection %d -> %d: %.1f -> %.1f",
+						nodeA.id,
+						nodeB.id,
+						currentCost,
+						newCost
+					)
+					return
+				end
+			end
 		end
 	end
-	
+end
+
 --- Get adjacent nodes with accessibility checks (expensive, for pathfinding)
 ---@param node table First node (source)
 ---@param nodes table All navigation nodes
@@ -1503,11 +1683,11 @@ function Node.GetAdjacentNodes(node, nodes)
 					-- Use centralized accessibility check (EXPENSIVE)
 					if isNodeAccessible(node, targetNode) then
 						table.insert(adjacent, targetNode)
-							end
-						end
 					end
 				end
 			end
+		end
+	end
 	return adjacent
 end
 
@@ -1646,9 +1826,9 @@ function Node.GetClosestAreaPoint(areaId, position)
 		if dist < minDist then
 			minDist = dist
 			closest = point
-			end
 		end
-		
+	end
+
 	return closest
 end
 
@@ -1684,10 +1864,10 @@ function Node.GetClosestEdgePoint(areaId, position)
 	if not G.Navigation.hierarchical or not G.Navigation.hierarchical.areas[areaId] then
 		return nil
 	end
-	
+
 	local areaInfo = G.Navigation.hierarchical.areas[areaId]
 	local closest, minDist = nil, math.huge
-	
+
 	for _, edgePoint in pairs(areaInfo.edgePoints) do
 		local dist = (edgePoint.pos - position):Length()
 		if dist < minDist then
@@ -1695,7 +1875,7 @@ function Node.GetClosestEdgePoint(areaId, position)
 			closest = edgePoint
 		end
 	end
-	
+
 	return closest
 end
 
@@ -1706,7 +1886,7 @@ function Node.GetInterAreaConnections(areaId)
 	if not G.Navigation.hierarchical or not G.Navigation.hierarchical.areas[areaId] then
 		return {}
 	end
-	
+
 	return G.Navigation.hierarchical.areas[areaId].interAreaConnections or {}
 end
 
