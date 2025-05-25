@@ -1428,9 +1428,22 @@ local function processSetupTick()
 
 		for i = startIdx, endIdx do
 			local areaId = areaIds[i]
+			local area = nodes[areaId]
+
+			-- Generate fine points for this area (this also sets area bounds)
+			local finePoints = Node.GenerateAreaPoints(areaId)
+
+			-- Ensure the area has its bounds properly cached for neighbourSide function
+			if not area.minX then
+				area.minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+				area.maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+				area.minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+				area.maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+			end
+
 			SetupState.processedAreas[areaId] = {
-				area = nodes[areaId],
-				points = Node.GenerateAreaPoints(areaId),
+				area = area,
+				points = finePoints,
 			}
 			processed = processed + 1
 		end
@@ -1442,13 +1455,14 @@ local function processSetupTick()
 		if SetupState.currentAreaIndex >= #areaIds then
 			SetupState.currentPhase = 2
 			SetupState.currentAreaIndex = 0
-			Log:Info("Phase 1 complete: Fine points generated for all areas")
+			Log:Info("Phase 1 complete: Fine points generated for all areas with proper bounds")
 		end
 
 		return true -- More work to do
 	elseif SetupState.currentPhase == 2 then
 		-- Phase 2: Connect fine points between adjacent areas (spread across ticks)
 		local processed = 0
+		local totalConnections = 0
 		local areaIds = {}
 		for id in pairs(SetupState.processedAreas) do
 			table.insert(areaIds, id)
@@ -1465,11 +1479,35 @@ local function processSetupTick()
 			-- Get actually adjacent areas using nav mesh connections (just nodes, no costs needed)
 			local adjacentAreas = Node.GetAdjacentNodesOnly(area, nodes)
 
+			Log:Debug("Area %d has %d adjacent areas to connect", areaId, #adjacentAreas)
+
 			for _, adjacentArea in ipairs(adjacentAreas) do
 				-- Only connect if the adjacent area was also processed
 				if SetupState.processedAreas[adjacentArea.id] then
+					-- Ensure both areas have their edgeSets for connectPair to work
+					if not area.edgeSets then
+						Log:Debug("Area %d missing edgeSets, regenerating fine points", areaId)
+						Node.GenerateAreaPoints(areaId) -- This should set edgeSets
+					end
+					if not adjacentArea.edgeSets then
+						Log:Debug("Adjacent area %d missing edgeSets, regenerating fine points", adjacentArea.id)
+						Node.GenerateAreaPoints(adjacentArea.id) -- This should set edgeSets
+					end
+
 					local connections = connectPair(area, adjacentArea)
-					Log:Debug("Connected %d fine points between areas %d and %d", connections, areaId, adjacentArea.id)
+					totalConnections = totalConnections + connections
+					if connections > 0 then
+						Log:Debug(
+							"Connected %d fine points between areas %d and %d",
+							connections,
+							areaId,
+							adjacentArea.id
+						)
+					else
+						Log:Debug("No connections possible between areas %d and %d", areaId, adjacentArea.id)
+					end
+				else
+					Log:Debug("Adjacent area %d not yet processed, skipping connection", adjacentArea.id)
 				end
 			end
 			processed = processed + 1
@@ -1478,15 +1516,16 @@ local function processSetupTick()
 		SetupState.currentAreaIndex = endIdx
 
 		Log:Debug(
-			"Phase 2: Processed connections for %d areas (%d/%d)",
+			"Phase 2: Processed connections for %d areas (%d/%d), created %d total connections",
 			processed,
 			SetupState.currentAreaIndex,
-			#areaIds
+			#areaIds,
+			totalConnections
 		)
 
 		if SetupState.currentAreaIndex >= #areaIds then
 			SetupState.currentPhase = 3
-			Log:Info("Phase 2 complete: Inter-area connections established")
+			Log:Info("Phase 2 complete: Inter-area connections established (%d total connections)", totalConnections)
 		end
 
 		return true -- More work to do

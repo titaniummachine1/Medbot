@@ -531,7 +531,7 @@ function Navigation.GetClosestNode(pos)
 	return Node.GetClosestNode(pos)
 end
 
--- Main pathfinding function
+-- Main pathfinding function - FIXED TO USE DUAL A* SYSTEM
 ---@param startNode Node
 ---@param goalNode Node
 function Navigation.FindPath(startNode, goalNode)
@@ -541,30 +541,100 @@ function Navigation.FindPath(startNode, goalNode)
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
-	-- Check if hierarchical pathfinding is enabled and available
+	-- DUAL A* SYSTEM: Use A* for both high-order (area-to-area) and sub-node (fine points) pathfinding
 	if G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
-		Log:Info("Using HPA* hierarchical pathfinding")
-		local hierarchicalPath =
-			AStar.HPAStarPath(startNode.pos, goalNode.pos, G.Navigation.nodes, G.Navigation.hierarchical)
-		if hierarchicalPath and #hierarchicalPath > 0 then
-			G.Navigation.path = hierarchicalPath
-			Log:Info("HPA* path found with %d fine points", #hierarchicalPath)
-			Navigation.pathFound = true
-			Navigation.pathFailed = false
-			return Navigation
-		else
-			Log:Warn("HPA* pathfinding failed, falling back to normal pathfinding")
+		Log:Info("Using Dual A* pathfinding (High-order A* + Sub-node A*)")
+
+		-- Phase 1: High-order A* pathfinding between areas
+		local areaPath = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+
+		if areaPath and #areaPath > 1 then
+			-- Phase 2: Sub-node A* pathfinding within areas using fine points
+			local finalPath = {}
+
+			for i = 1, #areaPath do
+				local currentArea = areaPath[i]
+				local areaInfo = G.Navigation.hierarchical.areas[currentArea.id]
+
+				if areaInfo and areaInfo.points and #areaInfo.points > 0 then
+					if i == 1 then
+						-- First area: add fine points from start to area exit
+						local startPoint = Node.GetClosestAreaPoint(currentArea.id, startNode.pos)
+						if #areaPath > 1 then
+							local nextArea = areaPath[i + 1]
+							local exitPoint = Navigation.FindBestAreaExitPoint(currentArea, nextArea, areaInfo)
+							if startPoint and exitPoint then
+								local subPath = AStar.AStarOnFinePoints(startPoint, exitPoint, areaInfo.points)
+								if subPath then
+									for _, point in ipairs(subPath) do
+										table.insert(finalPath, point)
+									end
+								end
+							end
+						else
+							-- Only one area, path to goal
+							local goalPoint = Node.GetClosestAreaPoint(currentArea.id, goalNode.pos)
+							if startPoint and goalPoint then
+								local subPath = AStar.AStarOnFinePoints(startPoint, goalPoint, areaInfo.points)
+								if subPath then
+									for _, point in ipairs(subPath) do
+										table.insert(finalPath, point)
+									end
+								end
+							end
+						end
+					elseif i == #areaPath then
+						-- Last area: add fine points from area entry to goal
+						local goalPoint = Node.GetClosestAreaPoint(currentArea.id, goalNode.pos)
+						local prevArea = areaPath[i - 1]
+						local entryPoint = Navigation.FindBestAreaEntryPoint(currentArea, prevArea, areaInfo)
+						if entryPoint and goalPoint then
+							local subPath = AStar.AStarOnFinePoints(entryPoint, goalPoint, areaInfo.points)
+							if subPath then
+								for _, point in ipairs(subPath) do
+									table.insert(finalPath, point)
+								end
+							end
+						end
+					else
+						-- Middle areas: path from entry to exit using fine points
+						local prevArea = areaPath[i - 1]
+						local nextArea = areaPath[i + 1]
+						local entryPoint = Navigation.FindBestAreaEntryPoint(currentArea, prevArea, areaInfo)
+						local exitPoint = Navigation.FindBestAreaExitPoint(currentArea, nextArea, areaInfo)
+						if entryPoint and exitPoint then
+							local subPath = AStar.AStarOnFinePoints(entryPoint, exitPoint, areaInfo.points)
+							if subPath then
+								for _, point in ipairs(subPath) do
+									table.insert(finalPath, point)
+								end
+							end
+						end
+					end
+				else
+					-- No fine points available, use area center as fallback
+					table.insert(finalPath, currentArea)
+				end
+			end
+
+			if #finalPath > 0 then
+				G.Navigation.path = finalPath
+				Log:Info("Dual A* path found: %d areas, %d fine points", #areaPath, #finalPath)
+				Navigation.pathFound = true
+				Navigation.pathFailed = false
+				return Navigation
+			end
 		end
+
+		Log:Warn("Dual A* pathfinding failed, falling back to simple A*")
 	end
 
-	-- Use simple adjacent nodes function for faster pathfinding (validation done at setup)
-	if horizontalDistance <= 100 and verticalDistance <= 18 then --attempt to avoid work
-		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
-	elseif
-		(horizontalDistance <= 700 and verticalDistance <= 18) or Navigation.isWalkable(startNode.pos, goalNode.pos)
-	then --didnt work try doing less work
-		G.Navigation.path = AStar.GBFSPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
-	else --damn it then do it propertly at least
+	-- Fallback: Simple A* pathfinding on main nodes only
+	if horizontalDistance <= 100 and verticalDistance <= 18 then
+		-- Short distance: direct A*
+		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+	else
+		-- Long distance: full A* with connection costs
 		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 	end
 
@@ -574,7 +644,7 @@ function Navigation.FindPath(startNode, goalNode)
 		Navigation.pathFailed = true
 		Navigation.pathFound = false
 	else
-		Log:Info("Path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
+		Log:Info("Simple A* path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
 		Navigation.pathFound = true
 		Navigation.pathFailed = false
 	end
@@ -637,6 +707,48 @@ function Navigation.GetInternalPath(startPos, endPos, maxDistance)
 	end
 
 	return nil -- No internal path available
+end
+
+-- Find the best exit point from an area towards another area
+function Navigation.FindBestAreaExitPoint(currentArea, nextArea, areaInfo)
+	if not areaInfo or not areaInfo.edgePoints or #areaInfo.edgePoints == 0 then
+		return nil
+	end
+
+	local bestPoint = nil
+	local minDistance = math.huge
+
+	-- Find edge point closest to the next area
+	for _, edgePoint in ipairs(areaInfo.edgePoints) do
+		local distance = (edgePoint.pos - nextArea.pos):Length()
+		if distance < minDistance then
+			minDistance = distance
+			bestPoint = edgePoint
+		end
+	end
+
+	return bestPoint
+end
+
+-- Find the best entry point into an area from another area
+function Navigation.FindBestAreaEntryPoint(currentArea, prevArea, areaInfo)
+	if not areaInfo or not areaInfo.edgePoints or #areaInfo.edgePoints == 0 then
+		return nil
+	end
+
+	local bestPoint = nil
+	local minDistance = math.huge
+
+	-- Find edge point closest to the previous area
+	for _, edgePoint in ipairs(areaInfo.edgePoints) do
+		local distance = (edgePoint.pos - prevArea.pos):Length()
+		if distance < minDistance then
+			minDistance = distance
+			bestPoint = edgePoint
+		end
+	end
+
+	return bestPoint
 end
 
 return Navigation

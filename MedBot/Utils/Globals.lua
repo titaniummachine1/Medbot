@@ -57,6 +57,13 @@ G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
 G.BotIsMoving = false -- Track if bot is actively moving
 G.BotMovementDirection = Vector3(0, 0, 0) -- Bot's intended movement direction
 
+-- Memory management and cache tracking
+G.Cache = {
+	lastCleanup = 0,
+	cleanupInterval = 2000, -- Clean up every 2000 ticks (~30 seconds)
+	maxCacheSize = 1000, -- Maximum number of cached items
+}
+
 G.Tasks = {
 	None = 0,
 	Objective = 1,
@@ -82,5 +89,54 @@ G.States = {
 }
 
 G.currentState = nil
+
+-- Function to clean up memory and caches
+function G.CleanupMemory()
+	local currentTick = globals.TickCount()
+	if currentTick - G.Cache.lastCleanup < G.Cache.cleanupInterval then
+		return -- Too soon to cleanup
+	end
+
+	-- Clear old cached fine points if we have too many areas cached
+	if G.Navigation.nodes then
+		local cachedCount = 0
+		local areasToClean = {}
+
+		for areaId, area in pairs(G.Navigation.nodes) do
+			if area.finePoints then
+				cachedCount = cachedCount + 1
+				if cachedCount > G.Cache.maxCacheSize then
+					table.insert(areasToClean, areaId)
+				end
+			end
+		end
+
+		-- Clear oldest cached fine points
+		for _, areaId in ipairs(areasToClean) do
+			if G.Navigation.nodes[areaId] then
+				G.Navigation.nodes[areaId].finePoints = nil
+			end
+		end
+
+		if #areasToClean > 0 then
+			print(string.format("Cleaned up %d cached fine point areas", #areasToClean))
+		end
+	end
+
+	-- Clear unused hierarchical data if pathfinding is disabled
+	if not G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
+		G.Navigation.hierarchical = nil
+		print("Cleared hierarchical data (not in use)")
+	end
+
+	-- Force garbage collection if memory usage is high
+	local memUsage = collectgarbage("count")
+	if memUsage > 512 * 1024 then -- More than 512MB
+		collectgarbage("collect")
+		print(string.format("Force GC: %.2f MB -> %.2f MB", memUsage / 1024, collectgarbage("count") / 1024))
+	end
+
+	G.Cache.lastCleanup = currentTick
+end
 
 return G

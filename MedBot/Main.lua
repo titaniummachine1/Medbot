@@ -457,6 +457,9 @@ local function OnCreateMove(userCmd)
 	G.pLocal.flags = pLocal:GetPropInt("m_fFlags")
 	G.pLocal.Origin = pLocal:GetAbsOrigin()
 
+	-- Regular memory cleanup to prevent leaks
+	G.CleanupMemory()
+
 	if handleUserInput(userCmd) then
 		G.BotIsMoving = false -- Clear bot movement state when user takes control
 		return
