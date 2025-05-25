@@ -66,6 +66,7 @@ end
 
 -- Function to handle the IDLE state
 function handleIdleState()
+	G.BotIsMoving = false -- Clear movement state when idle
 	local currentTask = Common.GetHighestPriorityTask()
 	if not currentTask then
 		return
@@ -127,6 +128,12 @@ function handleMovingState(userCmd)
 		G.currentState = G.States.IDLE
 		return
 	end
+
+	-- Store the intended movement direction for SmartJump to use
+	local LocalOrigin = G.pLocal.Origin
+	local direction = currentNode.pos - LocalOrigin
+	G.BotMovementDirection = direction:Length() > 0 and (direction / direction:Length()) or Vector3(0, 0, 0)
+	G.BotIsMoving = true
 
 	moveTowardsNode(userCmd, currentNode)
 
@@ -387,12 +394,22 @@ function moveTowardsNode(userCmd, node)
 			end
 		end
 
+		-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
+		local originalButtons = userCmd.buttons
+
 		-- Simple movement without complex optimizations
 		Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+
+		-- Preserve SmartJump button inputs (jump and duck commands)
+		-- WalkTo might clear these, so we need to restore them
+		local smartJumpButtons = originalButtons & (IN_JUMP | IN_DUCK)
+		if smartJumpButtons ~= 0 then
+			userCmd:SetButtons(userCmd.buttons | smartJumpButtons)
+		end
+
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-		-- SmartJump runs independently via its own callback, no need to call it here
-		-- The standalone SmartJump system will handle all jumping automatically
+		-- SmartJump runs independently via its own callback, but we preserve its button inputs above
 
 		-- Simple stuck detection and repathing
 		if G.Navigation.currentNodeTicks > 264 then
@@ -432,6 +449,7 @@ local function OnCreateMove(userCmd)
 	-- If bot is disabled via menu, do nothing
 	if not G.Menu.Main.Enable then
 		Navigation.ClearPath()
+		G.BotIsMoving = false -- Clear bot movement state when disabled
 		return
 	end
 
@@ -440,6 +458,7 @@ local function OnCreateMove(userCmd)
 	G.pLocal.Origin = pLocal:GetAbsOrigin()
 
 	if handleUserInput(userCmd) then
+		G.BotIsMoving = false -- Clear bot movement state when user takes control
 		return
 	end --if user is walking
 
@@ -475,11 +494,12 @@ local function OnGameEvent(event)
 	end
 end
 
-callbacks.Unregister("CreateMove", "MedBot.CreateMove")
+-- Ensure SmartJump callback runs BEFORE MedBot's callback by using a name that comes after alphabetically
+callbacks.Unregister("CreateMove", "ZMedBot.CreateMove") -- Z prefix ensures it runs after SmartJump
 callbacks.Unregister("DrawModel", "MedBot.DrawModel")
 callbacks.Unregister("FireGameEvent", "MedBot.FireGameEvent")
 
-callbacks.Register("CreateMove", "MedBot.CreateMove", OnCreateMove)
+callbacks.Register("CreateMove", "ZMedBot.CreateMove", OnCreateMove) -- Z prefix ensures it runs after SmartJump
 callbacks.Register("DrawModel", "MedBot.DrawModel", OnDrawModel)
 callbacks.Register("FireGameEvent", "MedBot.FireGameEvent", OnGameEvent)
 

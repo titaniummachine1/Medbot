@@ -51,6 +51,11 @@ G.ShouldJump = false -- Set by SmartJump module when jump should be performed
 G.LastSmartJumpAttempt = 0 -- Track last time SmartJump was attempted
 G.LastEmergencyJump = 0 -- Track last emergency jump time
 G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
+G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
+
+-- Bot movement tracking (for SmartJump integration)
+G.BotIsMoving = false -- Track if bot is actively moving
+G.BotMovementDirection = Vector3(0, 0, 0) -- Bot's intended movement direction
 
 G.Tasks = {
 	None = 0,

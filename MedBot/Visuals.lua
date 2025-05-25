@@ -265,11 +265,11 @@ local function OnDraw()
 	-- Draw fine-grained points within areas (hierarchical pathfinding)
 	if G.Menu.Visuals.showFinePoints and G.Menu.Main.UseHierarchicalPathfinding then
 		local Node = require("MedBot.Modules.Node")
-		
+
 		-- Track drawn inter-area connections to avoid duplicates
 		local drawnInterConnections = {}
 		local drawnIntraConnections = {}
-		
+
 		for id, entry in pairs(visibleNodes) do
 			local points = Node.GetAreaPoints(id)
 			if points then
@@ -282,26 +282,54 @@ local function OnDraw()
 							if neighborScreenPos then
 								if neighbor.isInterArea and G.Menu.Visuals.showInterConnections then
 									-- Orange for inter-area connections
-									local connectionKey = string.format("%d_%d-%d_%d", 
-										point.parentArea, point.id, neighbor.point.parentArea, neighbor.point.id)
+									local connectionKey = string.format(
+										"%d_%d-%d_%d",
+										point.parentArea,
+										point.id,
+										neighbor.point.parentArea,
+										neighbor.point.id
+									)
 									if not drawnInterConnections[connectionKey] then
 										draw.Color(255, 165, 0, 180) -- Orange for inter-area connections
-										draw.Line(screenPos[1], screenPos[2], neighborScreenPos[1], neighborScreenPos[2])
+										draw.Line(
+											screenPos[1],
+											screenPos[2],
+											neighborScreenPos[1],
+											neighborScreenPos[2]
+										)
 										drawnInterConnections[connectionKey] = true
 									end
 								elseif not neighbor.isInterArea then
 									-- Intra-area connections with different colors based on type
-									local connectionKey = string.format("%d_%d-%d_%d", 
-										math.min(point.id, neighbor.point.id), point.parentArea,
-										math.max(point.id, neighbor.point.id), neighbor.point.parentArea)
+									local connectionKey = string.format(
+										"%d_%d-%d_%d",
+										math.min(point.id, neighbor.point.id),
+										point.parentArea,
+										math.max(point.id, neighbor.point.id),
+										neighbor.point.parentArea
+									)
 									if not drawnIntraConnections[connectionKey] then
-										if point.isEdge and neighbor.point.isEdge and G.Menu.Visuals.showEdgeConnections then
+										if
+											point.isEdge
+											and neighbor.point.isEdge
+											and G.Menu.Visuals.showEdgeConnections
+										then
 											draw.Color(0, 150, 255, 140) -- Bright blue for edge-to-edge connections
-											draw.Line(screenPos[1], screenPos[2], neighborScreenPos[1], neighborScreenPos[2])
+											draw.Line(
+												screenPos[1],
+												screenPos[2],
+												neighborScreenPos[1],
+												neighborScreenPos[2]
+											)
 											drawnIntraConnections[connectionKey] = true
 										elseif G.Menu.Visuals.showIntraConnections then
 											draw.Color(0, 100, 200, 60) -- Blue for regular intra-area connections
-											draw.Line(screenPos[1], screenPos[2], neighborScreenPos[1], neighborScreenPos[2])
+											draw.Line(
+												screenPos[1],
+												screenPos[2],
+												neighborScreenPos[1],
+												neighborScreenPos[2]
+											)
 											drawnIntraConnections[connectionKey] = true
 										end
 									end
@@ -310,7 +338,7 @@ local function OnDraw()
 						end
 					end
 				end
-				
+
 				-- Second pass: draw points (so they appear on top of lines)
 				for _, point in ipairs(points) do
 					local screenPos = client.WorldToScreen(point.pos)
@@ -327,7 +355,7 @@ local function OnDraw()
 				end
 			end
 		end
-		
+
 		-- Show fine point statistics for areas with points
 		local finePointStats = {}
 		for id, entry in pairs(visibleNodes) do
@@ -358,27 +386,34 @@ local function OnDraw()
 					edgePoints = edgeCount,
 					interConnections = interConnections,
 					intraConnections = intraConnections,
-					isolatedPoints = isolatedPoints
+					isolatedPoints = isolatedPoints,
 				})
 			end
 		end
-		
+
 		-- Display statistics on screen
 		if #finePointStats > 0 then
 			draw.Color(255, 255, 255, 255)
 			local statY = currentY + 40
 			draw.Text(20, statY, string.format("Fine Points: %d areas with detailed grids", #finePointStats))
 			statY = statY + 15
-			
+
 			-- Show first few areas with stats
 			for i = 1, math.min(3, #finePointStats) do
 				local stat = finePointStats[i]
-				local text = string.format("  Area %d: %d points (%d edge, %d intra, %d inter, %d isolated)", 
-					stat.id, stat.totalPoints, stat.edgePoints, stat.intraConnections, stat.interConnections, stat.isolatedPoints)
+				local text = string.format(
+					"  Area %d: %d points (%d edge, %d intra, %d inter, %d isolated)",
+					stat.id,
+					stat.totalPoints,
+					stat.edgePoints,
+					stat.intraConnections,
+					stat.interConnections,
+					stat.isolatedPoints
+				)
 				draw.Text(20, statY, text)
 				statY = statY + 12
 			end
-			
+
 			if #finePointStats > 3 then
 				draw.Text(20, statY, string.format("  ... and %d more areas", #finePointStats - 3))
 			end

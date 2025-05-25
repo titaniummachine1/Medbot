@@ -114,7 +114,7 @@ local function GetJumpPeak(horizontalVelocityVector, startPos)
 	return peakPosVector, directionToPeak
 end
 
--- Smart velocity calculation (user's exact logic)
+-- Smart velocity calculation (user's exact logic + bot movement support)
 local function SmartVelocity(cmd, pLocal)
 	if not pLocal then
 		return Vector3(0, 0, 0)
@@ -122,6 +122,23 @@ local function SmartVelocity(cmd, pLocal)
 
 	-- Calculate the player's movement direction
 	local moveDir = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
+
+	-- If the bot is moving and there's no manual input, use the bot's movement direction
+	if moveDir:Length() == 0 and G.BotIsMoving and G.BotMovementDirection then
+		-- Convert bot's world movement direction to local movement commands
+		local viewAngles = engine.GetViewAngles()
+		local forward = viewAngles:Forward()
+		local right = viewAngles:Right()
+
+		-- Project bot movement direction onto view forward/right vectors
+		local forwardComponent = G.BotMovementDirection:Dot(forward)
+		local rightComponent = G.BotMovementDirection:Dot(right)
+
+		-- Create movement vector in command space (note: sidemove is negated in the original code)
+		moveDir = Vector3(forwardComponent * 450, -rightComponent * 450, 0) -- 450 is typical max speed
+		Log:Debug("SmartJump: Using bot movement direction (%.1f, %.1f)", forwardComponent, rightComponent)
+	end
+
 	local viewAngles = engine.GetViewAngles()
 	local rotatedMoveDir = RotateVectorByYaw(moveDir, viewAngles.yaw)
 	local normalizedMoveDir = NormalizeVector(rotatedMoveDir)
