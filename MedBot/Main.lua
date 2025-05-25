@@ -140,24 +140,12 @@ end
 function handleStuckState(userCmd)
 	local currentTick = globals.TickCount()
 
-	-- Use SmartJump for intelligent obstacle detection
-	SmartJump.Main(userCmd)
-
-	-- Apply jump if SmartJump determined it's needed
-	if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
-		userCmd:SetButtons(userCmd.buttons | IN_JUMP)
-		userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
-		Log:Debug("SmartJump triggered in stuck state")
-	end
-
-	-- Enhanced emergency jump using SmartJump's intelligence
+	-- SmartJump runs independently, just request emergency jump when needed
+	-- Request emergency jump through SmartJump system (don't apply directly)
 	if SmartJump.ShouldEmergencyJump(currentTick, G.Navigation.currentNodeTicks) then
-		if not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
-			userCmd:SetButtons(userCmd.buttons & ~IN_DUCK)
-			userCmd:SetButtons(userCmd.buttons & ~IN_JUMP)
-			userCmd:SetButtons(userCmd.buttons | IN_JUMP)
-			Log:Info("Emergency jump in stuck state - SmartJump conditions met")
-		end
+		-- Set flag for SmartJump to handle emergency jump
+		G.RequestEmergencyJump = true
+		Log:Info("Emergency jump requested - SmartJump will handle it")
 	end
 
 	if G.Navigation.currentNodeTicks > 264 then
@@ -403,12 +391,8 @@ function moveTowardsNode(userCmd, node)
 		Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-		-- Use SmartJump for jumping
-		SmartJump.Main(userCmd)
-		if G.ShouldJump and not G.pLocal.entity:InCond(TFCond_Zoomed) and (G.pLocal.flags & FL_ONGROUND) ~= 0 then
-			userCmd:SetButtons(userCmd.buttons | IN_JUMP)
-			userCmd:SetButtons(userCmd.buttons | IN_DUCK) -- Duck jump for 72 unit height
-		end
+		-- SmartJump runs independently via its own callback, no need to call it here
+		-- The standalone SmartJump system will handle all jumping automatically
 
 		-- Simple stuck detection and repathing
 		if G.Navigation.currentNodeTicks > 264 then

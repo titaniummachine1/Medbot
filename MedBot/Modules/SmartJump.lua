@@ -1,197 +1,364 @@
----@type boolean, lnxLib
-local libLoaded, lnxLib = pcall(require, "LNXlib")
-assert(libLoaded, "LNXlib not found, please install it!")
-
--- Use MedBot's globals instead of Movement.Globals
-local G = require("MedBot.Utils.Globals")
-
+---@diagnostic disable: duplicate-set-field, undefined-field
+---@class SmartJump
 local SmartJump = {}
 
-local Math = lnxLib.Utils.Math
-local Prediction = lnxLib.TF2.Prediction
-local WPlayer = lnxLib.TF2.WPlayer
+local Common = require("MedBot.Common")
+local G = require("MedBot.Utils.Globals")
 
--- Internal variables (for debugging or auxiliary calculations)
-local lastAngle = nil ---@type number
-local predictedPosition = Vector3(0, 0, 0)
-local jumpPeakPosition = Vector3(0, 0, 0)
+local Log = Common.Log.new("SmartJump")
+Log.Level = 0 -- Enable debug logging
 
 -- Constants
-local JUMP_FRACTION = 0.75 -- Fraction of the jump to consider for landing
-local HITBOX_MIN = Vector3(-23.99, -23.99, 0)
-local HITBOX_MAX = Vector3(23.99, 23.99, 62) -- always assume ducking
-local MAX_JUMP_HEIGHT = Vector3(0, 0, 72) -- Maximum jump height vector
-local STEP_HEIGHT = Vector3(0, 0, 18) -- Step height (simulate stepping up)
-local MAX_WALKABLE_ANGLE = 45 -- Maximum angle considered walkable
 local GRAVITY = 800 -- Gravity per second squared
 local JUMP_FORCE = 277 -- Initial vertical boost for a duck jump
+local MAX_JUMP_HEIGHT = Vector3(0, 0, 72) -- Maximum jump height vector
+local HITBOX_MIN = Vector3(-23.99, -23.99, 0)
+local HITBOX_MAX = Vector3(23.99, 23.99, 82) -- Default hitbox (standing)
+local MAX_WALKABLE_ANGLE = 45 -- Maximum angle considered walkable
 
--- Rotates a vector by a yaw (in degrees)
+-- State Definitions (matching user's exact logic)
+local STATE_IDLE = "STATE_IDLE"
+local STATE_PREPARE_JUMP = "STATE_PREPARE_JUMP"
+local STATE_CTAP = "STATE_CTAP"
+local STATE_ASCENDING = "STATE_ASCENDING"
+local STATE_DESCENDING = "STATE_DESCENDING"
+
+-- Initialize SmartJump's own menu settings and state
+if not G.Menu.SmartJump then
+	G.Menu.SmartJump = {}
+end
+if G.Menu.SmartJump.Enable == nil then
+	G.Menu.SmartJump.Enable = true -- Default to enabled
+end
+
+-- Initialize jump state
+if not G.SmartJump then
+	G.SmartJump = {}
+end
+if not G.SmartJump.jumpState then
+	G.SmartJump.jumpState = STATE_IDLE
+end
+
+-- Initialize visual debug variables
+G.SmartJump.PredPos = Vector3(0, 0, 0)
+G.SmartJump.JumpPeekPos = Vector3(0, 0, 0)
+G.SmartJump.lastAngle = nil
+
+-- Function to normalize a vector
+local function NormalizeVector(vector)
+	local length = vector:Length()
+	if length == 0 then
+		return vector
+	end
+	return Vector3(vector.x / length, vector.y / length, vector.z / length)
+end
+
+-- Rotate vector by yaw angle
 local function RotateVectorByYaw(vector, yaw)
 	local rad = math.rad(yaw)
-	local cosYaw, sinYaw = math.cos(rad), math.sin(rad)
-	return Vector3(cosYaw * vector.x - sinYaw * vector.y, sinYaw * vector.x + cosYaw * vector.y, vector.z)
+	local cos, sin = math.cos(rad), math.sin(rad)
+	return Vector3(cos * vector.x - sin * vector.y, sin * vector.x + cos * vector.y, vector.z)
 end
 
--- Normalizes a vector (if nonzero)
-local function Normalize(vec)
-	local len = vec:Length()
-	if len == 0 then
-		return vec
-	end
-	return vec / len
-end
-
--- Returns whether a surface is walkable (its normal's angle is below MAX_WALKABLE_ANGLE)
-local function IsSurfaceWalkable(normal)
-	local upVector = Vector3(0, 0, 1)
-	local angle = math.deg(math.acos(normal:Dot(upVector)))
+-- Function to check if surface is walkable
+local function isSurfaceWalkable(normal)
+	local vUp = Vector3(0, 0, 1)
+	local angle = math.deg(math.acos(normal:Dot(vUp)))
 	return angle < MAX_WALKABLE_ANGLE
 end
 
--- (Optional) Calculates a strafe angle delta.
----@param player Entity?
+-- Helper function to check if the player is on the ground
+local function isPlayerOnGround(player)
+	local pFlags = player:GetPropInt("m_fFlags")
+	return (pFlags & FL_ONGROUND) == FL_ONGROUND
+end
+
+-- Helper function to check if the player is ducking
+local function isPlayerDucking(player)
+	return (player:GetPropInt("m_fFlags") & FL_DUCKING) == FL_DUCKING
+end
+
+-- Calculate strafe angle (matching user's logic)
 local function CalcStrafe(player)
 	if not player then
 		return 0
 	end
-	local velocityAngle = player:EstimateAbsVelocity():Angles()
+
+	local angle = player:EstimateAbsVelocity():Angles()
 	local delta = 0
-	if lastAngle then
-		delta = Math.NormalizeAngle(velocityAngle.y - lastAngle)
+	if G.SmartJump.lastAngle then
+		delta = angle.y - G.SmartJump.lastAngle
+		delta = Common.Math.NormalizeAngle(delta)
 	end
-	lastAngle = velocityAngle.y
+	G.SmartJump.lastAngle = angle.y
 	return delta
 end
 
--- Computes the peak jump position and its direction based on horizontal velocity.
-local function GetJumpPeak(horizontalVelocity, startPos)
-	local timeToPeak = JUMP_FORCE / GRAVITY -- time to reach peak height
-	local horizontalSpeed = horizontalVelocity:Length() -- horizontal speed
-	local distanceTravelled = horizontalSpeed * timeToPeak
-	local peakPosition = startPos + Normalize(horizontalVelocity) * distanceTravelled
-	local directionToPeak = Normalize(peakPosition - startPos)
-	return peakPosition, directionToPeak
+-- Function to calculate the jump peak (user's exact logic)
+local function GetJumpPeak(horizontalVelocityVector, startPos)
+	-- Calculate the time to reach the jump peak
+	local timeToPeak = JUMP_FORCE / GRAVITY
+
+	-- Calculate horizontal velocity length
+	local horizontalVelocity = horizontalVelocityVector:Length()
+
+	-- Calculate distance traveled horizontally during time to peak
+	local distanceTravelled = horizontalVelocity * timeToPeak
+
+	-- Calculate peak position vector
+	local peakPosVector = startPos + NormalizeVector(horizontalVelocityVector) * distanceTravelled
+
+	-- Calculate direction to peak position
+	local directionToPeak = NormalizeVector(peakPosVector - startPos)
+
+	return peakPosVector, directionToPeak
 end
 
--- Adjusts the velocity based on the movement input in cmd.
-local function AdjustVelocity(cmd)
-	if not G.pLocal.entity then
+-- Smart velocity calculation (user's exact logic)
+local function SmartVelocity(cmd, pLocal)
+	if not pLocal then
 		return Vector3(0, 0, 0)
 	end
 
-	local moveInput = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
-	if moveInput:Length() == 0 then
-		return G.pLocal.entity:EstimateAbsVelocity()
-	end
-
+	-- Calculate the player's movement direction
+	local moveDir = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
 	local viewAngles = engine.GetViewAngles()
-	local rotatedMoveDir = RotateVectorByYaw(moveInput, viewAngles.yaw)
-	local normalizedMoveDir = Normalize(rotatedMoveDir)
+	local rotatedMoveDir = RotateVectorByYaw(moveDir, viewAngles.yaw)
+	local normalizedMoveDir = NormalizeVector(rotatedMoveDir)
+	local vel = pLocal:EstimateAbsVelocity()
 
-	local velocity = G.pLocal.entity:EstimateAbsVelocity()
-	local intendedSpeed = math.max(10, velocity:Length())
-
-	-- Check if on ground using MedBot's flag system
-	local onGround = (G.pLocal.flags & FL_ONGROUND) ~= 0
-	if onGround then
-		velocity = normalizedMoveDir * intendedSpeed
+	-- Normalize moveDir if its length isn't 0, then ensure velocity matches the intended movement direction
+	if moveDir:Length() > 0 then
+		local onGround = isPlayerOnGround(pLocal)
+		if onGround then
+			-- Calculate the intended speed based on input magnitude
+			local intendedSpeed = math.max(1, vel:Length()) -- Ensure the speed is at least 1
+			-- Adjust the player's velocity to match the intended direction and speed
+			vel = normalizedMoveDir * intendedSpeed
+		end
+	else
+		-- If there's no input, return zero velocity
+		vel = Vector3(0, 0, 0)
 	end
-
-	return velocity
+	return vel
 end
 
--- Enhanced smart jump logic with obstacle detection and timing
--- When called from MedBot's OnCreateMove it uses G.pLocal, G.pLocal.flags, etc.
--- It returns true if the conditions for a jump are met and sets G.ShouldJump accordingly.
+-- Smart jump detection logic (user's exact logic)
+local function SmartJumpDetection(cmd, pLocal)
+	if not pLocal then
+		return false
+	end
+
+	-- Gather input and player data
+	local pLocalPos = pLocal:GetAbsOrigin()
+	local velVec = SmartVelocity(cmd, pLocal)
+	local horizontalVel = velVec:Length()
+	if horizontalVel <= 1 then
+		return false -- no meaningful movement
+	end
+	local horizontalDir = NormalizeVector(velVec)
+	local onGround = isPlayerOnGround(pLocal)
+	if not onGround then
+		return false
+	end
+
+	-- Adjust hitbox based on ducking state
+	local ducking = isPlayerDucking(pLocal)
+	local hitboxMax = ducking and Vector3(23.99, 23.99, 62) or HITBOX_MAX
+
+	-- First pass: detect obstacle using full jump range
+	local peakTime = JUMP_FORCE / GRAVITY
+	local peakDist = horizontalVel * peakTime
+	local peakPos = pLocalPos + horizontalDir * peakDist
+	local trace1 = engine.TraceHull(pLocalPos, peakPos, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
+	if trace1.fraction >= 1 then
+		return false -- no obstacle to jump
+	end
+
+	-- Measure obstacle height
+	local obstaclePoint = trace1.endpos
+	local obstacleHeight = obstaclePoint.z - pLocalPos.z
+
+	-- Compute time to reach obstacle height (ascending)
+	local V0 = JUMP_FORCE
+	local disc = V0 * V0 - 2 * GRAVITY * obstacleHeight
+	if disc <= 0 then
+		return false -- obstacle too high to reach
+	end
+	local timeToHeight = (V0 - math.sqrt(disc)) / GRAVITY
+
+	-- Calculate minimal horizontal distance to jump ahead
+	local neededDist = horizontalVel * timeToHeight
+	local refinedPeek = pLocalPos + horizontalDir * neededDist
+	G.SmartJump.JumpPeekPos = refinedPeek
+
+	-- Second pass: prepare jump clearance
+	local startUp = obstaclePoint + MAX_JUMP_HEIGHT
+	local forwardPoint = startUp + horizontalDir * 1
+	local forwardTrace = engine.TraceHull(startUp, forwardPoint, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
+	G.SmartJump.JumpPeekPos = forwardTrace.endpos
+
+	-- Trace down to check landing
+	local traceDown = engine.TraceHull(
+		G.SmartJump.JumpPeekPos,
+		G.SmartJump.JumpPeekPos - MAX_JUMP_HEIGHT,
+		HITBOX_MIN,
+		hitboxMax,
+		MASK_PLAYERSOLID_BRUSHONLY
+	)
+	G.SmartJump.JumpPeekPos = traceDown.endpos
+
+	if traceDown.fraction > 0 and traceDown.fraction < 0.75 then
+		local normal = traceDown.plane
+		if isSurfaceWalkable(normal) then
+			return true
+		end
+	end
+	return false
+end
+
+-- Main SmartJump execution with state machine (user's exact logic with improvements)
 function SmartJump.Main(cmd)
+	local pLocal = entities.GetLocalPlayer()
+
+	if not pLocal or not pLocal:IsAlive() then
+		-- Reset state when player is invalid
+		G.SmartJump.jumpState = STATE_IDLE
+		G.ShouldJump = false
+		G.ObstacleDetected = false
+		G.RequestEmergencyJump = false
+		return false
+	end
+
+	-- Check SmartJump's own enable setting
+	if not G.Menu.SmartJump.Enable then
+		G.SmartJump.jumpState = STATE_IDLE
+		G.ShouldJump = false
+		G.ObstacleDetected = false
+		G.RequestEmergencyJump = false
+		return false
+	end
+
+	-- Cache player state
+	local onGround = isPlayerOnGround(pLocal)
+	local ducking = isPlayerDucking(pLocal)
+	local viewOffset = pLocal:GetPropVector("m_vecViewOffset[0]").z
+
+	-- Handle emergency jump request from stuck detection
 	local shouldJump = false
-	local currentTick = globals.TickCount()
-
-	if not G.pLocal.entity then
-		G.ShouldJump = false
-		G.ObstacleDetected = false
-		return false
+	if G.RequestEmergencyJump then
+		shouldJump = true
+		G.RequestEmergencyJump = false
+		G.LastSmartJumpAttempt = globals.TickCount()
+		G.SmartJump.jumpState = STATE_PREPARE_JUMP
+		Log:Info("SmartJump: Processing emergency jump request")
 	end
 
-	-- Check if smart jump is enabled in MedBot menu
-	if G.Menu.Movement.Smart_Jump == false then
-		G.ShouldJump = false
-		G.ObstacleDetected = false
-		return false
+	-- Check if the player is on the ground and fully crouched, handle edge case
+	if onGround and (viewOffset < 65 or ducking) and G.SmartJump.jumpState ~= STATE_CTAP then
+		G.SmartJump.jumpState = STATE_CTAP -- Transition to STATE_CTAP to resolve logical error
+		Log:Debug("SmartJump: Edge case - player crouched on ground, transitioning to CTAP")
 	end
 
-	-- Use MedBot's ground detection
-	local onGround = (G.pLocal.flags & FL_ONGROUND) ~= 0
+	-- State machine for CTAP and jumping (user's exact logic)
+	if G.SmartJump.jumpState == STATE_IDLE then
+		-- STATE_IDLE: Waiting for jump commands
+		local smartJumpDetected = SmartJumpDetection(cmd, pLocal)
 
-	if onGround then
-		local adjustedVelocity = AdjustVelocity(cmd)
-		local playerPosition = G.pLocal.entity:GetAbsOrigin()
-		local jumpPeakPos, jumpDirection = GetJumpPeak(adjustedVelocity, playerPosition)
-		jumpPeakPosition = jumpPeakPos -- update (for debugging/visuals)
-
-		local horizontalDistanceToPeak = (jumpPeakPos - playerPosition):Length2D()
-		local traceStartPos = playerPosition + STEP_HEIGHT
-		local traceEndPos = traceStartPos + (jumpDirection * horizontalDistanceToPeak)
-
-		local forwardTrace =
-			engine.TraceHull(traceStartPos, traceEndPos, HITBOX_MIN, HITBOX_MAX, MASK_PLAYERSOLID_BRUSHONLY)
-		predictedPosition = forwardTrace.endpos
-
-		-- Detect obstacle presence
-		local obstacleDetected = forwardTrace.fraction < 1
-		G.ObstacleDetected = obstacleDetected
-
-		if obstacleDetected then
-			local downwardTrace = engine.TraceHull(
-				forwardTrace.endpos,
-				forwardTrace.endpos - MAX_JUMP_HEIGHT,
-				HITBOX_MIN,
-				HITBOX_MAX,
-				MASK_PLAYERSOLID_BRUSHONLY
-			)
-			local groundPosition = downwardTrace.endpos
-			predictedPosition = groundPosition
-
-			local landingPosition = groundPosition + (jumpDirection * 10)
-			local landingDownwardTrace = engine.TraceHull(
-				landingPosition + MAX_JUMP_HEIGHT,
-				landingPosition,
-				HITBOX_MIN,
-				HITBOX_MAX,
-				MASK_PLAYERSOLID_BRUSHONLY
-			)
-			predictedPosition = landingDownwardTrace.endpos
-
-			-- Check if jump would be successful
-			if landingDownwardTrace.fraction > 0 and landingDownwardTrace.fraction < JUMP_FRACTION then
-				if IsSurfaceWalkable(landingDownwardTrace.plane) then
-					shouldJump = true
-					G.LastSmartJumpAttempt = currentTick
-				end
+		if onGround and (smartJumpDetected or shouldJump) then
+			if smartJumpDetected or shouldJump then
+				G.SmartJump.jumpState = STATE_PREPARE_JUMP
+				Log:Debug("SmartJump: IDLE -> PREPARE_JUMP")
 			end
 		end
-	elseif (cmd.buttons & IN_JUMP) == IN_JUMP then
-		shouldJump = true
-		G.LastSmartJumpAttempt = currentTick
+	elseif G.SmartJump.jumpState == STATE_PREPARE_JUMP then
+		-- STATE_PREPARE_JUMP: Start crouching
+		cmd:SetButtons(cmd.buttons | IN_DUCK)
+		cmd:SetButtons(cmd.buttons & ~IN_JUMP)
+		G.SmartJump.jumpState = STATE_CTAP
+		Log:Debug("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
+		return true
+	elseif G.SmartJump.jumpState == STATE_CTAP then
+		-- STATE_CTAP: Uncrouch and jump
+		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
+		cmd:SetButtons(cmd.buttons | IN_JUMP)
+		G.SmartJump.jumpState = STATE_ASCENDING
+		Log:Debug("SmartJump: CTAP -> ASCENDING (unduck + jump)")
+		return true
+	elseif G.SmartJump.jumpState == STATE_ASCENDING then
+		-- STATE_ASCENDING: Player is moving upwards
+		cmd:SetButtons(cmd.buttons | IN_DUCK)
+		local velocity = pLocal:EstimateAbsVelocity()
+		if velocity.z <= 0 then
+			G.SmartJump.jumpState = STATE_DESCENDING
+			Log:Debug("SmartJump: ASCENDING -> DESCENDING (velocity.z <= 0)")
+		end
+		return true
+	elseif G.SmartJump.jumpState == STATE_DESCENDING then
+		-- STATE_DESCENDING: Player is falling down
+		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
+
+		-- Use prediction for bhop detection
+		local WLocal = Common.WPlayer.GetLocal()
+		if WLocal then
+			local strafeAngle = CalcStrafe(pLocal)
+			local predData = Common.TF2.Prediction.Player(WLocal, 1, strafeAngle, nil)
+			if predData then
+				G.SmartJump.PredPos = predData.pos[1]
+
+				if not predData.onGround[1] or not onGround then
+					local bhopJump = SmartJumpDetection(cmd, pLocal)
+					if bhopJump then
+						cmd:SetButtons(cmd.buttons & ~IN_DUCK)
+						cmd:SetButtons(cmd.buttons | IN_JUMP)
+						G.SmartJump.jumpState = STATE_PREPARE_JUMP
+						Log:Debug("SmartJump: DESCENDING -> PREPARE_JUMP (bhop)")
+					end
+				else
+					cmd:SetButtons(cmd.buttons | IN_DUCK)
+					G.SmartJump.jumpState = STATE_IDLE
+					Log:Debug("SmartJump: DESCENDING -> IDLE (landed)")
+				end
+			end
+		else
+			-- Fallback without prediction
+			if onGround then
+				G.SmartJump.jumpState = STATE_IDLE
+				Log:Debug("SmartJump: DESCENDING -> IDLE (fallback - landed)")
+			end
+		end
+		return true
+	end
+
+	-- Safety timeout to prevent getting stuck in any state
+	if not G.SmartJump.stateStartTime then
+		G.SmartJump.stateStartTime = globals.TickCount()
+	elseif globals.TickCount() - G.SmartJump.stateStartTime > 132 then -- 2 seconds timeout
+		Log:Warn("SmartJump: State timeout, resetting to IDLE from %s", G.SmartJump.jumpState)
+		G.SmartJump.jumpState = STATE_IDLE
+		G.SmartJump.stateStartTime = nil
+	end
+
+	-- Reset state timer when state changes
+	local currentState = G.SmartJump.jumpState
+	if G.SmartJump.lastState ~= currentState then
+		G.SmartJump.stateStartTime = globals.TickCount()
+		G.SmartJump.lastState = currentState
 	end
 
 	G.ShouldJump = shouldJump
 	return shouldJump
 end
 
--- Check if emergency jump should be performed (fallback when SmartJump logic fails)
----@param currentTick number Current game tick
----@param stuckTicks number How long we've been stuck
----@return boolean Whether emergency jump should be performed
+-- Simplified version that matches Movement.lua usage pattern
+function SmartJump.Execute(cmd)
+	return SmartJump.Main(cmd)
+end
+
+-- Check if emergency jump should be performed
 function SmartJump.ShouldEmergencyJump(currentTick, stuckTicks)
-	-- Only emergency jump if:
-	-- 1. We've been stuck for a while (>132 ticks)
-	-- 2. SmartJump hasn't attempted a jump recently (>200 ticks ago)
-	-- 3. We haven't done an emergency jump recently (>300 ticks ago)
-	-- 4. There's an obstacle detected
-	local timeSinceLastSmartJump = currentTick - G.LastSmartJumpAttempt
-	local timeSinceLastEmergencyJump = currentTick - G.LastEmergencyJump
+	local timeSinceLastSmartJump = currentTick - (G.LastSmartJumpAttempt or 0)
+	local timeSinceLastEmergencyJump = currentTick - (G.LastEmergencyJump or 0)
 
 	local shouldEmergency = stuckTicks > 132
 		and timeSinceLastSmartJump > 200
@@ -200,13 +367,116 @@ function SmartJump.ShouldEmergencyJump(currentTick, stuckTicks)
 
 	if shouldEmergency then
 		G.LastEmergencyJump = currentTick
+		Log:Info("Emergency jump triggered - stuck for %d ticks", stuckTicks)
 	end
 
 	return shouldEmergency
 end
 
--- Export functions
-SmartJump.CalcStrafe = CalcStrafe
-SmartJump.GetJumpPeak = GetJumpPeak -- Export for debugging/visualization
+-- Export the GetJumpPeak function for debugging/visualization
+SmartJump.GetJumpPeak = GetJumpPeak
+
+-- Standalone CreateMove callback for SmartJump (works independently of MedBot)
+local function OnCreateMoveStandalone(cmd)
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal or not pLocal:IsAlive() then
+		return
+	end
+
+	if not G.Menu.SmartJump.Enable then
+		return
+	end
+
+	-- Run SmartJump state machine
+	SmartJump.Main(cmd)
+
+	-- Note: The state machine handles all button inputs directly in SmartJump.Main()
+	-- No need to apply additional jump commands here
+end
+
+-- Visual debugging (matching user's exact visual logic)
+local function OnDrawSmartJump()
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal or not G.Menu.SmartJump.Enable then
+		return
+	end
+
+	-- Draw prediction position (red square)
+	local screenPos = client.WorldToScreen(G.SmartJump.PredPos)
+	if screenPos then
+		draw.Color(255, 0, 0, 255)
+		draw.FilledRect(screenPos[1] - 5, screenPos[2] - 5, screenPos[1] + 5, screenPos[2] + 5)
+	end
+
+	-- Draw jump peek position (green square)
+	local screenpeekpos = client.WorldToScreen(G.SmartJump.JumpPeekPos)
+	if screenpeekpos then
+		draw.Color(0, 255, 0, 255)
+		draw.FilledRect(screenpeekpos[1] - 5, screenpeekpos[2] - 5, screenpeekpos[1] + 5, screenpeekpos[2] + 5)
+	end
+
+	-- Draw 3D hitbox at jump peek position
+	local minPoint = HITBOX_MIN + G.SmartJump.JumpPeekPos
+	local maxPoint = HITBOX_MAX + G.SmartJump.JumpPeekPos
+
+	local vertices = {
+		Vector3(minPoint.x, minPoint.y, minPoint.z), -- Bottom-back-left
+		Vector3(minPoint.x, maxPoint.y, minPoint.z), -- Bottom-front-left
+		Vector3(maxPoint.x, maxPoint.y, minPoint.z), -- Bottom-front-right
+		Vector3(maxPoint.x, minPoint.y, minPoint.z), -- Bottom-back-right
+		Vector3(minPoint.x, minPoint.y, maxPoint.z), -- Top-back-left
+		Vector3(minPoint.x, maxPoint.y, maxPoint.z), -- Top-front-left
+		Vector3(maxPoint.x, maxPoint.y, maxPoint.z), -- Top-front-right
+		Vector3(maxPoint.x, minPoint.y, maxPoint.z), -- Top-back-right
+	}
+
+	-- Convert 3D coordinates to 2D screen coordinates
+	for i, vertex in ipairs(vertices) do
+		vertices[i] = client.WorldToScreen(vertex)
+	end
+
+	-- Draw lines between vertices to visualize the box
+	if
+		vertices[1]
+		and vertices[2]
+		and vertices[3]
+		and vertices[4]
+		and vertices[5]
+		and vertices[6]
+		and vertices[7]
+		and vertices[8]
+	then
+		draw.Color(0, 255, 255, 255) -- Cyan color for hitbox
+
+		-- Draw front face
+		draw.Line(vertices[1][1], vertices[1][2], vertices[2][1], vertices[2][2])
+		draw.Line(vertices[2][1], vertices[2][2], vertices[3][1], vertices[3][2])
+		draw.Line(vertices[3][1], vertices[3][2], vertices[4][1], vertices[4][2])
+		draw.Line(vertices[4][1], vertices[4][2], vertices[1][1], vertices[1][2])
+
+		-- Draw back face
+		draw.Line(vertices[5][1], vertices[5][2], vertices[6][1], vertices[6][2])
+		draw.Line(vertices[6][1], vertices[6][2], vertices[7][1], vertices[7][2])
+		draw.Line(vertices[7][1], vertices[7][2], vertices[8][1], vertices[8][2])
+		draw.Line(vertices[8][1], vertices[8][2], vertices[5][1], vertices[5][2])
+
+		-- Draw connecting lines
+		draw.Line(vertices[1][1], vertices[1][2], vertices[5][1], vertices[5][2])
+		draw.Line(vertices[2][1], vertices[2][2], vertices[6][1], vertices[6][2])
+		draw.Line(vertices[3][1], vertices[3][2], vertices[7][1], vertices[7][2])
+		draw.Line(vertices[4][1], vertices[4][2], vertices[8][1], vertices[8][2])
+	end
+
+	-- Draw current state info
+	draw.Color(255, 255, 255, 255)
+	draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
+end
+
+-- Register callbacks
+callbacks.Unregister("CreateMove", "SmartJump.Standalone")
+callbacks.Register("CreateMove", "SmartJump.Standalone", OnCreateMoveStandalone)
+
+callbacks.Unregister("Draw", "SmartJump.Visual")
+callbacks.Register("Draw", "SmartJump.Visual", OnDrawSmartJump)
 
 return SmartJump

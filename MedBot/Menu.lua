@@ -58,19 +58,21 @@ local function OnDrawMenu()
 			TimMenu.Tooltip("Allow skipping nodes when direct path is walkable (handles all optimization)")
 			TimMenu.NextLine()
 
-			G.Menu.Movement = G.Menu.Movement or {}
-			G.Menu.Movement.Smart_Jump = TimMenu.Checkbox("Smart Jump", G.Menu.Movement.Smart_Jump ~= false)
-			TimMenu.Tooltip("Enable intelligent jumping over obstacles")
+			-- Smart Jump (works independently of MedBot enable state)
+			G.Menu.SmartJump = G.Menu.SmartJump or {}
+			G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable ~= false)
+			TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
 			TimMenu.NextLine()
 
+			-- Walkable Mode Selector for both node skipping and SmartJump
 			G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Step"
-			local walkableModes = { "Step", "Jump" }
+			local walkableModes = { "Step Height (18u)", "Jump Height (72u)" }
 			-- Create boolean table for TimMenu.Combo
 			local walkableSelection = {
 				G.Menu.Main.WalkableMode == "Step",
 				G.Menu.Main.WalkableMode == "Jump",
 			}
-			walkableSelection = TimMenu.Combo("Walkable Mode", walkableSelection, walkableModes)
+			walkableSelection = TimMenu.Combo("Walkable Check Mode", walkableSelection, walkableModes)
 
 			-- Update the mode based on selection
 			if walkableSelection[1] then
@@ -78,7 +80,7 @@ local function OnDrawMenu()
 			elseif walkableSelection[2] then
 				G.Menu.Main.WalkableMode = "Jump"
 			end
-			TimMenu.Tooltip("Step: Only 18-unit steps (smooth), Jump: Allow duck jumps up to 72 units (physical)")
+			TimMenu.Tooltip("Step: Only 18-unit steps (conservative), Jump: Allow 72-unit duck jumps (more aggressive)")
 			TimMenu.EndSector()
 
 			TimMenu.NextLine()

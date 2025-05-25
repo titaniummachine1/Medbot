@@ -1292,7 +1292,6 @@ local function buildHierarchicalStructure(processedAreas)
 			internalPoints = {}, -- Points inside this area
 			interAreaConnections = {}, -- Connections to other areas
 		}
-`
 		-- Categorize points as edge or internal
 		for _, point in pairs(data.points) do
 			if point.isEdge then
