@@ -341,6 +341,15 @@ local function processBatch(nodes)
 								local isAccessible, costMultiplier = isNodeAccessible(node, targetNode, false)
 								local finalCost = currentCost * costMultiplier
 
+								-- Add height-based cost for smooth walking mode
+								if G.Menu.Main.WalkableMode == "Smooth" then
+									local heightDiff = targetNode.pos.z - node.pos.z
+									if heightDiff > 18 then -- Requires jump in smooth mode
+										local heightPenalty = math.floor(heightDiff / 18) * 10 -- 10 cost per 18 units
+										finalCost = finalCost + heightPenalty
+									end
+								end
+
 								-- Always keep connection but adjust cost based on accessibility
 								if finalCost > 1 then
 									table.insert(validConnections, { node = targetNodeId, cost = finalCost })
@@ -1023,7 +1032,19 @@ local function generateAreaPoints(area)
 	------------------------------------------------------------
 	local function addLink(a, b)
 		local d = (a.pos - b.pos):Length()
-		a.neighbors[#a.neighbors + 1] = { point = b, cost = d, isInterArea = false }
+		local cost = d
+
+		-- Add height-based cost for smooth walking mode
+		if G.Menu.Main.WalkableMode == "Smooth" then
+			local heightDiff = math.abs(b.pos.z - a.pos.z)
+			if heightDiff > 18 then -- Requires jump in smooth mode
+				local heightPenalty = math.floor(heightDiff / 18) * 10 -- 10 cost per 18 units
+				cost = cost + heightPenalty
+			end
+		end
+
+		a.neighbors[#a.neighbors + 1] = { point = b, cost = cost, isInterArea = true }
+		b.neighbors[#b.neighbors + 1] = { point = a, cost = cost, isInterArea = true }
 	end
 	local idx = {} -- quick lookup
 	for _, p in ipairs(points) do
@@ -1158,114 +1179,114 @@ end
 
 local function link(a, b)
 	local d = (a.pos - b.pos):Length()
-	a.neighbors[#a.neighbors + 1] = { point = b, cost = d, isInterArea = true }
-	b.neighbors[#b.neighbors + 1] = { point = a, cost = d, isInterArea = true }
+	local cost = d
+
+	-- Add height-based cost for smooth walking mode
+	if G.Menu.Main.WalkableMode == "Smooth" then
+		local heightDiff = math.abs(b.pos.z - a.pos.z)
+		if heightDiff > 18 then -- Requires jump in smooth mode
+			local heightPenalty = math.floor(heightDiff / 18) * 10 -- 10 cost per 18 units
+			cost = cost + heightPenalty
+		end
+	end
+
+	a.neighbors[#a.neighbors + 1] = { point = b, cost = cost, isInterArea = true }
+	b.neighbors[#b.neighbors + 1] = { point = a, cost = cost, isInterArea = true }
 end
 
 local function connectPair(areaA, areaB)
+	-- Simple and fast stitching: each edge node connects to its 2 closest neighbors
 	local sideA, sideB = neighbourSide(areaA, areaB, 5.0)
 	if not sideA then
 		return 0
 	end
+
 	local edgeA, edgeB = edgePoints(areaA, sideA), edgePoints(areaB, sideB)
-
-	-- Handle minor areas (single point areas) with simple direct connection
-	local isMinorA = #edgeA == 1
-		and edgeA[1]
-		and edgeA[1].dirMask
-		and (edgeA[1].dirMask & (Node.DIR.N | Node.DIR.S | Node.DIR.E | Node.DIR.W)) > 0
-	local isMinorB = #edgeB == 1
-		and edgeB[1]
-		and edgeB[1].dirMask
-		and (edgeB[1].dirMask & (Node.DIR.N | Node.DIR.S | Node.DIR.E | Node.DIR.W)) > 0
-
-	if isMinorA or isMinorB then
-		-- For minor areas, use simple connection logic
-		if #edgeA > 0 and #edgeB > 0 then
-			local pointA = edgeA[1]
-			local pointB = edgeB[1]
-
-			-- Check if connection is reasonable distance and accessible
-			local distance = (pointA.pos - pointB.pos):Length()
-			if distance < 200 and isNodeAccessible(pointA, pointB) then
-				link(pointA, pointB)
-				Log:Debug("Connected minor areas %d <-> %d (dist: %.1f)", areaA.id, areaB.id, distance)
-				return 1
-			end
-		end
-		return 0
-	end
-
-	-- reject pure corner contact for regular areas
-	if #edgeA == 1 and #edgeB == 1 then
-		return 0
-	end
 	if #edgeA == 0 or #edgeB == 0 then
 		return 0
 	end
 
-	-- robust one-to-one inter-area linking with accessibility filtering
-	local P = (#edgeA <= #edgeB) and edgeA or edgeB
-	local Qfull = (#edgeA <= #edgeB) and edgeB or edgeA
-	-- copy Q for matching
-	local remaining = {}
-	for i = 1, #Qfull do
-		remaining[i] = Qfull[i]
-	end
-	local c = 0
-	-- for each p, pick closest accessible q
-	if sideA == "N" or sideA == "S" then
-		-- sort by X proximity when matching
-		for _, p in ipairs(P) do
-			-- build sorted candidate list
-			local candidates = {}
-			for i, q in ipairs(remaining) do
-				candidates[#candidates + 1] = { i = i, delta = math.abs(q.pos.x - p.pos.x) }
-			end
-			table.sort(candidates, function(a, b)
-				return a.delta < b.delta
-			end)
-			-- select first accessible candidate
-			local selIdx
-			for _, cand in ipairs(candidates) do
-				local q = remaining[cand.i]
-				if isNodeAccessible(p, q) then
-					selIdx = cand.i
-					break
-				end
-			end
-			if selIdx then
-				link(p, remaining[selIdx])
-				table.remove(remaining, selIdx)
-				c = c + 1
+	local connectionCount = 0
+	local maxDistance = 200 -- Maximum connection distance
+
+	-- For each edge point in area A, find up to 2 closest points in area B
+	for _, pointA in ipairs(edgeA) do
+		local candidates = {}
+
+		-- Find all candidates within max distance
+		for _, pointB in ipairs(edgeB) do
+			local distance = (pointA.pos - pointB.pos):Length()
+			if distance <= maxDistance and isNodeAccessible(pointA, pointB) then
+				table.insert(candidates, {
+					point = pointB,
+					distance = distance,
+				})
 			end
 		end
-	else
-		-- sort by Y proximity when matching
-		for _, p in ipairs(P) do
-			local candidates = {}
-			for i, q in ipairs(remaining) do
-				candidates[#candidates + 1] = { i = i, delta = math.abs(q.pos.y - p.pos.y) }
-			end
-			table.sort(candidates, function(a, b)
-				return a.delta < b.delta
-			end)
-			local selIdx
-			for _, cand in ipairs(candidates) do
-				local q = remaining[cand.i]
-				if isNodeAccessible(p, q) then
-					selIdx = cand.i
-					break
-				end
-			end
-			if selIdx then
-				link(p, remaining[selIdx])
-				table.remove(remaining, selIdx)
-				c = c + 1
-			end
+
+		-- Sort by distance and take the 2 closest
+		table.sort(candidates, function(a, b)
+			return a.distance < b.distance
+		end)
+
+		-- Connect to up to 2 closest candidates
+		local connectionsForThisPoint = 0
+		for i = 1, math.min(2, #candidates) do
+			local candidate = candidates[i]
+			link(pointA, candidate.point)
+			connectionCount = connectionCount + 1
+			connectionsForThisPoint = connectionsForThisPoint + 1
+		end
+
+		-- Log detailed connections for debugging
+		if connectionsForThisPoint > 0 then
+			Log:Debug("Point in area %d connected to %d points in area %d", areaA.id, connectionsForThisPoint, areaB.id)
 		end
 	end
-	return c
+
+	-- For each edge point in area B, find up to 2 closest points in area A (bidirectional)
+	for _, pointB in ipairs(edgeB) do
+		local candidates = {}
+
+		-- Find all candidates within max distance
+		for _, pointA in ipairs(edgeA) do
+			local distance = (pointB.pos - pointA.pos):Length()
+			if distance <= maxDistance and isNodeAccessible(pointB, pointA) then
+				-- Check if this connection already exists to avoid duplicates
+				local alreadyConnected = false
+				for _, neighbor in ipairs(pointB.neighbors) do
+					if neighbor.point == pointA then
+						alreadyConnected = true
+						break
+					end
+				end
+
+				if not alreadyConnected then
+					table.insert(candidates, {
+						point = pointA,
+						distance = distance,
+					})
+				end
+			end
+		end
+
+		-- Sort by distance and take the 2 closest
+		table.sort(candidates, function(a, b)
+			return a.distance < b.distance
+		end)
+
+		-- Connect to up to 2 closest candidates (if not already connected)
+		local connectionsForThisPoint = 0
+		for i = 1, math.min(2, #candidates) do
+			local candidate = candidates[i]
+			link(pointB, candidate.point)
+			connectionCount = connectionCount + 1
+			connectionsForThisPoint = connectionsForThisPoint + 1
+		end
+	end
+
+	Log:Debug("Fast stitching: %d total connections between areas %d <-> %d", connectionCount, areaA.id, areaB.id)
+	return connectionCount
 end
 
 --- Build hierarchical data structure for HPA* pathfinding
@@ -1344,7 +1365,7 @@ end
 local SetupState = {
 	currentPhase = 0,
 	processedAreas = {},
-	maxAreasPerTick = 5, -- Process 5 areas per tick
+	maxAreasPerTick = 10, -- Increased from 5 since stitching is now much faster
 	totalAreas = 0,
 	currentAreaIndex = 0,
 	hierarchicalData = {},
@@ -1460,7 +1481,7 @@ local function processSetupTick()
 
 		return true -- More work to do
 	elseif SetupState.currentPhase == 2 then
-		-- Phase 2: Connect fine points between adjacent areas (spread across ticks)
+		-- Phase 2: Connect fine points between adjacent areas (spread across ticks) - OPTIMIZED
 		local processed = 0
 		local totalConnections = 0
 		local areaIds = {}
@@ -1476,38 +1497,36 @@ local function processSetupTick()
 			local data = SetupState.processedAreas[areaId]
 			local area = data.area
 
-			-- Get actually adjacent areas using nav mesh connections (just nodes, no costs needed)
+			-- Get adjacent areas and process connections more efficiently
 			local adjacentAreas = Node.GetAdjacentNodesOnly(area, nodes)
 
-			Log:Debug("Area %d has %d adjacent areas to connect", areaId, #adjacentAreas)
+			if #adjacentAreas > 0 then
+				Log:Debug("Area %d processing %d adjacent areas", areaId, #adjacentAreas)
+			end
 
 			for _, adjacentArea in ipairs(adjacentAreas) do
-				-- Only connect if the adjacent area was also processed
-				if SetupState.processedAreas[adjacentArea.id] then
-					-- Ensure both areas have their edgeSets for connectPair to work
-					if not area.edgeSets then
-						Log:Debug("Area %d missing edgeSets, regenerating fine points", areaId)
-						Node.GenerateAreaPoints(areaId) -- This should set edgeSets
+				-- Only connect to areas with higher IDs to avoid duplicate processing
+				if SetupState.processedAreas[adjacentArea.id] and adjacentArea.id > areaId then
+					-- Ensure both areas have their edgeSets (only regenerate if truly missing)
+					local needsRegenA = not area.edgeSets
+					local needsRegenB = not adjacentArea.edgeSets
+
+					if needsRegenA then
+						Log:Debug("Regenerating edgeSets for area %d", areaId)
+						Node.GenerateAreaPoints(areaId)
 					end
-					if not adjacentArea.edgeSets then
-						Log:Debug("Adjacent area %d missing edgeSets, regenerating fine points", adjacentArea.id)
-						Node.GenerateAreaPoints(adjacentArea.id) -- This should set edgeSets
+					if needsRegenB then
+						Log:Debug("Regenerating edgeSets for area %d", adjacentArea.id)
+						Node.GenerateAreaPoints(adjacentArea.id)
 					end
 
+					-- Fast stitching with the new algorithm
 					local connections = connectPair(area, adjacentArea)
 					totalConnections = totalConnections + connections
+
 					if connections > 0 then
-						Log:Debug(
-							"Connected %d fine points between areas %d and %d",
-							connections,
-							areaId,
-							adjacentArea.id
-						)
-					else
-						Log:Debug("No connections possible between areas %d and %d", areaId, adjacentArea.id)
+						Log:Debug("Fast stitched %d connections: %d <-> %d", connections, areaId, adjacentArea.id)
 					end
-				else
-					Log:Debug("Adjacent area %d not yet processed, skipping connection", adjacentArea.id)
 				end
 			end
 			processed = processed + 1
@@ -1516,7 +1535,7 @@ local function processSetupTick()
 		SetupState.currentAreaIndex = endIdx
 
 		Log:Debug(
-			"Phase 2: Processed connections for %d areas (%d/%d), created %d total connections",
+			"Phase 2 (Fast): Processed %d areas (%d/%d), created %d connections this batch",
 			processed,
 			SetupState.currentAreaIndex,
 			#areaIds,
@@ -1525,7 +1544,7 @@ local function processSetupTick()
 
 		if SetupState.currentAreaIndex >= #areaIds then
 			SetupState.currentPhase = 3
-			Log:Info("Phase 2 complete: Inter-area connections established (%d total connections)", totalConnections)
+			Log:Info("Phase 2 complete: Fast inter-area stitching finished")
 		end
 
 		return true -- More work to do
@@ -1777,6 +1796,54 @@ function Node.GetAdjacentNodesOnly(node, nodes)
 	return adjacent
 end
 
+--- Fast, zero logic - just returns whatever the nav-file says
+---@param node table First node (source)
+---@param nodes table All navigation nodes
+---@return table[] Array of adjacent node objects (raw connections)
+function Node.GetAdjacentNodesRaw(node, nodes)
+	local out = {}
+	if not node or not node.c then
+		return out
+	end
+
+	for _, dir in pairs(node.c) do
+		if dir and dir.connections then
+			for _, connection in pairs(dir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				local targetNode = nodes[targetNodeId]
+				if targetNode then
+					out[#out + 1] = targetNode
+				end
+			end
+		end
+	end
+	return out
+end
+
+--- Slow but safe - uses isNodeAccessible / walkable checks
+---@param node table First node (source)
+---@param nodes table All navigation nodes
+---@return table[] Array of accessible adjacent node objects
+function Node.GetAdjacentNodesClean(node, nodes)
+	local out = {}
+	if not node or not node.c then
+		return out
+	end
+
+	for _, dir in pairs(node.c) do
+		if dir and dir.connections then
+			for _, connection in pairs(dir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				local targetNode = nodes[targetNodeId]
+				if targetNode and isNodeAccessible(node, targetNode) then
+					out[#out + 1] = targetNode
+				end
+			end
+		end
+	end
+	return out
+end
+
 function Node.LoadFile(navFile)
 	local full = "tf/" .. navFile
 	local navData, err = tryLoadNavFile(full)
@@ -1935,5 +2002,81 @@ end
 
 callbacks.Unregister("Draw", "Node.ConnectionProcessing")
 callbacks.Register("Draw", "Node.ConnectionProcessing", OnDrawConnectionProcessing)
+
+--- Recalculate all connection costs based on current walking mode
+function Node.RecalculateConnectionCosts()
+	local nodes = Node.GetNodes()
+	if not nodes then
+		return
+	end
+
+	local recalculatedCount = 0
+	local smoothMode = G.Menu.Main.WalkableMode == "Smooth"
+
+	Log:Info("Recalculating connection costs for %s walking mode", G.Menu.Main.WalkableMode)
+
+	-- Recalculate regular node connections
+	for nodeId, node in pairs(nodes) do
+		if node and node.c then
+			for dir, connectionDir in pairs(node.c) do
+				if connectionDir and connectionDir.connections then
+					for i, connection in ipairs(connectionDir.connections) do
+						local targetNodeId = getConnectionNodeId(connection)
+						local targetNode = nodes[targetNodeId]
+
+						if targetNode and type(connection) == "table" then
+							local baseCost = connection.cost or 1
+							local heightDiff = targetNode.pos.z - node.pos.z
+
+							-- Reset to base cost first
+							local newCost = baseCost
+
+							-- Add height penalty for smooth mode
+							if smoothMode and heightDiff > 18 then
+								local heightPenalty = math.floor(heightDiff / 18) * 10
+								newCost = newCost + heightPenalty
+							end
+
+							connection.cost = newCost
+							recalculatedCount = recalculatedCount + 1
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- Recalculate inter-area fine point connections
+	if G.Navigation.hierarchical and G.Navigation.hierarchical.areas then
+		for areaId, areaInfo in pairs(G.Navigation.hierarchical.areas) do
+			if areaInfo.points then
+				for _, point in ipairs(areaInfo.points) do
+					if point.neighbors then
+						for _, neighbor in ipairs(point.neighbors) do
+							if neighbor.point and neighbor.cost then
+								local baseDist = (point.pos - neighbor.point.pos):Length()
+								local heightDiff = math.abs(neighbor.point.pos.z - point.pos.z)
+
+								-- Reset to base distance
+								local newCost = baseDist
+
+								-- Add height penalty for smooth mode
+								if smoothMode and heightDiff > 18 then
+									local heightPenalty = math.floor(heightDiff / 18) * 10
+									newCost = newCost + heightPenalty
+								end
+
+								neighbor.cost = newCost
+								recalculatedCount = recalculatedCount + 1
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	Log:Info("Recalculated %d connection costs for %s mode", recalculatedCount, G.Menu.Main.WalkableMode)
+end
 
 return Node

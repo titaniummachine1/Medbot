@@ -77,9 +77,9 @@ end
 -- Uses robust algorithm from standstill dummy to prevent walking over walls
 -- Respects Walkable Mode setting: "Step" = 18-unit steps only, "Jump" = 72-unit duck jumps allowed
 function isWalkable.Path(startPos, endPos)
-	-- Get walkable mode from menu (default to "Step" for conservative behavior)
-	local walkableMode = G.Menu.Main.WalkableMode or "Step"
-	local maxStepHeight = walkableMode == "Jump" and 72 or STEP_HEIGHT -- 72 for duck jumps, 18 for steps
+	-- Get walkable mode from menu (default to "Smooth" for conservative behavior)
+	local walkableMode = G.Menu.Main.WalkableMode or "Smooth"
+	local maxStepHeight = walkableMode == "Aggressive" and 72 or STEP_HEIGHT -- 72 for duck jumps, 18 for steps
 	local maxStepVector = Vector3(0, 0, maxStepHeight)
 	local stepFraction = maxStepHeight / MAX_FALL_DISTANCE
 

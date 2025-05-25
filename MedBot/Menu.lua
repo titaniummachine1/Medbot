@@ -65,22 +65,50 @@ local function OnDrawMenu()
 			TimMenu.NextLine()
 
 			-- Walkable Mode Selector for both node skipping and SmartJump
-			G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Step"
-			local walkableModes = { "Step Height (18u)", "Jump Height (72u)" }
-			-- Create boolean table for TimMenu.Combo
-			local walkableSelection = {
-				G.Menu.Main.WalkableMode == "Step",
-				G.Menu.Main.WalkableMode == "Jump",
-			}
-			walkableSelection = TimMenu.Combo("Walkable Check Mode", walkableSelection, walkableModes)
+			G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
+			local walkableModes = { "Smooth Walking (Step 18u)", "Aggressive Walking (Jump 72u)" }
+			-- Get current mode as index number
+			local currentModeIndex = (G.Menu.Main.WalkableMode == "Aggressive") and 2 or 1
+			local previousMode = G.Menu.Main.WalkableMode
+
+			-- TimMenu.Selector expects a number, not a table
+			local selectedIndex = TimMenu.Selector("Walkable Mode", currentModeIndex, walkableModes)
 
 			-- Update the mode based on selection
-			if walkableSelection[1] then
-				G.Menu.Main.WalkableMode = "Step"
-			elseif walkableSelection[2] then
-				G.Menu.Main.WalkableMode = "Jump"
+			if selectedIndex == 1 then
+				G.Menu.Main.WalkableMode = "Smooth"
+			elseif selectedIndex == 2 then
+				G.Menu.Main.WalkableMode = "Aggressive"
 			end
-			TimMenu.Tooltip("Step: Only 18-unit steps (conservative), Jump: Allow 72-unit duck jumps (more aggressive)")
+
+			-- Auto-recalculate costs if mode changed
+			if G.Menu.Main.WalkableMode ~= previousMode then
+				local success, Node = pcall(require, "MedBot.Modules.Node")
+				if success and Node then
+					Node.RecalculateConnectionCosts()
+				end
+			end
+			TimMenu.Tooltip("Smooth: Only 18-unit steps + height costs, Aggressive: Allow 72-unit jumps no extra cost")
+			TimMenu.EndSector()
+
+			TimMenu.NextLine()
+
+			-- Path Optimiser Settings
+			TimMenu.BeginSector("Path Optimiser (Advanced)")
+			G.Menu.Main.OptimizerLookahead = G.Menu.Main.OptimizerLookahead or 10
+			G.Menu.Main.OptimizerLookahead = TimMenu.Slider("Lookahead Nodes", G.Menu.Main.OptimizerLookahead, 5, 30, 1)
+			TimMenu.Tooltip("How many nodes ahead to check for skipping (higher = more aggressive skipping)")
+			TimMenu.NextLine()
+
+			G.Menu.Main.OptimizerDistance = G.Menu.Main.OptimizerDistance or 600
+			G.Menu.Main.OptimizerDistance =
+				TimMenu.Slider("Lookahead Distance", G.Menu.Main.OptimizerDistance, 300, 1200, 50)
+			TimMenu.Tooltip("Maximum distance in units to check for skipping")
+			TimMenu.NextLine()
+
+			G.Menu.Main.OptimizerCooldown = G.Menu.Main.OptimizerCooldown or 12
+			G.Menu.Main.OptimizerCooldown = TimMenu.Slider("Failure Cooldown", G.Menu.Main.OptimizerCooldown, 6, 60, 3)
+			TimMenu.Tooltip("How many ticks to wait before retrying a failed skip (prevents oscillation)")
 			TimMenu.EndSector()
 
 			TimMenu.NextLine()
@@ -88,8 +116,8 @@ local function OnDrawMenu()
 			-- Advanced Settings Section
 			TimMenu.BeginSector("Advanced Settings")
 			G.Menu.Main.CleanupConnections =
-				TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections)
-			TimMenu.Tooltip("Clean up navigation connections on map load (disable if causing crashes)")
+				TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections or false)
+			TimMenu.Tooltip("Clean up navigation connections on map load (DISABLE if causing performance issues)")
 			TimMenu.NextLine()
 
 			G.Menu.Main.AllowExpensiveChecks =

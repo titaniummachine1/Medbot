@@ -390,40 +390,6 @@ local function OnDraw()
 				})
 			end
 		end
-
-		-- Display statistics on screen
-		if #finePointStats > 0 then
-			draw.Color(255, 255, 255, 255)
-			local statY = currentY + 40
-			draw.Text(20, statY, string.format("Fine Points: %d areas with detailed grids", #finePointStats))
-			statY = statY + 15
-
-			-- Show first few areas with stats
-			for i = 1, math.min(3, #finePointStats) do
-				local stat = finePointStats[i]
-				local text = string.format(
-					"  Area %d: %d points (%d edge, %d intra, %d inter, %d isolated)",
-					stat.id,
-					stat.totalPoints,
-					stat.edgePoints,
-					stat.intraConnections,
-					stat.interConnections,
-					stat.isolatedPoints
-				)
-				draw.Text(20, statY, text)
-				statY = statY + 12
-			end
-
-			if #finePointStats > 3 then
-				draw.Text(20, statY, string.format("  ... and %d more areas", #finePointStats - 3))
-			end
-		end
-	end
-
-	-- Auto path informaton
-	if G.Menu.Main.Enable then
-		draw.Text(20, currentY, string.format("Current Node: %d", G.Navigation.currentNodeIndex))
-		currentY = currentY + 20
 	end
 
 	-- Draw all nodes

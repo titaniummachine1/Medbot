@@ -18,6 +18,67 @@ local Notify, Commands, WPlayer = Lib.UI.Notify, Lib.Utils.Commands, Lib.TF2.WPl
 local Log = Common.Log.new("MedBot")
 Log.Level = 0
 
+--[[ Path Optimiser ]]
+-- ############################################################
+--  Path optimiser - prevents rubber-banding with smart windowing
+-- ############################################################
+local Optimiser = {}
+
+-- Failure cache to avoid retesting failed nodes
+Optimiser.cache = {} -- [nodeIdx] = gameTickWhenLastFailed
+
+-- Returns index in G.Navigation.path to aim for (>=1)
+function Optimiser:getBestTarget(origin, path, startIdx)
+	-- Use menu settings for tuning parameters
+	local maxLookahead = G.Menu.Main.OptimizerLookahead or 10
+	local maxLookaheadDistance = G.Menu.Main.OptimizerDistance or 600
+	local cooldownTicks = G.Menu.Main.OptimizerCooldown or 12
+
+	local last = math.min(#path, startIdx + maxLookahead)
+	local best = startIdx -- fallback: don't skip
+
+	-- Simple distance-based skipping (fast, no traces)
+	for i = startIdx + 1, last do
+		local node = path[i]
+		if not node or not node.pos then
+			break -- Stop at invalid nodes
+		end
+
+		-- Check if this node is closer than current best
+		local currentDist = (path[best].pos - origin):Length()
+		local testDist = (node.pos - origin):Length()
+		local heightDiff = math.abs(node.pos.z - origin.z)
+
+		-- Skip to closer nodes within reasonable distance and height
+		if testDist < currentDist and testDist < maxLookaheadDistance and heightDiff <= G.Misc.NodeTouchHeight then
+			best = i
+		else
+			break -- Stop when nodes get farther away
+		end
+	end
+
+	return best
+end
+
+-- Expensive walkability check - only use when stuck
+function Optimiser:verifyWalkability(origin, targetPos, cooldownTicks)
+	local now = globals.TickCount()
+	local cacheKey = string.format("%.0f,%.0f,%.0f", targetPos.x, targetPos.y, targetPos.z)
+
+	-- Check failure cache
+	if self.cache[cacheKey] and now - self.cache[cacheKey] < cooldownTicks then
+		return false -- Recently failed
+	end
+
+	-- Expensive walkability check
+	local isWalkable = Navigation.isWalkable(origin, targetPos)
+	if not isWalkable then
+		self.cache[cacheKey] = now -- Cache failure
+	end
+
+	return isWalkable
+end
+
 --[[ Functions ]]
 Common.AddCurrentTask("Objective")
 
@@ -72,6 +133,17 @@ function handleIdleState()
 		return
 	end
 
+	-- PERFORMANCE FIX: Prevent pathfinding spam by limiting frequency
+	local currentTick = globals.TickCount()
+	if not G.lastPathfindingTick then
+		G.lastPathfindingTick = 0
+	end
+
+	-- Only allow pathfinding every 60 ticks (1 second) to prevent spam
+	if currentTick - G.lastPathfindingTick < 60 then
+		return
+	end
+
 	-- Safety check: ensure nodes are available before pathfinding
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
 		Log:Debug("No navigation nodes available, staying in IDLE state")
@@ -99,6 +171,7 @@ function handleIdleState()
 	Log:Info("Generating new path from node %d to node %d", startNode.id, goalNode.id)
 	WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 	G.currentState = G.States.PATHFINDING
+	G.lastPathfindingTick = currentTick
 end
 
 -- Function to handle the PATHFINDING state
@@ -334,62 +407,15 @@ function moveTowardsNode(userCmd, node)
 			G.currentState = G.States.IDLE
 		end
 	else
-		-- Node skipping - only if enabled via Skip Nodes setting
-		if G.Menu.Main.Skip_Nodes then
-			local path = G.Navigation.path
-			if path and #path > 1 then
-				local currentNode = path[1]
-				local nextNode = path[2] -- Next node after current
-				-- Check walkability from current position (LocalOrigin) to next node position
-				if nextNode and nextNode.pos and currentNode and currentNode.pos then
-					-- Check if we're closer to next node than current (basic skip condition)
-					local currentDist = (LocalOrigin - currentNode.pos):Length()
-					local nextDist = (LocalOrigin - nextNode.pos):Length()
-
-					if nextDist < currentDist then
-						local canWalkToNext = Navigation.isWalkable(LocalOrigin, nextNode.pos)
-						local walkableMode = G.Menu.Main.WalkableMode or "Step"
-						local heightDiff = nextNode.pos.z - LocalOrigin.z
-
-						if canWalkToNext then
-							Log:Debug(
-								"Skip OK [%s]: pos(%.1f,%.1f,%.1f) -> node %d(%.1f,%.1f,%.1f) height:%.1f curr_dist:%.1f next_dist:%.1f",
-								walkableMode,
-								LocalOrigin.x,
-								LocalOrigin.y,
-								LocalOrigin.z,
-								nextNode.id or 0,
-								nextNode.pos.x,
-								nextNode.pos.y,
-								nextNode.pos.z,
-								heightDiff,
-								currentDist,
-								nextDist
-							)
-							Navigation.RemoveCurrentNode()
-						else
-							Log:Debug(
-								"Skip BLOCKED [%s]: pos(%.1f,%.1f,%.1f) -> node %d(%.1f,%.1f,%.1f) height:%.1f curr_dist:%.1f next_dist:%.1f",
-								walkableMode,
-								LocalOrigin.x,
-								LocalOrigin.y,
-								LocalOrigin.z,
-								nextNode.id or 0,
-								nextNode.pos.x,
-								nextNode.pos.y,
-								nextNode.pos.z,
-								heightDiff,
-								currentDist,
-								nextDist
-							)
-						end
-					else
-						Log:Debug(
-							"Skip SKIPPED: current node closer (curr_dist:%.1f vs next_dist:%.1f)",
-							currentDist,
-							nextDist
-						)
-					end
+		------------------------------------------------------------
+		--  Hybrid Skip - Fast distance checks + expensive verification when stuck
+		------------------------------------------------------------
+		if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
+			-- Fast distance-based skipping (no expensive traces)
+			local newIdx = Optimiser:getBestTarget(LocalOrigin, G.Navigation.path, 1)
+			if newIdx > 1 then
+				for i = 1, newIdx - 1 do
+					Navigation.RemoveCurrentNode() -- pop nodes we no longer need
 				end
 			end
 		end
@@ -409,7 +435,50 @@ function moveTowardsNode(userCmd, node)
 
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-		-- SmartJump runs independently via its own callback, but we preserve its button inputs above
+		-- Expensive walkability verification - only when stuck for a while
+		if G.Navigation.currentNodeTicks > 66 then
+			local cooldownTicks = G.Menu.Main.OptimizerCooldown or 12
+			if not Optimiser:verifyWalkability(LocalOrigin, node.pos, cooldownTicks) then
+				Log:Warn("Path to current node blocked after being stuck, repathing...")
+				-- Add failure penalty to current connection if we have one
+				local path = G.Navigation.path
+				if path and #path > 1 then
+					local currentNode = path[1]
+					local nextNode = path[2]
+					if currentNode and nextNode then
+						local Node = require("MedBot.Modules.Node")
+						Node.AddFailurePenalty(currentNode, nextNode)
+					end
+				end
+				Navigation.ClearPath()
+				Navigation.ResetTickTimer()
+				G.currentState = G.States.IDLE
+				return
+			end
+		end
+
+		-- Fast re-sync when blast displacement < 1200 uu (optional recovery system)
+		local path = G.Navigation.path
+		local origin = G.pLocal.Origin
+		local MAX_SNAP = 1200 * 1200 -- sqDist
+
+		if path and #path > 0 and G.Navigation.currentNodeTicks > 30 then -- Only after being stuck for a bit
+			-- Scan *once* from front to back for the first node we can still walk to
+			for i = 1, math.min(#path, 30) do
+				local pathNode = path[i]
+				if pathNode and pathNode.pos and (pathNode.pos - origin):LengthSqr() < MAX_SNAP then
+					-- Only do expensive walkability check for potential recovery targets
+					if Optimiser:verifyWalkability(origin, pathNode.pos, 6) then
+						-- Drop everything before i
+						for j = 1, i - 1 do
+							Navigation.RemoveCurrentNode()
+						end
+						Log:Debug("Re-synced to path node %d after displacement", i)
+						break
+					end
+				end
+			end
+		end
 
 		-- Simple stuck detection and repathing
 		if G.Navigation.currentNodeTicks > 264 then
@@ -423,7 +492,7 @@ function moveTowardsNode(userCmd, node)
 					local Node = require("MedBot.Modules.Node")
 					Node.AddFailurePenalty(currentNode, nextNode)
 					Log:Debug(
-						"Added failure penalty to connection %d -> %d due to simple stuck detection",
+						"Added failure penalty to connection %d -> %d due to prolonged stuck",
 						currentNode.id,
 						nextNode.id
 					)
@@ -457,8 +526,16 @@ local function OnCreateMove(userCmd)
 	G.pLocal.flags = pLocal:GetPropInt("m_fFlags")
 	G.pLocal.Origin = pLocal:GetAbsOrigin()
 
-	-- Regular memory cleanup to prevent leaks
-	G.CleanupMemory()
+	-- PERFORMANCE FIX: Only run memory cleanup every 300 ticks (5 seconds) to prevent frame drops
+	local currentTick = globals.TickCount()
+	if not G.lastCleanupTick then
+		G.lastCleanupTick = currentTick
+	end
+
+	if currentTick - G.lastCleanupTick > 300 then -- Every 5 seconds
+		G.CleanupMemory()
+		G.lastCleanupTick = currentTick
+	end
 
 	if handleUserInput(userCmd) then
 		G.BotIsMoving = false -- Clear bot movement state when user takes control
@@ -639,7 +716,7 @@ Commands.Register("pf_optimize", function(args)
 		end
 	elseif args[1] == "info" then
 		print(string.format("Skip Nodes: %s", G.Menu.Main.Skip_Nodes and "Enabled" or "Disabled"))
-		print(string.format("Walkable Mode: %s", G.Menu.Main.WalkableMode or "Step"))
+		print(string.format("Walking Mode: %s", G.Menu.Main.WalkableMode or "Smooth"))
 
 		local path = G.Navigation.path
 		if path and #path > 0 then
@@ -719,6 +796,89 @@ Commands.Register("pf_stairs", function(args)
 	end
 end)
 
+Commands.Register("pf_costs", function(args)
+	local Node = require("MedBot.Modules.Node")
+
+	if args[1] == "recalc" then
+		Node.RecalculateConnectionCosts()
+		print("Connection costs recalculated for current walking mode")
+	elseif args[1] == "info" then
+		print(string.format("Walking Mode: %s", G.Menu.Main.WalkableMode or "Smooth"))
+		if G.Menu.Main.WalkableMode == "Smooth" then
+			print("  - Uses 18-unit steps + height penalties")
+			print("  - Adds 10 cost per 18 units of height")
+		else
+			print("  - Allows 72-unit jumps without penalties")
+		end
+
+		local nodes = Node.GetNodes()
+		if nodes then
+			local totalConnections = 0
+			local costlyConnections = 0
+			for _, node in pairs(nodes) do
+				if node and node.c then
+					for _, connectionDir in pairs(node.c) do
+						if connectionDir and connectionDir.connections then
+							for _, connection in ipairs(connectionDir.connections) do
+								totalConnections = totalConnections + 1
+								local cost = Node.GetConnectionCost(connection)
+								if cost > 1 then
+									costlyConnections = costlyConnections + 1
+								end
+							end
+						end
+					end
+				end
+			end
+			print(string.format("Connections: %d total, %d with extra costs", totalConnections, costlyConnections))
+		end
+	else
+		print("Usage: pf_costs recalc | info")
+		print("  recalc - Recalculate all connection costs for current walking mode")
+		print("  info   - Show walking mode and connection cost statistics")
+	end
+end)
+
+Commands.Register("pf_optimizer", function(args)
+	if args[1] == "info" then
+		print("Path Optimiser Settings:")
+		print(string.format("  Lookahead Nodes: %d", G.Menu.Main.OptimizerLookahead or 10))
+		print(string.format("  Lookahead Distance: %d units", G.Menu.Main.OptimizerDistance or 600))
+		print(string.format("  Failure Cooldown: %d ticks", G.Menu.Main.OptimizerCooldown or 12))
+
+		local cacheSize = 0
+		for _ in pairs(Optimiser.cache) do
+			cacheSize = cacheSize + 1
+		end
+		print(string.format("  Cached failures: %d", cacheSize))
+	elseif args[1] == "clear" then
+		Optimiser.cache = {}
+		print("Optimiser failure cache cleared")
+	elseif args[1] == "test" then
+		local path = G.Navigation.path
+		if path and #path > 1 then
+			local origin = G.pLocal.Origin
+			local startTime = os.clock()
+			local targetIdx = Optimiser:getBestTarget(origin, path, 1)
+			local endTime = os.clock()
+			local timeTaken = (endTime - startTime) * 1000 -- Convert to milliseconds
+
+			print(string.format("Optimiser test results:"))
+			print(string.format("  Path length: %d nodes", #path))
+			print(string.format("  Best target: node %d", targetIdx))
+			print(string.format("  Skip count: %d nodes", targetIdx - 1))
+			print(string.format("  Time taken: %.3f ms", timeTaken))
+		else
+			print("No active path to test")
+		end
+	else
+		print("Usage: pf_optimizer info | clear | test")
+		print("  info  - Show optimiser settings and cache status")
+		print("  clear - Clear failure cache")
+		print("  test  - Test optimiser performance on current path")
+	end
+end)
+
 Notify.Alert("MedBot loaded!")
 if entities.GetLocalPlayer() then
 	-- Add safety check to prevent crashes when no map is loaded
@@ -729,5 +889,13 @@ if entities.GetLocalPlayer() then
 		Log:Info("Skipping navigation setup - no valid map loaded")
 		-- Initialize empty nodes to prevent crashes
 		G.Navigation.nodes = {}
+	end
+
+	-- Cleanup invalid connections after loading (if enabled)
+	if G.Menu.Main.CleanupConnections then
+		Log:Info("Connection cleanup enabled - this may cause temporary frame drops")
+		pruneInvalidConnections(navNodes)
+	else
+		Log:Info("Connection cleanup is disabled in settings (recommended for performance)")
 	end
 end

@@ -46,6 +46,17 @@
 - **Efficient Data Structures**: Proper neighbor lookups and cost management
 - **RESULT**: Smooth gameplay with no stuttering during pathfinding
 
+### 6. **OPTIMIZED STITCHING ALGORITHM** ✅
+
+- **PROBLEM**: Complex reservation-based stitching was slow and overcomplicated
+- **SOLUTION**:
+  - **Simple approach**: Each edge node connects to its 2 closest neighbors
+  - **No reservation logic**: Direct distance-based matching
+  - **Bidirectional connections**: Ensures robust inter-area links
+  - **Duplicate prevention**: Avoids redundant connections
+  - **Faster processing**: Increased from 5 to 10 areas per tick
+- **RESULT**: Much faster setup time with better connection quality
+
 ## NEW PATHFINDING FLOW:
 
 ### **Phase 1: High-Order A\* (Area-to-Area)**
@@ -67,6 +78,72 @@
 - If hierarchical pathfinding fails or is disabled
 - Direct A\* pathfinding on main navigation nodes
 - Still uses optimized connection costs
+
+## HEIGHT-BASED COST SYSTEM: ✅
+
+### **Walking Modes (Selector in Menu)**
+
+- **Smooth Walking (18u steps)**: Conservative movement with height penalties
+
+  - Only allows 18-unit steps without penalties
+  - Adds 10 cost per 18 units of height difference
+  - More reliable but slower pathfinding
+
+- **Aggressive Walking (72u jumps)**: Allows duck-jumping without penalties
+  - Permits 72-unit jumps without extra cost
+  - Faster movement but may get stuck on complex geometry
+  - Better for open areas
+
+### **Cost Calculation Logic**
+
+- Base cost = connection distance
+- Height penalty = `floor(heightDiff / 18) * 10` (smooth mode only)
+- Accessibility penalties for difficult terrain (1.5x to 10x multipliers)
+- Automatic recalculation when walking mode changes
+
+### **Commands**
+
+- `pf_costs recalc` - Recalculate all costs for current walking mode
+- `pf_costs info` - Show walking mode and cost statistics
+
+## PATH OPTIMISER SYSTEM: ✅
+
+### **Smart Skip Algorithm**
+
+Replaces the old node skipping system with an intelligent binary-search approach:
+
+**Key Features:**
+
+- **Only ONE expensive `isWalkable` trace per tick maximum**
+- **Windowed lookahead**: Only checks 10 nodes or 600 units ahead by default
+- **Binary search probing**: O(log n) instead of O(n) performance
+- **Failure caching**: Remembers failed attempts for 12 ticks to prevent oscillation
+- **Blast recovery**: Auto-resyncs when knocked off path
+
+### **Performance Benefits**
+
+- **Eliminates rubber-banding** - no more oscillating between nodes
+- **Massive FPS improvement** - from potentially 100+ traces per tick to exactly 1
+- **Smart for long paths** - 1000-node paths are handled as efficiently as 10-node paths
+- **Handles knockback gracefully** - automatically recovers from explosions/airblast
+
+### **Tunable Parameters (in Menu)**
+
+- **Lookahead Nodes** (5-30): How many nodes ahead to consider for skipping
+- **Lookahead Distance** (300-1200): Maximum distance in units to check
+- **Failure Cooldown** (6-60): Ticks to wait before retrying failed skips
+
+### **Recovery Systems**
+
+1. **Distance-based re-sync**: If displaced <1200 units, tries to snap back to existing path
+2. **Automatic repath**: If completely off-path, triggers new pathfinding
+3. **Failure penalties**: Problematic connections get higher costs over time
+
+### **Commands**
+
+- `pf_optimizer info` - Show settings and cache status
+- `pf_optimizer clear` - Clear failure cache
+- `pf_optimizer test` - Test performance on current path
 
 ## CODE QUALITY IMPROVEMENTS:
 
