@@ -13,6 +13,7 @@ local MenuModule = {}
 
 -- Import globals
 local G = require("MedBot.Utils.Globals")
+local Node = require("MedBot.Modules.Node")
 
 -- Try loading TimMenu
 ---@type boolean, table
@@ -64,9 +65,9 @@ local function OnDrawMenu()
 			TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
 			TimMenu.NextLine()
 
-			-- Walkable Mode Selector for both node skipping and SmartJump
-			G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
-			local walkableModes = { "Smooth Walking (Step 18u)", "Aggressive Walking (Jump 72u)" }
+                        -- Path optimisation mode for following nodes
+                        G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
+                        local walkableModes = { "Smooth (18u steps)", "Aggressive (72u jumps)" }
 			-- Get current mode as index number
 			local currentModeIndex = (G.Menu.Main.WalkableMode == "Aggressive") and 2 or 1
 			local previousMode = G.Menu.Main.WalkableMode
@@ -82,36 +83,14 @@ local function OnDrawMenu()
 			end
 
 			-- Auto-recalculate costs if mode changed
-			if G.Menu.Main.WalkableMode ~= previousMode then
-				local success, Node = pcall(require, "MedBot.Modules.Node")
-				if success and Node then
-					Node.RecalculateConnectionCosts()
-				end
-			end
-			TimMenu.Tooltip("Smooth: Only 18-unit steps + height costs, Aggressive: Allow 72-unit jumps no extra cost")
-			TimMenu.EndSector()
+                        if G.Menu.Main.WalkableMode ~= previousMode then
+                                Node.RecalculateConnectionCosts()
+                        end
+                        TimMenu.Tooltip("Applies to path following only. Aggressive also enables direct skipping when path is walkable")
+                        TimMenu.EndSector()
 
-			TimMenu.NextLine()
 
-			-- Path Optimiser Settings
-			TimMenu.BeginSector("Path Optimiser (Advanced)")
-			G.Menu.Main.OptimizerLookahead = G.Menu.Main.OptimizerLookahead or 10
-			G.Menu.Main.OptimizerLookahead = TimMenu.Slider("Lookahead Nodes", G.Menu.Main.OptimizerLookahead, 5, 30, 1)
-			TimMenu.Tooltip("How many nodes ahead to check for skipping (higher = more aggressive skipping)")
-			TimMenu.NextLine()
-
-			G.Menu.Main.OptimizerDistance = G.Menu.Main.OptimizerDistance or 600
-			G.Menu.Main.OptimizerDistance =
-				TimMenu.Slider("Lookahead Distance", G.Menu.Main.OptimizerDistance, 300, 1200, 50)
-			TimMenu.Tooltip("Maximum distance in units to check for skipping")
-			TimMenu.NextLine()
-
-			G.Menu.Main.OptimizerCooldown = G.Menu.Main.OptimizerCooldown or 12
-			G.Menu.Main.OptimizerCooldown = TimMenu.Slider("Failure Cooldown", G.Menu.Main.OptimizerCooldown, 6, 60, 3)
-			TimMenu.Tooltip("How many ticks to wait before retrying a failed skip (prevents oscillation)")
-			TimMenu.EndSector()
-
-			TimMenu.NextLine()
+                        TimMenu.NextLine()
 
 			-- Advanced Settings Section
 			TimMenu.BeginSector("Advanced Settings")
@@ -131,9 +110,8 @@ local function OnDrawMenu()
 			TimMenu.NextLine()
 
 			-- Connection processing status display
-			if G.Menu.Main.CleanupConnections then
-				local Node = require("MedBot.Modules.Node")
-				local status = Node.GetConnectionProcessingStatus()
+                        if G.Menu.Main.CleanupConnections then
+                                local status = Node.GetConnectionProcessingStatus()
 				if status.isProcessing then
 					local phaseNames = {
 						[1] = "Basic validation",

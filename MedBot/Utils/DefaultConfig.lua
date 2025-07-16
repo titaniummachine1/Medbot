@@ -15,7 +15,7 @@ defaultconfig = {
 		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
 		smoothFactor = 0.05,
 		LookingAhead = false, -- Enable automatic camera rotation towards target node
-		WalkableMode = "Step", -- "Step" for 18-unit steps only, "Jump" for 72-unit duck jumps
+                WalkableMode = "Smooth", -- "Smooth" uses 18-unit steps, "Aggressive" allows 72-unit jumps
 		CleanupConnections = false, -- Cleanup invalid connections during map load (disable to prevent crashes)
 		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
 		-- Hierarchical pathfinding settings (fixed 24-unit spacing)
