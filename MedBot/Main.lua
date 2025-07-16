@@ -135,17 +135,32 @@ function handleIdleState()
 		return
 	end
 
-	local goalNode = findGoalNode(currentTask)
-	if not goalNode then
-		Log:Warn("Could not find goal node")
-		return
-	end
+        local goalNode, goalPos = findGoalNode(currentTask)
+        if not goalNode then
+                Log:Warn("Could not find goal node")
+                return
+        end
 
-	-- Avoid pathfinding if we're already at the goal
-	if startNode.id == goalNode.id then
-		Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
-		return
-	end
+        -- Avoid pathfinding if we're already at the goal
+        if startNode.id == goalNode.id then
+                -- Try direct movement or internal path before giving up
+                if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos) then
+                        G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+                        G.currentState = G.States.MOVING
+                        G.lastPathfindingTick = currentTick
+                else
+                        local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
+                        if internal then
+                                G.Navigation.path = internal
+                                G.currentState = G.States.MOVING
+                                G.lastPathfindingTick = currentTick
+                        else
+                                Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+                                G.lastPathfindingTick = currentTick
+                        end
+                end
+                return
+        end
 
 	Log:Info("Generating new path from node %d to node %d", startNode.id, goalNode.id)
 	WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
@@ -240,52 +255,57 @@ function findGoalNode(currentTask)
 	local pLocal = G.pLocal.entity
 	local mapName = engine.GetMapName():lower()
 
-	local function findPayloadGoal()
-		G.World.payloads = entities.FindByClass("CObjectCartDispenser")
-		for _, entity in pairs(G.World.payloads) do
-			if entity:GetTeamNumber() == pLocal:GetTeamNumber() then
-				return Navigation.GetClosestNode(entity:GetAbsOrigin())
-			end
-		end
-	end
+        local function findPayloadGoal()
+                G.World.payloads = entities.FindByClass("CObjectCartDispenser")
+                for _, entity in pairs(G.World.payloads) do
+                        if entity:GetTeamNumber() == pLocal:GetTeamNumber() then
+                                local pos = entity:GetAbsOrigin()
+                                return Navigation.GetClosestNode(pos), pos
+                        end
+                end
+        end
 
-	local function findFlagGoal()
-		local myItem = pLocal:GetPropInt("m_hItem")
-		G.World.flags = entities.FindByClass("CCaptureFlag")
-		for _, entity in pairs(G.World.flags) do
-			local myTeam = entity:GetTeamNumber() == pLocal:GetTeamNumber()
-			if (myItem > 0 and myTeam) or (myItem < 0 and not myTeam) then
-				return Navigation.GetClosestNode(entity:GetAbsOrigin())
-			end
-		end
-	end
+        local function findFlagGoal()
+                local myItem = pLocal:GetPropInt("m_hItem")
+                G.World.flags = entities.FindByClass("CCaptureFlag")
+                for _, entity in pairs(G.World.flags) do
+                        local myTeam = entity:GetTeamNumber() == pLocal:GetTeamNumber()
+                        if (myItem > 0 and myTeam) or (myItem < 0 and not myTeam) then
+                                local pos = entity:GetAbsOrigin()
+                                return Navigation.GetClosestNode(pos), pos
+                        end
+                end
+        end
 
-	local function findHealthGoal()
-		local closestDist = math.huge
-		local closestNode = nil
-		for _, pos in pairs(G.World.healthPacks) do
-			local healthNode = Navigation.GetClosestNode(pos)
-			if healthNode then
-				local dist = (G.pLocal.Origin - pos):Length()
-				if dist < closestDist then
-					closestDist = dist
-					closestNode = healthNode
-				end
-			end
-		end
-		return closestNode
-	end
+        local function findHealthGoal()
+                local closestDist = math.huge
+                local closestNode = nil
+                local closestPos = nil
+                for _, pos in pairs(G.World.healthPacks) do
+                        local healthNode = Navigation.GetClosestNode(pos)
+                        if healthNode then
+                                local dist = (G.pLocal.Origin - pos):Length()
+                                if dist < closestDist then
+                                        closestDist = dist
+                                        closestNode = healthNode
+                                        closestPos = pos
+                                end
+                        end
+                end
+                return closestNode, closestPos
+        end
 
 	-- Find and follow the closest teammate using FastPlayers
-	local function findFollowGoal()
-		local localWP = Common.FastPlayers.GetLocal()
-		if not localWP then
-			return nil
-		end
-		local origin = localWP:GetRawEntity():GetAbsOrigin()
-		local closestDist = math.huge
-		local closestNode = nil
-		local foundTarget = false
+        local function findFollowGoal()
+                local localWP = Common.FastPlayers.GetLocal()
+                if not localWP then
+                        return nil
+                end
+                local origin = localWP:GetRawEntity():GetAbsOrigin()
+                local closestDist = math.huge
+                local closestNode = nil
+                local targetPos = nil
+                local foundTarget = false
 
 		for _, wp in ipairs(Common.FastPlayers.GetTeammates(true)) do
 			local ent = wp:GetRawEntity()
@@ -293,20 +313,22 @@ function findGoalNode(currentTask)
 				foundTarget = true
 				local pos = ent:GetAbsOrigin()
 				local dist = (pos - origin):Length()
-				if dist < closestDist then
-					closestDist = dist
-					-- Update our memory of where we last saw this target
-					G.Navigation.lastKnownTargetPosition = pos
-					closestNode = Navigation.GetClosestNode(pos)
-				end
-			end
-		end
+                                if dist < closestDist then
+                                        closestDist = dist
+                                        -- Update our memory of where we last saw this target
+                                        G.Navigation.lastKnownTargetPosition = pos
+                                        closestNode = Navigation.GetClosestNode(pos)
+                                        targetPos = pos
+                                end
+                        end
+                end
 
 		-- If no alive teammates found, but we have a last known position, use that
 		if not foundTarget and G.Navigation.lastKnownTargetPosition then
 			Log:Info("No alive teammates found, moving to last known position")
-			closestNode = Navigation.GetClosestNode(G.Navigation.lastKnownTargetPosition)
-		end
+                        closestNode = Navigation.GetClosestNode(G.Navigation.lastKnownTargetPosition)
+                        targetPos = G.Navigation.lastKnownTargetPosition
+                end
 
 		-- If the target is very close (same node), add some distance to avoid pathfinding to self
 		if closestNode and closestDist < 150 then -- 150 units is quite close
@@ -327,26 +349,26 @@ function findGoalNode(currentTask)
 			end
 		end
 
-		return closestNode
-	end
+                return closestNode, targetPos
+        end
 
 	if currentTask == "Objective" then
 		if mapName:find("plr_") or mapName:find("pl_") then
-			return findPayloadGoal()
-		elseif mapName:find("ctf_") then
-			return findFlagGoal()
-		else
-			-- fallback to following the closest teammate
-			return findFollowGoal()
-		end
-	elseif currentTask == "Health" then
-		return findHealthGoal()
-	elseif currentTask == "Follow" then
-		return findFollowGoal()
-	else
-		Log:Debug("Unknown task: %s", currentTask)
-	end
-	return nil
+                        return findPayloadGoal()
+                elseif mapName:find("ctf_") then
+                        return findFlagGoal()
+                else
+                        -- fallback to following the closest teammate
+                        return findFollowGoal()
+                end
+        elseif currentTask == "Health" then
+                return findHealthGoal()
+        elseif currentTask == "Follow" then
+                return findFollowGoal()
+        else
+                Log:Debug("Unknown task: %s", currentTask)
+        end
+        return nil
 end
 
 -- Function to move towards the current node (simplified for better FPS)
@@ -412,10 +434,9 @@ function moveTowardsNode(userCmd, node)
 
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-		-- Expensive walkability verification - only when stuck for a while
-		if G.Navigation.currentNodeTicks > 66 then
-			local cooldownTicks = G.Menu.Main.OptimizerCooldown or 12
-			if not isWalkable.Path(LocalOrigin, node.pos) then
+                -- Expensive walkability verification - only when stuck for a while
+                if G.Navigation.currentNodeTicks > 66 then
+                        if not isWalkable.Path(LocalOrigin, node.pos) then
 				Log:Warn("Path to current node blocked after being stuck, repathing...")
 				-- Add failure penalty to current connection if we have one
 				local path = G.Navigation.path
@@ -806,45 +827,6 @@ Commands.Register("pf_costs", function(args)
 	end
 end)
 
-Commands.Register("pf_optimizer", function(args)
-	if args[1] == "info" then
-		print("Path Optimiser Settings:")
-		print(string.format("  Lookahead Nodes: %d", G.Menu.Main.OptimizerLookahead or 10))
-		print(string.format("  Lookahead Distance: %d units", G.Menu.Main.OptimizerDistance or 600))
-		print(string.format("  Failure Cooldown: %d ticks", G.Menu.Main.OptimizerCooldown or 12))
-
-		local cacheSize = 0
-		for _ in pairs(Optimiser.cache) do
-			cacheSize = cacheSize + 1
-		end
-		print(string.format("  Cached failures: %d", cacheSize))
-	elseif args[1] == "clear" then
-		Optimiser.cache = {}
-		print("Optimiser failure cache cleared")
-	elseif args[1] == "test" then
-		local path = G.Navigation.path
-		if path and #path > 1 then
-			local origin = G.pLocal.Origin
-			local startTime = os.clock()
-			local targetIdx = Optimiser:getBestTarget(origin, path, 1)
-			local endTime = os.clock()
-			local timeTaken = (endTime - startTime) * 1000 -- Convert to milliseconds
-
-			print(string.format("Optimiser test results:"))
-			print(string.format("  Path length: %d nodes", #path))
-			print(string.format("  Best target: node %d", targetIdx))
-			print(string.format("  Skip count: %d nodes", targetIdx - 1))
-			print(string.format("  Time taken: %.3f ms", timeTaken))
-		else
-			print("No active path to test")
-		end
-	else
-		print("Usage: pf_optimizer info | clear | test")
-		print("  info  - Show optimiser settings and cache status")
-		print("  clear - Clear failure cache")
-		print("  test  - Test optimiser performance on current path")
-	end
-end)
 
 Notify.Alert("MedBot loaded!")
 if entities.GetLocalPlayer() then
