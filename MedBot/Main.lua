@@ -572,10 +572,9 @@ Commands.Register("pf_hierarchical", function(args)
 			"Will process across multiple ticks to prevent freezing",
 			5
 		)
-	elseif args[1] == "status" then
-		-- Check setup progress by accessing the SetupState (we need to expose this)
-		local G = require("MedBot.Utils.Globals")
-		if G.Navigation.hierarchical then
+        elseif args[1] == "status" then
+                -- Check setup progress by accessing the SetupState
+                if G.Navigation.hierarchical then
 			print("Hierarchical network ready and available")
 		else
 			print("Hierarchical network not yet available - check if setup is in progress")

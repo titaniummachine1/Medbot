@@ -1,6 +1,7 @@
 --[[ Imports ]]
 local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
+local Node = require("MedBot.Modules.Node")
 
 local Visuals = {}
 
@@ -271,12 +272,10 @@ local function OnDraw()
 	end
 
 	-- Draw fine-grained points within areas (hierarchical pathfinding)
-	if G.Menu.Visuals.showFinePoints and G.Menu.Main.UseHierarchicalPathfinding then
-		local Node = require("MedBot.Modules.Node")
-
-		-- Track drawn inter-area connections to avoid duplicates
-		local drawnInterConnections = {}
-		local drawnIntraConnections = {}
+        if G.Menu.Visuals.showFinePoints and G.Menu.Main.UseHierarchicalPathfinding then
+                -- Track drawn inter-area connections to avoid duplicates
+                local drawnInterConnections = {}
+                local drawnIntraConnections = {}
 
 		for id, entry in pairs(visibleNodes) do
 			local points = Node.GetAreaPoints(id)

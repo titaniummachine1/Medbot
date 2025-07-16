@@ -13,6 +13,7 @@ local MenuModule = {}
 
 -- Import globals
 local G = require("MedBot.Utils.Globals")
+local Node = require("MedBot.Modules.Node")
 
 -- Try loading TimMenu
 ---@type boolean, table
@@ -82,12 +83,9 @@ local function OnDrawMenu()
 			end
 
 			-- Auto-recalculate costs if mode changed
-			if G.Menu.Main.WalkableMode ~= previousMode then
-				local success, Node = pcall(require, "MedBot.Modules.Node")
-				if success and Node then
-					Node.RecalculateConnectionCosts()
-				end
-			end
+                        if G.Menu.Main.WalkableMode ~= previousMode then
+                                Node.RecalculateConnectionCosts()
+                        end
 			TimMenu.Tooltip("Smooth: Only 18-unit steps + height costs, Aggressive: Allow 72-unit jumps no extra cost")
 			TimMenu.EndSector()
 
@@ -131,9 +129,8 @@ local function OnDrawMenu()
 			TimMenu.NextLine()
 
 			-- Connection processing status display
-			if G.Menu.Main.CleanupConnections then
-				local Node = require("MedBot.Modules.Node")
-				local status = Node.GetConnectionProcessingStatus()
+                        if G.Menu.Main.CleanupConnections then
+                                local status = Node.GetConnectionProcessingStatus()
 				if status.isProcessing then
 					local phaseNames = {
 						[1] = "Basic validation",
