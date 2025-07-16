@@ -104,7 +104,9 @@ local function handleUserInput(userCmd)
 	return false
 end
 
--- Function to handle the IDLE state
+-- Handles the IDLE state by evaluating the current task and initiating pathfinding if appropriate.
+-- If the bot is already at the goal node, attempts direct movement or an internal path to the goal position before remaining idle.
+-- Limits pathfinding frequency to prevent excessive computation.
 function handleIdleState()
 	G.BotIsMoving = false -- Clear movement state when idle
 	local currentTask = Common.GetHighestPriorityTask()
@@ -245,7 +247,11 @@ function handleStuckState(userCmd)
 	end
 end
 
--- Function to find goal node based on the current task
+-- Determines the navigation goal node and its exact position based on the current task and game context.
+-- Returns the closest relevant navigation node and the associated world position for objectives, health packs, or teammates, depending on the task.
+-- @param currentTask The current navigation task ("Objective", "Health", or "Follow").
+-- @return goalNode The navigation node closest to the goal, or nil if not found.
+-- @return goalPos The exact world position of the goal, or nil if not found.
 function findGoalNode(currentTask)
 	-- Safety check: ensure nodes are loaded before proceeding
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
@@ -255,6 +261,8 @@ function findGoalNode(currentTask)
 	local pLocal = G.pLocal.entity
 	local mapName = engine.GetMapName():lower()
 
+        -- Finds the closest navigation node and position of the payload cart dispenser belonging to the player's team.
+        -- @return The closest navigation node to the payload cart dispenser, and the dispenser's position.
         local function findPayloadGoal()
                 G.World.payloads = entities.FindByClass("CObjectCartDispenser")
                 for _, entity in pairs(G.World.payloads) do
@@ -265,6 +273,8 @@ function findGoalNode(currentTask)
                 end
         end
 
+        -- Finds the closest navigation node and position of the flag held by the player's team.
+        -- @return The closest navigation node to the relevant flag, and the flag's position as a vector.
         local function findFlagGoal()
                 local myItem = pLocal:GetPropInt("m_hItem")
                 G.World.flags = entities.FindByClass("CCaptureFlag")
@@ -277,6 +287,8 @@ function findGoalNode(currentTask)
                 end
         end
 
+        -- Finds the closest health pack node and its position relative to the local player.
+        -- @return The navigation node nearest to a health pack, and the exact position of that health pack.
         local function findHealthGoal()
                 local closestDist = math.huge
                 local closestNode = nil
@@ -295,7 +307,10 @@ function findGoalNode(currentTask)
                 return closestNode, closestPos
         end
 
-	-- Find and follow the closest teammate using FastPlayers
+	-- Determines the closest alive teammate and returns the nearest navigation node and their position for following.
+        -- If no alive teammates are found, returns the node and position of the last known teammate location.
+        -- Expands the search radius if the target is very close to avoid pathfinding to the same node as the player.
+        -- @return The closest navigation node to follow and the corresponding target position, or nil if no target is available.
         local function findFollowGoal()
                 local localWP = Common.FastPlayers.GetLocal()
                 if not localWP then
@@ -371,7 +386,9 @@ function findGoalNode(currentTask)
         return nil
 end
 
--- Function to move towards the current node (simplified for better FPS)
+-- Moves the bot towards the specified navigation node, handling camera rotation, node skipping, stuck detection, and path recovery.
+-- If the node is reached, advances to the next node or idles if the path is complete.
+-- Applies hybrid node skipping and walkability checks to optimize movement and recover from displacement or obstacles.
 function moveTowardsNode(userCmd, node)
 	local LocalOrigin = G.pLocal.Origin
 

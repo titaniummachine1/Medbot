@@ -20,7 +20,8 @@ local Node = require("MedBot.Modules.Node")
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
 assert(menuLoaded, "TimMenu not found, please install it!")
 
--- Draw the menu
+-- Renders the MedBot control menu using TimMenu, providing interactive controls for bot behavior, movement, pathfinding, and visual display settings.
+-- The menu is organized into "Main" and "Visuals" tabs, each containing relevant configuration options and real-time status displays.
 local function OnDrawMenu()
 	-- Only draw when the Lmaobox menu is open
 	if not gui.IsMenuOpen() then
