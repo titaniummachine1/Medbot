@@ -43,7 +43,10 @@ G.Navigation = {
 	currentNodeTicks = 0,
 	FirstAgentNode = 1,
 	SecondAgentNode = 2,
-	lastKnownTargetPosition = nil, -- Remember last position of follow target
+       lastKnownTargetPosition = nil, -- Remember last position of follow target
+       goalPos = nil, -- Current goal world position
+       goalNodeId = nil, -- Closest node to the goal position
+       navMeshUpdated = false, -- Set when navmesh is rebuilt
 }
 
 -- SmartJump integration
@@ -89,6 +92,8 @@ G.States = {
 }
 
 G.currentState = nil
+G.prevState = nil -- Track previous bot state
+G.wasManualWalking = false -- Track if user manually walked last tick
 
 -- Function to clean up memory and caches
 function G.CleanupMemory()

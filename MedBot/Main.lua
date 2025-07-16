@@ -49,8 +49,9 @@ function Optimiser.skipIfWalkable(origin, path)
 	if not path or #path < 2 then
 		return false
 	end
-	local nextNode = path[2]
-	if nextNode and isWalkable.Path(origin, nextNode.pos) then
+        local nextNode = path[2]
+        -- Use aggressive walkable checks so we don't stop early on final nodes
+        if nextNode and isWalkable.Path(origin, nextNode.pos, "Aggressive") then
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 		return true
@@ -69,7 +70,8 @@ function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
 		G.currentState = G.States.IDLE
 		return true
 	end
-	if path and #path > 1 and isWalkable.Path(origin, goalPos) then
+        -- Use aggressive checks when trying to move directly to the goal
+        if path and #path > 1 and isWalkable.Path(origin, goalPos, "Aggressive") then
 		Navigation.ClearPath()
 		-- Optionally, set a direct path with just the goal as the node
 		G.Navigation.path = { { pos = goalPos } }
@@ -116,12 +118,13 @@ G.currentState = G.States.IDLE
 
 -- Function to handle user input
 local function handleUserInput(userCmd)
-	if userCmd:GetForwardMove() ~= 0 or userCmd:GetSideMove() ~= 0 then
-		G.Navigation.currentNodeTicks = 0
-		G.currentState = G.States.IDLE
-		return true
-	end
-	return false
+        if userCmd:GetForwardMove() ~= 0 or userCmd:GetSideMove() ~= 0 then
+                G.Navigation.currentNodeTicks = 0
+                G.currentState = G.States.IDLE
+                G.wasManualWalking = true
+                return true
+        end
+        return false
 end
 
 -- Function to handle the IDLE state
@@ -155,11 +158,14 @@ function handleIdleState()
 		return
 	end
 
-	local goalNode, goalPos = findGoalNode(currentTask)
-	if not goalNode then
-		Log:Warn("Could not find goal node")
-		return
-	end
+       local goalNode, goalPos = findGoalNode(currentTask)
+       if not goalNode then
+               Log:Warn("Could not find goal node")
+               return
+       end
+
+       G.Navigation.goalPos = goalPos
+       G.Navigation.goalNodeId = goalNode and goalNode.id or nil
 
 	-- Avoid pathfinding if we're already at the goal
 	if startNode.id == goalNode.id then
@@ -442,13 +448,20 @@ function moveTowardsNode(userCmd, node)
 		--  Hybrid Skip - Robust walkability check for node skipping
 		------------------------------------------------------------
 		-- Only skip one node per tick, first if closer, then if walkable
-		if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
-			if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
-				return -- Stop skipping for this tick (only one skip allowed)
-			elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
-				return -- Stop skipping for this tick (only one skip allowed)
-			end
-		end
+               if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
+                        local skipped = false
+                        if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
+                                skipped = true
+                        elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
+                                skipped = true
+                        end
+                        if skipped then
+                                node = G.Navigation.path[1]
+                                if not node then
+                                        return
+                                end
+                        end
+                end
 
 		-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
 		local originalButtons = userCmd.buttons
@@ -535,12 +548,16 @@ end
 -- Main function
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
-	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsAlive() then
-		G.currentState = G.States.IDLE
-		Navigation.ClearPath()
-		return
-	end
+        local pLocal = entities.GetLocalPlayer()
+        if not pLocal or not pLocal:IsAlive() then
+                G.currentState = G.States.IDLE
+                Navigation.ClearPath()
+                return
+        end
+
+       if not G.prevState then
+               G.prevState = G.currentState
+       end
 
 	-- If bot is disabled via menu, do nothing
 	if not G.Menu.Main.Enable then
@@ -564,10 +581,17 @@ local function OnCreateMove(userCmd)
 		G.lastCleanupTick = currentTick
 	end
 
-	if handleUserInput(userCmd) then
-		G.BotIsMoving = false -- Clear bot movement state when user takes control
-		return
-	end --if user is walking
+       if handleUserInput(userCmd) then
+               G.BotIsMoving = false -- Clear bot movement state when user takes control
+               return
+       end --if user is walking
+
+       if G.wasManualWalking then
+               if userCmd:GetForwardMove() == 0 and userCmd:GetSideMove() == 0 then
+                       G.wasManualWalking = false
+                       G.lastPathfindingTick = 0 -- force repath soon
+               end
+       end
 
 	-- Rearrange the conditions for better performance
 	if G.currentState == G.States.MOVING then
@@ -576,11 +600,36 @@ local function OnCreateMove(userCmd)
 		handlePathfindingState()
 	elseif G.currentState == G.States.IDLE then
 		handleIdleState()
-	elseif G.currentState == G.States.STUCK then
-		handleStuckState(userCmd)
-	end
+       elseif G.currentState == G.States.STUCK then
+               handleStuckState(userCmd)
+       end
 
-	WorkManager.processWorks()
+       -- Repath when state changes
+       if G.prevState ~= G.currentState then
+               if WorkManager.attemptWork(33, "StateChangeRepath") then
+                       G.lastPathfindingTick = 0
+               end
+               G.prevState = G.currentState
+       end
+
+       -- Repath if goal node changed
+       if G.Navigation.goalPos and G.Navigation.goalNodeId then
+               if WorkManager.attemptWork(33, "GoalCheck") then
+                       local newNode = Navigation.GetClosestNode(G.Navigation.goalPos)
+                       if newNode and newNode.id ~= G.Navigation.goalNodeId then
+                               G.lastPathfindingTick = 0
+                               G.Navigation.goalNodeId = newNode.id
+                       end
+               end
+       end
+
+       -- Repath after navmesh updates
+       if G.Navigation.navMeshUpdated then
+               G.Navigation.navMeshUpdated = false
+               G.lastPathfindingTick = 0
+       end
+
+       WorkManager.processWorks()
 end
 
 ---@param ctx DrawModelContext

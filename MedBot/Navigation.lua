@@ -48,8 +48,8 @@ function Navigation.AddConnection(nodeA, nodeB)
 
 	local nodes = G.Navigation.nodes
 
-	for dir = 1, 4 do
-		local conDir = nodes[nodeA.id].c[dir]
+       for dir = 1, 4 do
+               local conDir = nodes[nodeA.id].c[dir]
 		if conDir and conDir.connections then
 			-- Check if connection already exists
 			local exists = false
@@ -63,12 +63,12 @@ function Navigation.AddConnection(nodeA, nodeB)
 				print("Adding connection between " .. nodeA.id .. " and " .. nodeB.id)
 				table.insert(conDir.connections, nodeB.id)
 				conDir.count = conDir.count + 1
-			end
-		end
-	end
+                       end
+               end
+       end
 
-	for dir = 1, 4 do
-		local conDir = nodes[nodeB.id].c[dir]
+       for dir = 1, 4 do
+               local conDir = nodes[nodeB.id].c[dir]
 		if conDir and conDir.connections then
 			-- Check if reverse connection already exists
 			local exists = false
@@ -82,9 +82,10 @@ function Navigation.AddConnection(nodeA, nodeB)
 				print("Adding reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
 				table.insert(conDir.connections, nodeA.id)
 				conDir.count = conDir.count + 1
-			end
-		end
-	end
+                       end
+               end
+       end
+       G.Navigation.navMeshUpdated = true
 end
 
 -- Remove a connection between two nodes
@@ -96,7 +97,7 @@ function Navigation.RemoveConnection(nodeA, nodeB)
 
 	local nodes = G.Navigation.nodes
 
-	for dir = 1, 4 do
+       for dir = 1, 4 do
 		local conDir = nodes[nodeA.id].c[dir]
 		if conDir and conDir.connections then
 			for i, con in ipairs(conDir.connections) do
@@ -105,12 +106,12 @@ function Navigation.RemoveConnection(nodeA, nodeB)
 					table.remove(conDir.connections, i)
 					conDir.count = conDir.count - 1
 					break
-				end
-			end
+               end
+       end
 		end
 	end
 
-	for dir = 1, 4 do
+       for dir = 1, 4 do
 		local conDir = nodes[nodeB.id].c[dir]
 		if conDir and conDir.connections then
 			for i, con in ipairs(conDir.connections) do
@@ -119,9 +120,10 @@ function Navigation.RemoveConnection(nodeA, nodeB)
 					table.remove(conDir.connections, i)
 					conDir.count = conDir.count - 1
 					break
-				end
-			end
-		end
+               end
+       end
+       G.Navigation.navMeshUpdated = true
+end
 	end
 end
 
