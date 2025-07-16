@@ -43,11 +43,15 @@ defaultconfig = {
 		showInterConnections = true, -- Show connections between different areas (orange)
 		showEdgeConnections = true, -- Show edge-to-edge connections within areas (bright blue)
 	},
-	Movement = {
-		lookatpath = false, -- Look at where we are walking
-		smoothLookAtPath = true, -- Set this to true to enable smooth look at path
-		Smart_Jump = true, -- jumps perfectly before obstacle to be at peek of jump height when at colision point
-	},
+        Movement = {
+                lookatpath = false, -- Look at where we are walking
+                smoothLookAtPath = true, -- Set this to true to enable smooth look at path
+                Smart_Jump = true, -- jumps perfectly before obstacle to be at peek of jump height when at colision point
+        },
+        SmartJump = {
+                Enable = true,
+                Debug = false,
+        },
 }
 
 return defaultconfig

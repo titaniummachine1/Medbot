@@ -61,9 +61,14 @@ local function OnDrawMenu()
 
 			-- Smart Jump (works independently of MedBot enable state)
 			G.Menu.SmartJump = G.Menu.SmartJump or {}
-			G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable ~= false)
-			TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
-			TimMenu.NextLine()
+                        G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable ~= false)
+                        TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
+                        TimMenu.NextLine()
+
+                        G.Menu.SmartJump.Debug = G.Menu.SmartJump.Debug or false
+                        G.Menu.SmartJump.Debug = TimMenu.Checkbox("Smart Jump Debug", G.Menu.SmartJump.Debug)
+                        TimMenu.Tooltip("Print Smart Jump debug logs to console")
+                        TimMenu.NextLine()
 
                         -- Path optimisation mode for following nodes
                         G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"

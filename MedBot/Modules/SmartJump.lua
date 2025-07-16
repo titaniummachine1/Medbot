@@ -6,7 +6,14 @@ local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 
 local Log = Common.Log.new("SmartJump")
-Log.Level = 0 -- Enable debug logging
+Log.Level = 0 -- Default log level
+
+-- Utility wrapper to respect debug toggle
+local function DebugLog(...)
+        if G.Menu.SmartJump and G.Menu.SmartJump.Debug then
+                Log:Debug(...)
+        end
+end
 
 -- Constants
 local GRAVITY = 800 -- Gravity per second squared
@@ -25,10 +32,13 @@ local STATE_DESCENDING = "STATE_DESCENDING"
 
 -- Initialize SmartJump's own menu settings and state
 if not G.Menu.SmartJump then
-	G.Menu.SmartJump = {}
+        G.Menu.SmartJump = {}
 end
 if G.Menu.SmartJump.Enable == nil then
-	G.Menu.SmartJump.Enable = true -- Default to enabled
+        G.Menu.SmartJump.Enable = true -- Default to enabled
+end
+if G.Menu.SmartJump.Debug == nil then
+        G.Menu.SmartJump.Debug = false -- Disable debug logs by default
 end
 
 -- Initialize jump state
@@ -136,7 +146,7 @@ local function SmartVelocity(cmd, pLocal)
 
 		-- Create movement vector in command space (note: sidemove is negated in the original code)
 		moveDir = Vector3(forwardComponent * 450, -rightComponent * 450, 0) -- 450 is typical max speed
-		Log:Debug("SmartJump: Using bot movement direction (%.1f, %.1f)", forwardComponent, rightComponent)
+                DebugLog("SmartJump: Using bot movement direction (%.1f, %.1f)", forwardComponent, rightComponent)
 	end
 
 	local viewAngles = engine.GetViewAngles()
@@ -274,7 +284,7 @@ function SmartJump.Main(cmd)
 	-- Check if the player is on the ground and fully crouched, handle edge case
 	if onGround and (viewOffset < 65 or ducking) and G.SmartJump.jumpState ~= STATE_CTAP then
 		G.SmartJump.jumpState = STATE_CTAP -- Transition to STATE_CTAP to resolve logical error
-		Log:Debug("SmartJump: Edge case - player crouched on ground, transitioning to CTAP")
+                DebugLog("SmartJump: Edge case - player crouched on ground, transitioning to CTAP")
 	end
 
 	-- State machine for CTAP and jumping (user's exact logic)
@@ -285,7 +295,7 @@ function SmartJump.Main(cmd)
 		if onGround and (smartJumpDetected or shouldJump) then
 			if smartJumpDetected or shouldJump then
 				G.SmartJump.jumpState = STATE_PREPARE_JUMP
-				Log:Debug("SmartJump: IDLE -> PREPARE_JUMP")
+                                DebugLog("SmartJump: IDLE -> PREPARE_JUMP")
 			end
 		end
 	elseif G.SmartJump.jumpState == STATE_PREPARE_JUMP then
@@ -293,14 +303,14 @@ function SmartJump.Main(cmd)
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		cmd:SetButtons(cmd.buttons & ~IN_JUMP)
 		G.SmartJump.jumpState = STATE_CTAP
-		Log:Debug("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
+                DebugLog("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
 		return true
 	elseif G.SmartJump.jumpState == STATE_CTAP then
 		-- STATE_CTAP: Uncrouch and jump
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 		cmd:SetButtons(cmd.buttons | IN_JUMP)
 		G.SmartJump.jumpState = STATE_ASCENDING
-		Log:Debug("SmartJump: CTAP -> ASCENDING (unduck + jump)")
+                DebugLog("SmartJump: CTAP -> ASCENDING (unduck + jump)")
 		return true
 	elseif G.SmartJump.jumpState == STATE_ASCENDING then
 		-- STATE_ASCENDING: Player is moving upwards
@@ -308,7 +318,7 @@ function SmartJump.Main(cmd)
 		local velocity = pLocal:EstimateAbsVelocity()
 		if velocity.z <= 0 then
 			G.SmartJump.jumpState = STATE_DESCENDING
-			Log:Debug("SmartJump: ASCENDING -> DESCENDING (velocity.z <= 0)")
+                        DebugLog("SmartJump: ASCENDING -> DESCENDING (velocity.z <= 0)")
 		end
 		return true
 	elseif G.SmartJump.jumpState == STATE_DESCENDING then
@@ -329,19 +339,19 @@ function SmartJump.Main(cmd)
 						cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 						cmd:SetButtons(cmd.buttons | IN_JUMP)
 						G.SmartJump.jumpState = STATE_PREPARE_JUMP
-						Log:Debug("SmartJump: DESCENDING -> PREPARE_JUMP (bhop)")
+                                                DebugLog("SmartJump: DESCENDING -> PREPARE_JUMP (bhop)")
 					end
 				else
 					cmd:SetButtons(cmd.buttons | IN_DUCK)
 					G.SmartJump.jumpState = STATE_IDLE
-					Log:Debug("SmartJump: DESCENDING -> IDLE (landed)")
+                                        DebugLog("SmartJump: DESCENDING -> IDLE (landed)")
 				end
 			end
 		else
 			-- Fallback without prediction
 			if onGround then
 				G.SmartJump.jumpState = STATE_IDLE
-				Log:Debug("SmartJump: DESCENDING -> IDLE (fallback - landed)")
+                                DebugLog("SmartJump: DESCENDING -> IDLE (fallback - landed)")
 			end
 		end
 		return true
