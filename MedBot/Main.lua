@@ -45,18 +45,27 @@ function Optimiser.skipIfCloser(origin, path)
 	return false
 end
 
-function Optimiser.skipIfWalkable(origin, path)
-	if not path or #path < 2 then
-		return false
-	end
-	local nextNode = path[2]
-	-- Use aggressive walkable checks so we don't stop early on final nodes
-	if nextNode and isWalkable.Path(origin, nextNode.pos, "Aggressive") then
-		Navigation.RemoveCurrentNode()
-		Navigation.ResetTickTimer()
-		return true
-	end
-	return false
+function Optimiser.skipIfWalkable(origin, path, goalPos)
+        if not path or #path < 2 then
+                return false
+        end
+
+        local nextNode = path[2]
+        local mode = G.Menu.Main.WalkableMode or "Smooth"
+
+        -- If we're about to reach the goal or the goal itself is directly walkable,
+        -- temporarily override the mode to Aggressive (72 unit step height).
+        if #path == 2 or (goalPos and isWalkable.Path(origin, goalPos, "Aggressive")) then
+                mode = "Aggressive"
+        end
+
+        if nextNode and isWalkable.Path(origin, nextNode.pos, mode) then
+                Navigation.RemoveCurrentNode()
+                Navigation.ResetTickTimer()
+                return true
+        end
+
+        return false
 end
 
 function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
@@ -457,11 +466,11 @@ function moveTowardsNode(userCmd, node)
 		-- Only skip one node per tick, first if closer, then if walkable
 		if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
 			local skipped = false
-			if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
-				skipped = true
-			elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
-				skipped = true
-			end
+                       if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
+                                skipped = true
+                        elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path, goalPos) then
+                                skipped = true
+                        end
 			if skipped then
 				node = G.Navigation.path[1]
 				if not node then
