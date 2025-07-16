@@ -67,7 +67,7 @@ local function OnDrawMenu()
 
                         -- Path optimisation mode for following nodes
                         G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
-                        local walkableModes = { "Smooth (18u steps)", "Aggressive (72u jumps)" }
+                        local walkableModes = { "Smooth", "Aggressive" }
 			-- Get current mode as index number
 			local currentModeIndex = (G.Menu.Main.WalkableMode == "Aggressive") and 2 or 1
 			local previousMode = G.Menu.Main.WalkableMode

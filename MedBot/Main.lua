@@ -45,18 +45,21 @@ function Optimiser.skipIfCloser(origin, path)
 	return false
 end
 
-function Optimiser.skipIfWalkable(origin, path)
-	if not path or #path < 2 then
-		return false
-	end
+function Optimiser.skipIfWalkable(origin, path, goalPos)
+        if not path or #path < 2 then
+                return false
+        end
         local nextNode = path[2]
-        -- Use aggressive walkable checks so we don't stop early on final nodes
-        if nextNode and isWalkable.Path(origin, nextNode.pos, "Aggressive") then
-		Navigation.RemoveCurrentNode()
-		Navigation.ResetTickTimer()
-		return true
-	end
-	return false
+        local mode = G.Menu.Main.WalkableMode or "Smooth"
+        if #path == 2 or (goalPos and isWalkable.Path(origin, goalPos, "Aggressive")) then
+                mode = "Aggressive"
+        end
+        if nextNode and isWalkable.Path(origin, nextNode.pos, mode) then
+                Navigation.RemoveCurrentNode()
+                Navigation.ResetTickTimer()
+                return true
+        end
+        return false
 end
 
 function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
@@ -248,27 +251,34 @@ function handleStuckState(userCmd)
 		Log:Info("Emergency jump requested - SmartJump will handle it")
 	end
 
-	if G.Navigation.currentNodeTicks > 264 then
-		Log:Warn("Stuck for too long, repathing...")
-		-- Add failure penalty to current connection if we have one
-		local path = G.Navigation.path
-		if path and #path > 1 then
-			local currentNode = path[1]
-			local nextNode = path[2]
-			if currentNode and nextNode then
-				Node.AddFailurePenalty(currentNode, nextNode)
-				Log:Debug(
-					"Added failure penalty to connection %d -> %d due to prolonged stuck state",
-					currentNode.id,
-					nextNode.id
-				)
-			end
-		end
-		Navigation.ClearPath()
-		G.currentState = G.States.IDLE
-	else
-		G.currentState = G.States.MOVING
-	end
+        if G.Navigation.currentNodeTicks > 264 then
+                Log:Warn("Stuck for too long, repathing...")
+                local path = G.Navigation.path
+                if path and #path > 1 then
+                        local currentNode = path[1]
+                        local nextNode = path[2]
+                        if currentNode and nextNode then
+                                local penalty = 10
+                                if not isWalkable.Path(G.pLocal.Origin, nextNode.pos) then
+                                        if isWalkable.Path(G.pLocal.Origin, nextNode.pos, "Aggressive") then
+                                                penalty = 50
+                                        else
+                                                penalty = 100
+                                        end
+                                end
+                                Node.AddFailurePenalty(currentNode, nextNode, penalty)
+                                Log:Debug(
+                                        "Added failure penalty to connection %d -> %d due to prolonged stuck state",
+                                        currentNode.id,
+                                        nextNode.id
+                                )
+                        end
+                end
+                Navigation.ResetTickTimer()
+                G.currentState = G.States.PATHFINDING
+        else
+                G.currentState = G.States.MOVING
+        end
 end
 
 -- Function to find goal node based on the current task
@@ -452,7 +462,7 @@ function moveTowardsNode(userCmd, node)
                         local skipped = false
                         if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
                                 skipped = true
-                        elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
+                        elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path, goalPos) then
                                 skipped = true
                         end
                         if skipped then
@@ -479,24 +489,23 @@ function moveTowardsNode(userCmd, node)
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
 		-- Expensive walkability verification - only when stuck for a while
-		if G.Navigation.currentNodeTicks > 66 then
-			if not isWalkable.Path(LocalOrigin, node.pos) then
-				Log:Warn("Path to current node blocked after being stuck, repathing...")
-				-- Add failure penalty to current connection if we have one
-				local path = G.Navigation.path
-				if path and #path > 1 then
-					local currentNode = path[1]
-					local nextNode = path[2]
-					if currentNode and nextNode then
-						Node.AddFailurePenalty(currentNode, nextNode)
-					end
-				end
-				Navigation.ClearPath()
-				Navigation.ResetTickTimer()
-				G.currentState = G.States.IDLE
-				return
-			end
-		end
+                if G.Navigation.currentNodeTicks > 66 then
+                        if not isWalkable.Path(LocalOrigin, node.pos) then
+                                Log:Warn("Path to current node blocked after being stuck, repathing...")
+                                local path = G.Navigation.path
+                                if path and #path > 1 then
+                                        local currentNode = path[1]
+                                        local nextNode = path[2]
+                                        if currentNode and nextNode then
+                                                local penalty = isWalkable.Path(LocalOrigin, node.pos, "Aggressive") and 50 or 100
+                                                Node.AddFailurePenalty(currentNode, nextNode, penalty)
+                                        end
+                                end
+                                Navigation.ResetTickTimer()
+                                G.currentState = G.States.PATHFINDING
+                                return
+                        end
+                end
 
 		-- Fast re-sync when blast displacement < 1200 uu (optional recovery system)
 		local path = G.Navigation.path
@@ -522,26 +531,32 @@ function moveTowardsNode(userCmd, node)
 		end
 
 		-- Simple stuck detection and repathing
-		if G.Navigation.currentNodeTicks > 264 then
-			Log:Warn("Stuck for too long, repathing...")
-			-- Add failure penalty to current connection if we have one
-			local path = G.Navigation.path
-			if path and #path > 1 then
-				local currentNode = path[1]
-				local nextNode = path[2]
-				if currentNode and nextNode then
-					Node.AddFailurePenalty(currentNode, nextNode)
-					Log:Debug(
-						"Added failure penalty to connection %d -> %d due to prolonged stuck",
-						currentNode.id,
-						nextNode.id
-					)
-				end
-			end
-			Navigation.ClearPath()
-			Navigation.ResetTickTimer()
-			G.currentState = G.States.IDLE
-		end
+                if G.Navigation.currentNodeTicks > 264 then
+                        Log:Warn("Stuck for too long, repathing...")
+                        local path = G.Navigation.path
+                        if path and #path > 1 then
+                                local currentNode = path[1]
+                                local nextNode = path[2]
+                                if currentNode and nextNode then
+                                        local penalty = 10
+                                        if not isWalkable.Path(LocalOrigin, nextNode.pos) then
+                                                if isWalkable.Path(LocalOrigin, nextNode.pos, "Aggressive") then
+                                                        penalty = 50
+                                                else
+                                                        penalty = 100
+                                                end
+                                        end
+                                        Node.AddFailurePenalty(currentNode, nextNode, penalty)
+                                        Log:Debug(
+                                                "Added failure penalty to connection %d -> %d due to prolonged stuck",
+                                                currentNode.id,
+                                                nextNode.id
+                                        )
+                                end
+                        end
+                        Navigation.ResetTickTimer()
+                        G.currentState = G.States.PATHFINDING
+                end
 	end
 end
 
