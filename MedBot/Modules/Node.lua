@@ -1699,35 +1699,95 @@ end
 ---@param nodeB table Second node (destination)
 function Node.AddFailurePenalty(nodeA, nodeB, penalty)
         penalty = penalty or 100
-	if not nodeA or not nodeB then
-		return
-	end
-	local nodes = G.Navigation.nodes
-	if not nodes then
-		return
-	end
+        if not nodeA or not nodeB then
+                return
+        end
 
-        -- Helper to apply penalty in one direction
-        local function applyPenalty(fromNode, toNode)
-                for _, cDir in pairs(nodes[fromNode.id] and nodes[fromNode.id].c or {}) do
+        local nodes = G.Navigation.nodes
+        if not nodes then
+                return
+        end
+
+        -- Resolve area IDs for both nodes (supports fine points)
+        local function resolveAreaId(n)
+                if nodes[n.id] then
+                        return n.id
+                end
+                if n.parentArea and nodes[n.parentArea] then
+                        return n.parentArea
+                end
+                return nil
+        end
+
+        -- Helper to apply penalty in one direction for area connections
+        local function applyAreaPenalty(fromAreaId, toAreaId)
+                if not (fromAreaId and toAreaId) then
+                        return false
+                end
+                for _, cDir in pairs(nodes[fromAreaId] and nodes[fromAreaId].c or {}) do
                         if cDir and cDir.connections then
                                 for i, connection in pairs(cDir.connections) do
                                         local targetNodeId = getConnectionNodeId(connection)
-                                        if targetNodeId == toNode.id then
+                                        if targetNodeId == toAreaId then
                                                 local currentCost = getConnectionCost(connection)
                                                 local newCost = currentCost + penalty
                                                 cDir.connections[i] = { node = targetNodeId, cost = newCost }
                                                 Log:Debug(
                                                         "Added failure penalty to connection %d -> %d: %.1f -> %.1f",
-                                                        fromNode.id,
-                                                        toNode.id,
+                                                        fromAreaId,
+                                                        toAreaId,
                                                         currentCost,
                                                         newCost
                                                 )
-                                                return
+                                                return true
                                         end
                                 end
                         end
+                end
+                return false
+        end
+
+        -- Helper to apply penalty for fine point neighbors
+        local function applyFinePenalty(fromNode, toNode)
+                if not fromNode.neighbors then
+                        return false
+                end
+                for _, neighbor in ipairs(fromNode.neighbors) do
+                        if neighbor.point == toNode then
+                                local currentCost = neighbor.cost or 1
+                                local newCost = currentCost + penalty
+                                neighbor.cost = newCost
+                                Log:Debug(
+                                        "Added fine failure penalty to point %d (area %s) -> %d (area %s): %.1f -> %.1f",
+                                        fromNode.id or -1,
+                                        fromNode.parentArea or "?",
+                                        toNode.id or -1,
+                                        toNode.parentArea or "?",
+                                        currentCost,
+                                        newCost
+                                )
+                                return true
+                        end
+                end
+                return false
+        end
+
+        local function applyPenalty(fromNode, toNode)
+                -- First try area-level penalty
+                local fromArea = resolveAreaId(fromNode)
+                local toArea = resolveAreaId(toNode)
+                local appliedArea = applyAreaPenalty(fromArea, toArea)
+
+                -- Then fine-point penalty if applicable
+                local appliedFine = applyFinePenalty(fromNode, toNode)
+
+                -- Debug if no connection was updated
+                if not appliedArea and not appliedFine then
+                        Log:Warn(
+                                "Skipping penalty for invalid connection: %s->%s",
+                                tostring(fromArea or fromNode.id),
+                                tostring(toArea or toNode.id)
+                        )
                 end
         end
 
