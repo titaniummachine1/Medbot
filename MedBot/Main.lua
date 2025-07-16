@@ -65,7 +65,7 @@ Log.Level = 0
 -- Circuit breaker for problematic connections
 local ConnectionCircuitBreaker = {
 	failures = {}, -- [connectionKey] = { count, lastFailTime, isBlocked }
-	maxFailures = 3, -- Max failures before blocking connection temporarily
+	maxFailures = 2, -- Max failures before blocking connection temporarily (reduced from 3 for faster blocking)
 	blockDuration = 300, -- Ticks to block connection (5 seconds)
 	cleanupInterval = 1800, -- Clean up old entries every 30 seconds
 	lastCleanup = 0,
@@ -74,7 +74,7 @@ local ConnectionCircuitBreaker = {
 -- Add a connection failure to the circuit breaker
 local function addConnectionFailure(nodeA, nodeB)
 	if not nodeA or not nodeB then
-		return
+		return false
 	end
 
 	local connectionKey = nodeA.id .. "->" .. nodeB.id
@@ -89,19 +89,33 @@ local function addConnectionFailure(nodeA, nodeB)
 	failure.count = failure.count + 1
 	failure.lastFailTime = currentTick
 
+	-- Each failure adds MORE penalty (makes path progressively more expensive)
+	local additionalPenalty = 100 -- Add 100 units per failure
+	Node.AddFailurePenalty(nodeA, nodeB, additionalPenalty)
+
+	Log:Debug(
+		"Connection %s failure #%d - added %d penalty (total accumulating)",
+		connectionKey,
+		failure.count,
+		additionalPenalty
+	)
+
 	-- Block connection if too many failures
 	if failure.count >= ConnectionCircuitBreaker.maxFailures then
 		failure.isBlocked = true
-		Log:Warn("Circuit breaker BLOCKED connection %s after %d failures", connectionKey, failure.count)
+		-- Add a big penalty to ensure A* avoids this completely
+		local blockingPenalty = 500
+		Node.AddFailurePenalty(nodeA, nodeB, blockingPenalty)
+
+		Log:Warn(
+			"Connection %s BLOCKED after %d failures (added final %d penalty)",
+			connectionKey,
+			failure.count,
+			blockingPenalty
+		)
 		return true
 	end
 
-	Log:Debug(
-		"Circuit breaker recorded failure %d/%d for connection %s",
-		failure.count,
-		ConnectionCircuitBreaker.maxFailures,
-		connectionKey
-	)
 	return false
 end
 
@@ -119,11 +133,15 @@ local function isConnectionBlocked(nodeA, nodeB)
 	end
 
 	local currentTick = globals.TickCount()
-	-- Unblock if enough time has passed
+	-- Unblock if enough time has passed (penalties remain but connection becomes usable)
 	if currentTick - failure.lastFailTime > ConnectionCircuitBreaker.blockDuration then
 		failure.isBlocked = false
-		failure.count = 0 -- Reset failure count
-		Log:Info("Circuit breaker UNBLOCKED connection %s after timeout", connectionKey)
+		failure.count = 0 -- Reset failure count (penalties stay, giving A* a chance to reconsider)
+
+		Log:Info(
+			"Connection %s UNBLOCKED after timeout (accumulated penalties remain as lesson learned)",
+			connectionKey
+		)
 		return false
 	end
 
@@ -224,6 +242,122 @@ function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
 		end
 	end
 	return false
+end
+
+--[[ Superior WalkTo Implementation (from standstill dummy) ]]
+
+-- Constants for physics-accurate movement
+local MAX_SPEED = 450 -- Maximum speed the player can move
+local TWO_PI = 2 * math.pi
+local DEG_TO_RAD = math.pi / 180
+
+-- Ground-physics helpers (synced with server convars)
+local DEFAULT_GROUND_FRICTION = 4 -- fallback for sv_friction
+local DEFAULT_SV_ACCELERATE = 10 -- fallback for sv_accelerate
+
+local function GetGroundFriction()
+	local ok, val = pcall(client.GetConVar, "sv_friction")
+	if ok and val and val > 0 then
+		return val
+	end
+	return DEFAULT_GROUND_FRICTION
+end
+
+local function GetGroundMaxDeltaV(player, tick)
+	tick = (tick and tick > 0) and tick or 1 / 66.67
+	local svA = client.GetConVar("sv_accelerate") or 0
+	if svA <= 0 then
+		svA = DEFAULT_SV_ACCELERATE
+	end
+
+	local cap = player and player:GetPropFloat("m_flMaxspeed") or MAX_SPEED
+	if not cap or cap <= 0 then
+		cap = MAX_SPEED
+	end
+
+	return svA * cap * tick
+end
+
+-- Computes the move vector between two points
+local function ComputeMove(userCmd, a, b)
+	local dx, dy = b.x - a.x, b.y - a.y
+
+	local targetYaw = (math.atan(dy, dx) + TWO_PI) % TWO_PI
+	local _, currentYaw = userCmd:GetViewAngles()
+	currentYaw = currentYaw * DEG_TO_RAD
+
+	local yawDiff = (targetYaw - currentYaw + math.pi) % TWO_PI - math.pi
+
+	return Vector3(math.cos(yawDiff) * MAX_SPEED, math.sin(-yawDiff) * MAX_SPEED, 0)
+end
+
+-- Predictive/no-overshoot WalkTo (superior implementation from standstill dummy)
+local function WalkTo(cmd, player, dest)
+	if not (cmd and player and dest) then
+		return
+	end
+
+	local pos = player:GetAbsOrigin()
+	if not pos then
+		return
+	end
+
+	local tick = globals.TickInterval()
+	if tick <= 0 then
+		tick = 1 / 66.67
+	end
+
+	-- Current horizontal velocity (ignore Z)
+	local vel = player:EstimateAbsVelocity() or Vector3(0, 0, 0)
+	vel.z = 0
+
+	-- Predict passive drag to next tick
+	local drag = math.max(0, 1 - GetGroundFriction() * tick)
+	local velNext = vel * drag
+	local predicted = Vector3(pos.x + velNext.x * tick, pos.y + velNext.y * tick, pos.z)
+
+	-- Remaining displacement after coast
+	local need = dest - predicted
+	need.z = 0
+	local dist = need:Length()
+	if dist < 1.5 then
+		cmd:SetForwardMove(0)
+		cmd:SetSideMove(0)
+		return
+	end
+
+	-- Velocity we need at start of next tick to land on dest
+	local deltaV = (need / tick) - velNext
+	local deltaLen = deltaV:Length()
+	if deltaLen < 0.1 then
+		cmd:SetForwardMove(0)
+		cmd:SetSideMove(0)
+		return
+	end
+
+	-- Accel clamp from sv_accelerate
+	local aMax = GetGroundMaxDeltaV(player, tick)
+	local accelDir = deltaV / deltaLen
+	local accelLen = math.min(deltaLen, aMax)
+
+	-- wishspeed proportional to allowed Δv
+	local wishSpeed = math.max(MAX_SPEED * (accelLen / aMax), 20)
+
+	-- Overshoot guard
+	local maxNoOvershoot = dist / tick
+	wishSpeed = math.min(wishSpeed, maxNoOvershoot)
+	if wishSpeed < 5 then
+		wishSpeed = 0
+	end
+
+	-- Convert accelDir into local move inputs
+	local dirEnd = pos + accelDir
+	local moveVec = ComputeMove(cmd, pos, dirEnd)
+	local fwd = (moveVec.x / MAX_SPEED) * wishSpeed
+	local side = (moveVec.y / MAX_SPEED) * wishSpeed
+
+	cmd:SetForwardMove(fwd)
+	cmd:SetSideMove(side)
 end
 
 --[[ Functions ]]
@@ -375,19 +509,59 @@ function handleIdleState()
 	if startNode.id == goalNode.id then
 		-- Try direct movement or internal path before giving up
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+
+		-- Use aggressive mode for CTF intel objectives to handle intel on tables (like 2fort)
+		if currentTask == "Objective" and mapName:find("ctf_") then
+			local pLocal = G.pLocal.entity
+			local myItem = pLocal:GetPropInt("m_hItem")
+			-- If not carrying intel (trying to get enemy intel), use aggressive mode
+			if myItem <= 0 then
+				walkMode = "Aggressive"
+				Log:Info("Using Aggressive mode for CTF intel objective (intel on table)")
+			end
+		end
+
 		if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick
+			Log:Info("Moving directly to goal with %s mode from goal node %d", walkMode, startNode.id)
 		else
-			local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
-			if internal then
-				G.Navigation.path = internal
-				G.currentState = G.States.MOVING
-				G.lastPathfindingTick = currentTick
+			-- If normal walkMode fails, try aggressive mode as fallback for any objective
+			if walkMode ~= "Aggressive" and currentTask == "Objective" then
+				Log:Info("Normal walkMode failed, trying Aggressive mode as fallback")
+				if isWalkable.Path(G.pLocal.Origin, goalPos, "Aggressive") then
+					G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+					G.currentState = G.States.MOVING
+					G.lastPathfindingTick = currentTick
+					Log:Info("Aggressive mode fallback successful")
+				else
+					-- Try internal path if aggressive also fails
+					local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
+					if internal then
+						G.Navigation.path = internal
+						G.currentState = G.States.MOVING
+						G.lastPathfindingTick = currentTick
+						Log:Info("Using internal path as final fallback")
+					else
+						Log:Debug(
+							"Already at goal node %d, staying in IDLE (all direct movement attempts failed)",
+							startNode.id
+						)
+						G.lastPathfindingTick = currentTick
+					end
+				end
 			else
-				Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
-				G.lastPathfindingTick = currentTick
+				local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
+				if internal then
+					G.Navigation.path = internal
+					G.currentState = G.States.MOVING
+					G.lastPathfindingTick = currentTick
+					Log:Info("Using internal path")
+				else
+					Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+					G.lastPathfindingTick = currentTick
+				end
 			end
 		end
 		ProfilerEnd()
@@ -569,30 +743,38 @@ function handleStuckState(userCmd)
 				-- Only do expensive walkability check if not already blocked by circuit breaker
 				if not connectionBlocked then
 					local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-					local penalty = 75 -- Higher base penalty for prolonged stuck
+					local stuckPenalty = 75 -- Base penalty to add for being stuck
 
 					if not isWalkable.Path(G.pLocal.Origin, nextNode.pos, walkMode) then
 						if isWalkable.Path(G.pLocal.Origin, nextNode.pos, "Aggressive") then
-							penalty = 150
+							stuckPenalty = 150 -- Mode-specific stuck penalty
 							Log:Debug(
-								"Stuck connection %d -> %d: fails with %s but works with Aggressive",
+								"Stuck connection %d -> %d: fails with %s but works with Aggressive - adding %d penalty",
 								currentNode.id,
 								nextNode.id,
-								walkMode
+								walkMode,
+								stuckPenalty
 							)
 						else
-							penalty = 250 -- Very high penalty for completely blocked paths
-							Log:Debug("Stuck connection %d -> %d: completely blocked", currentNode.id, nextNode.id)
+							stuckPenalty = 250 -- Complete blockage stuck penalty
+							Log:Debug(
+								"Stuck connection %d -> %d: completely blocked - adding %d penalty",
+								currentNode.id,
+								nextNode.id,
+								stuckPenalty
+							)
 						end
 					else
 						Log:Debug(
-							"Stuck connection %d -> %d: walkable but still stuck (collision/geometry issue?)",
+							"Stuck connection %d -> %d: walkable but still stuck (collision/geometry issue?) - adding %d penalty",
 							currentNode.id,
-							nextNode.id
+							nextNode.id,
+							stuckPenalty
 						)
 					end
 
-					Node.AddFailurePenalty(currentNode, nextNode, penalty)
+					-- Add the penalty (accumulates with all previous penalties)
+					Node.AddFailurePenalty(currentNode, nextNode, stuckPenalty)
 
 					-- Add to circuit breaker - if this returns true, connection is now blocked
 					if addConnectionFailure(currentNode, nextNode) then
@@ -604,8 +786,8 @@ function handleStuckState(userCmd)
 					end
 
 					Log:Info(
-						"Applied heavy penalty %d to connection %d -> %d after %d ticks stuck",
-						penalty,
+						"Added stuck penalty %d to connection %d -> %d after %d ticks stuck (accumulating)",
+						stuckPenalty,
 						currentNode.id,
 						nextNode.id,
 						stuckDuration
@@ -839,6 +1021,28 @@ function moveTowardsNode(userCmd, node)
 	local LocalOrigin = G.pLocal.Origin
 	local goalPos = G.Navigation.goalPos -- Use the stored goal position directly
 
+	-- EARLY CIRCUIT BREAKER CHECK: Don't even try moving if the next connection is blocked
+	ProfilerBegin("early_circuit_check")
+	local path = G.Navigation.path
+	if path and #path > 1 then
+		local currentNode = path[1]
+		local nextNode = path[2]
+		if isConnectionBlocked(currentNode, nextNode) then
+			Log:Warn(
+				"Early circuit breaker detection: connection %d -> %d is BLOCKED, forcing immediate repath",
+				currentNode.id,
+				nextNode.id
+			)
+			G.currentState = G.States.PATHFINDING
+			G.lastPathfindingTick = 0
+			Navigation.ClearPath() -- Force new path when blocked connection detected early
+			ProfilerEnd()
+			ProfilerEnd()
+			return
+		end
+	end
+	ProfilerEnd()
+
 	-- Try to skip directly to the goal if we have a complex path
 	ProfilerBegin("goal_skip_check")
 	if G.Menu.Main.Skip_Nodes and goalPos and G.Navigation.path and #G.Navigation.path > 1 then
@@ -918,11 +1122,11 @@ function moveTowardsNode(userCmd, node)
 	-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
 	local originalButtons = userCmd.buttons
 
-	-- Simple movement without complex optimizations
-	Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+	-- Use superior physics-accurate movement from standstill dummy
+	WalkTo(userCmd, G.pLocal.entity, node.pos)
 
 	-- Preserve SmartJump button inputs (jump and duck commands)
-	-- WalkTo might clear these, so we need to restore them
+	-- WalkTo only sets forward/side move, so button state is preserved automatically
 	local smartJumpButtons = originalButtons & (IN_JUMP | IN_DUCK)
 	if smartJumpButtons ~= 0 then
 		userCmd:SetButtons(userCmd.buttons | smartJumpButtons)
@@ -942,24 +1146,55 @@ function moveTowardsNode(userCmd, node)
 				local currentNode = path[1]
 				local nextNode = path[2]
 				if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then -- Prevent self-loop penalties
-					-- Test penalty based on walkability with different modes
-					local penalty = 50 -- Increased base penalty
+					-- Add penalty based on walkability - each failure makes connection more expensive
+					local additionalPenalty = 50 -- Base penalty to add
+
 					if not isWalkable.Path(LocalOrigin, nextNode.pos, walkMode) then
 						if isWalkable.Path(LocalOrigin, nextNode.pos, "Aggressive") then
-							penalty = 100 -- Higher penalty for mode-specific failures
+							additionalPenalty = 100 -- Mode-specific failure penalty
 							Log:Debug(
-								"Connection %d -> %d fails with %s but works with Aggressive",
+								"Connection %d -> %d fails with %s but works with Aggressive - adding %d penalty",
 								currentNode.id,
 								nextNode.id,
-								walkMode
+								walkMode,
+								additionalPenalty
 							)
 						else
-							penalty = 200 -- Much higher penalty for completely blocked paths
-							Log:Debug("Connection %d -> %d completely blocked", currentNode.id, nextNode.id)
+							additionalPenalty = 200 -- Completely blocked path penalty
+							Log:Debug(
+								"Connection %d -> %d completely blocked - adding %d penalty",
+								currentNode.id,
+								nextNode.id,
+								additionalPenalty
+							)
 						end
+					else
+						Log:Debug(
+							"Connection %d -> %d is walkable but stuck (geometry issue?) - adding %d penalty",
+							currentNode.id,
+							nextNode.id,
+							additionalPenalty
+						)
 					end
-					Node.AddFailurePenalty(currentNode, nextNode, penalty)
-					Log:Info("Applied penalty %d to connection %d -> %d", penalty, currentNode.id, nextNode.id)
+
+					-- Add the penalty (accumulates with previous penalties)
+					Node.AddFailurePenalty(currentNode, nextNode, additionalPenalty)
+					Log:Info(
+						"Added %d penalty to connection %d -> %d (accumulating)",
+						additionalPenalty,
+						currentNode.id,
+						nextNode.id
+					)
+
+					-- CIRCUIT BREAKER: Track failures and potentially block connection
+					if addConnectionFailure(currentNode, nextNode) then
+						Log:Warn(
+							"Connection %d -> %d is now BLOCKED by circuit breaker - forcing path clear",
+							currentNode.id,
+							nextNode.id
+						)
+						Navigation.ClearPath() -- Force completely new path when connection is blocked
+					end
 				else
 					Log:Warn(
 						"Skipping penalty for invalid connection: currentNode=%s (id=%s) nextNode=%s (id=%s)",
