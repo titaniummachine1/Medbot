@@ -50,8 +50,12 @@ function Optimiser.skipIfWalkable(origin, path)
 		return false
 	end
 	local nextNode = path[2]
-	-- Use aggressive walkable checks so we don't stop early on final nodes
-	if nextNode and isWalkable.Path(origin, nextNode.pos, "Aggressive") then
+	local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+	-- For final nodes, use aggressive mode to avoid stopping short of goals
+	if #path == 2 then
+		walkMode = "Aggressive"
+	end
+	if nextNode and isWalkable.Path(origin, nextNode.pos, walkMode) then
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 		return true
@@ -60,26 +64,30 @@ function Optimiser.skipIfWalkable(origin, path)
 end
 
 function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
-        local DEADZONE = 24 -- units, tweak as needed
-        if not goalPos or not origin then
-                return false
-        end
-        local dist = (goalPos - origin):Length()
-        if dist < DEADZONE then
-                Navigation.ClearPath()
-                G.currentState = G.States.IDLE
-                G.lastPathfindingTick = 0
-                return true
-        end
-        -- Use aggressive checks when trying to move directly to the goal
-        if isWalkable.Path(origin, goalPos, "Aggressive") then
-                Navigation.ClearPath()
-                -- Optionally, set a direct path with just the goal as the node
-                G.Navigation.path = { { pos = goalPos } }
-                G.lastPathfindingTick = 0
-                return true
-        end
-        return false
+	local DEADZONE = 24 -- units, tweak as needed
+	if not goalPos or not origin then
+		return false
+	end
+	local dist = (goalPos - origin):Length()
+	if dist < DEADZONE then
+		Navigation.ClearPath()
+		G.currentState = G.States.IDLE
+		G.lastPathfindingTick = 0
+		return true
+	end
+	-- Only skip if we have a multi-node path AND goal is directly reachable with current walk mode
+	if path and #path > 1 then
+		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+		if isWalkable.Path(origin, goalPos, walkMode) then
+			Navigation.ClearPath()
+			-- Set a direct path with just the goal as the node
+			G.Navigation.path = { { pos = goalPos } }
+			G.lastPathfindingTick = 0
+			Log:Info("Cleared complex path, moving directly to goal with %s mode (distance: %.1f)", walkMode, dist)
+			return true
+		end
+	end
+	return false
 end
 
 --[[ Functions ]]
@@ -137,6 +145,45 @@ function handleIdleState()
 		return
 	end
 
+	-- Check for immediate goals first (before pathfinding cooldown)
+	local goalNode, goalPos = findGoalNode(currentTask)
+	if goalNode and goalPos then
+		local distance = (G.pLocal.Origin - goalPos):Length()
+		-- Use direct movement if we don't have a path, or if path ended and goal is close
+		local shouldTryDirectMovement = (not G.Navigation.path or #G.Navigation.path == 0) and distance > 25
+
+		-- Also try direct movement if we have a goal that's different from our current path goal
+		if not shouldTryDirectMovement and G.Navigation.goalPos then
+			local goalChanged = (G.Navigation.goalPos - goalPos):Length() > 100
+			if goalChanged and distance > 50 then
+				shouldTryDirectMovement = true
+				Log:Debug("Goal changed significantly, trying direct movement (distance: %.1f)", distance)
+			end
+		end
+
+		if shouldTryDirectMovement then
+			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+			-- Use aggressive mode for very close goals (likely objectives/intel)
+			if distance < 200 then
+				walkMode = "Aggressive"
+			end
+
+			if isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
+				Log:Info(
+					"Goal directly reachable with %s mode, moving immediately (distance: %.1f)",
+					walkMode,
+					distance
+				)
+				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+				G.Navigation.goalPos = goalPos
+				G.Navigation.goalNodeId = goalNode.id
+				G.currentState = G.States.MOVING
+				G.lastPathfindingTick = globals.TickCount()
+				return
+			end
+		end
+	end
+
 	-- PERFORMANCE FIX: Prevent pathfinding spam by limiting frequency
 	local currentTick = globals.TickCount()
 	if not G.lastPathfindingTick then
@@ -160,7 +207,9 @@ function handleIdleState()
 		return
 	end
 
-	local goalNode, goalPos = findGoalNode(currentTask)
+	if not goalNode then
+		goalNode, goalPos = findGoalNode(currentTask)
+	end
 	if not goalNode then
 		Log:Warn("Could not find goal node")
 		return
@@ -172,7 +221,8 @@ function handleIdleState()
 	-- Avoid pathfinding if we're already at the goal
 	if startNode.id == goalNode.id then
 		-- Try direct movement or internal path before giving up
-		if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos, "Aggressive") then
+		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+		if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick
@@ -205,6 +255,41 @@ function handlePathfindingState()
 		Log:Warn("Pathfinding failed")
 		G.currentState = G.States.IDLE
 		Navigation.pathFailed = false
+	else
+		-- If we're in pathfinding state but no work is in progress, start pathfinding
+		local pathfindingWork = WorkManager.works["Pathfinding"]
+		if not pathfindingWork or pathfindingWork.wasExecuted then
+			-- Use existing goal if available, otherwise find new goal
+			local goalPos = G.Navigation.goalPos
+			local goalNodeId = G.Navigation.goalNodeId
+
+			if goalPos and goalNodeId then
+				local startNode = Navigation.GetClosestNode(G.pLocal.Origin)
+				local goalNode = G.Navigation.nodes and G.Navigation.nodes[goalNodeId]
+
+				if startNode and goalNode and startNode.id ~= goalNode.id then
+					-- Add a small delay before repathing to prevent immediate loops
+					local currentTick = globals.TickCount()
+					if not G.lastRepathTick then
+						G.lastRepathTick = 0
+					end
+
+					if currentTick - G.lastRepathTick > 30 then -- Wait 30 ticks between repaths
+						Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
+						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
+						G.lastRepathTick = currentTick
+					else
+						Log:Debug("Repath cooldown active, waiting...")
+					end
+				else
+					Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
+					G.currentState = G.States.IDLE
+				end
+			else
+				Log:Debug("No existing goal for repath, returning to IDLE")
+				G.currentState = G.States.IDLE
+			end
+		end
 	end
 end
 
@@ -250,35 +335,56 @@ function handleStuckState(userCmd)
 		Log:Info("Emergency jump requested - SmartJump will handle it")
 	end
 
-	if G.Navigation.currentNodeTicks > 264 then
-		Log:Warn("Stuck for too long, repathing...")
+	if G.Navigation.currentNodeTicks > 396 then -- Increased from 264 to allow more time for movement
+		Log:Warn("Stuck for too long, adding heavy penalties and requesting repath...")
 		local path = G.Navigation.path
 		if path and #path > 1 then
 			local currentNode = path[1]
 			local nextNode = path[2]
-			if currentNode and nextNode then
-				local penalty = 10
-				if not isWalkable.Path(G.pLocal.Origin, nextNode.pos) then
+			if currentNode and nextNode and currentNode.id ~= nextNode.id then -- Prevent self-loop penalties
+				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+				local penalty = 50 -- Higher base penalty for prolonged stuck
+				if not isWalkable.Path(G.pLocal.Origin, nextNode.pos, walkMode) then
 					if isWalkable.Path(G.pLocal.Origin, nextNode.pos, "Aggressive") then
-						penalty = 50
+						penalty = 125
+						Log:Debug(
+							"Stuck connection %d -> %d: fails with %s but works with Aggressive",
+							currentNode.id,
+							nextNode.id,
+							walkMode
+						)
 					else
-						penalty = 100
+						penalty = 200 -- Very high penalty for completely blocked paths
+						Log:Debug("Stuck connection %d -> %d: completely blocked", currentNode.id, nextNode.id)
 					end
+				else
+					Log:Debug(
+						"Stuck connection %d -> %d: walkable but still stuck (collision/geometry issue?)",
+						currentNode.id,
+						nextNode.id
+					)
 				end
 				Node.AddFailurePenalty(currentNode, nextNode, penalty)
-				Log:Debug(
-					"Added failure penalty to connection %d -> %d due to prolonged stuck state",
+				Log:Info(
+					"Applied heavy penalty %d to connection %d -> %d due to prolonged stuck",
+					penalty,
 					currentNode.id,
 					nextNode.id
 				)
+			else
+				Log:Warn(
+					"Skipping penalty for invalid prolonged stuck connection %d -> %d (self-loop or invalid)",
+					currentNode and currentNode.id or "nil",
+					nextNode and nextNode.id or "nil"
+				)
 			end
 		end
-                Navigation.ResetTickTimer()
-                G.currentState = G.States.IDLE
-                G.lastPathfindingTick = 0
-        else
-                G.currentState = G.States.MOVING
-        end
+		Navigation.ResetTickTimer()
+		G.currentState = G.States.PATHFINDING -- Use pathfinding state to trigger WorkManager repath
+		G.lastPathfindingTick = 0
+	else
+		G.currentState = G.States.MOVING
+	end
 end
 
 -- Function to find goal node based on the current task
@@ -304,13 +410,55 @@ function findGoalNode(currentTask)
 	local function findFlagGoal()
 		local myItem = pLocal:GetPropInt("m_hItem")
 		G.World.flags = entities.FindByClass("CCaptureFlag")
+
+		-- Throttle debug logging to avoid spam (only log every 60 ticks)
+		local currentTick = globals.TickCount()
+		if not G.lastFlagLogTick then
+			G.lastFlagLogTick = 0
+		end
+		local shouldLog = (currentTick - G.lastFlagLogTick) > 60
+
+		if shouldLog then
+			Log:Debug("CTF Flag Detection: myItem=%d, playerTeam=%d", myItem, pLocal:GetTeamNumber())
+			G.lastFlagLogTick = currentTick
+		end
+
+		local targetFlag = nil
+		local targetPos = nil
+
 		for _, entity in pairs(G.World.flags) do
-			local myTeam = entity:GetTeamNumber() == pLocal:GetTeamNumber()
-			if (myItem > 0 and myTeam) or (myItem < 0 and not myTeam) then
-				local pos = entity:GetAbsOrigin()
-				return Navigation.GetClosestNode(pos), pos
+			local flagTeam = entity:GetTeamNumber()
+			local myTeam = flagTeam == pLocal:GetTeamNumber()
+			local pos = entity:GetAbsOrigin()
+
+			if shouldLog then
+				Log:Debug("Flag found: team=%d, isMyTeam=%s, pos=%s", flagTeam, tostring(myTeam), tostring(pos))
+			end
+
+			-- If carrying enemy intel (myItem > 0), go to our team's capture point
+			-- If not carrying intel (myItem <= 0), go get the enemy intel
+			if (myItem > 0 and myTeam) or (myItem <= 0 and not myTeam) then
+				targetFlag = entity
+				targetPos = pos
+				if shouldLog then
+					Log:Info(
+						"CTF Goal: %s (carrying=%s)",
+						myItem > 0 and "Return to base" or "Get enemy intel",
+						tostring(myItem > 0)
+					)
+				end
+				break -- Take the first valid target
 			end
 		end
+
+		if targetFlag and targetPos then
+			return Navigation.GetClosestNode(targetPos), targetPos
+		end
+
+		if shouldLog then
+			Log:Debug("No suitable flag target found - available flags: %d", #G.World.flags)
+		end
+		return nil
 	end
 
 	local function findHealthGoal()
@@ -410,13 +558,10 @@ end
 -- Function to move towards the current node (simplified for better FPS)
 function moveTowardsNode(userCmd, node)
 	local LocalOrigin = G.pLocal.Origin
-	local goalPos = nil
-	-- Find the goal position from the last node in the path if available
-	if G.Navigation.path and #G.Navigation.path > 0 then
-		goalPos = G.Navigation.path[#G.Navigation.path].pos
-	end
-	-- Try to skip directly to the goal if possible
-	if G.Menu.Main.Skip_Nodes and goalPos then
+	local goalPos = G.Navigation.goalPos -- Use the stored goal position directly
+
+	-- Try to skip directly to the goal if we have a complex path
+	if G.Menu.Main.Skip_Nodes and goalPos and G.Navigation.path and #G.Navigation.path > 1 then
 		if Optimiser.skipToGoalIfWalkable(LocalOrigin, goalPos, G.Navigation.path) then
 			return -- Stop for this tick if we skipped to goal
 		end
@@ -448,12 +593,12 @@ function moveTowardsNode(userCmd, node)
 		Navigation.ResetTickTimer()
 
 		-- Check if we've reached the end of the path
-                if #G.Navigation.path == 0 then
-                        Navigation.ClearPath()
-                        Log:Info("Reached end of path")
-                        G.currentState = G.States.IDLE
-                        G.lastPathfindingTick = 0
-                end
+		if #G.Navigation.path == 0 then
+			Navigation.ClearPath()
+			Log:Info("Reached end of path")
+			G.currentState = G.States.IDLE
+			G.lastPathfindingTick = 0 -- Reset cooldown to allow immediate direct movement check
+		end
 	else
 		------------------------------------------------------------
 		--  Hybrid Skip - Robust walkability check for node skipping
@@ -489,25 +634,48 @@ function moveTowardsNode(userCmd, node)
 
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-		-- Expensive walkability verification - only when stuck for a while
-		if G.Navigation.currentNodeTicks > 66 then
-			if not isWalkable.Path(LocalOrigin, node.pos) then
-				Log:Warn("Path to current node blocked after being stuck, repathing...")
+		-- Expensive walkability verification - only when stuck for longer
+		if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to give more time
+			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+			if not isWalkable.Path(LocalOrigin, node.pos, walkMode) then
+				Log:Warn("Path to current node blocked with %s mode after being stuck, repathing...", walkMode)
 				local path = G.Navigation.path
 				if path and #path > 1 then
 					local currentNode = path[1]
 					local nextNode = path[2]
-					if currentNode and nextNode then
-						local penalty = isWalkable.Path(LocalOrigin, node.pos, "Aggressive") and 50 or 100
+					if currentNode and nextNode and currentNode.id ~= nextNode.id then -- Prevent self-loop penalties
+						-- Test penalty based on walkability with different modes
+						local penalty = 25 -- Increased base penalty
+						if not isWalkable.Path(LocalOrigin, nextNode.pos, walkMode) then
+							if isWalkable.Path(LocalOrigin, nextNode.pos, "Aggressive") then
+								penalty = 75 -- Higher penalty for mode-specific failures
+								Log:Debug(
+									"Connection %d -> %d fails with %s but works with Aggressive",
+									currentNode.id,
+									nextNode.id,
+									walkMode
+								)
+							else
+								penalty = 150 -- Much higher penalty for completely blocked paths
+								Log:Debug("Connection %d -> %d completely blocked", currentNode.id, nextNode.id)
+							end
+						end
 						Node.AddFailurePenalty(currentNode, nextNode, penalty)
+						Log:Info("Applied penalty %d to connection %d -> %d", penalty, currentNode.id, nextNode.id)
+					else
+						Log:Warn(
+							"Skipping penalty for invalid connection %d -> %d (self-loop or invalid)",
+							currentNode and currentNode.id or "nil",
+							nextNode and nextNode.id or "nil"
+						)
 					end
 				end
-                                Navigation.ResetTickTimer()
-                                G.currentState = G.States.IDLE
-                                G.lastPathfindingTick = 0
-                                return
-                        end
-                end
+				Navigation.ResetTickTimer()
+				G.currentState = G.States.PATHFINDING -- Use pathfinding state to trigger WorkManager repath
+				G.lastPathfindingTick = 0
+				return
+			end
+		end
 
 		-- Fast re-sync when blast displacement < 1200 uu (optional recovery system)
 		local path = G.Navigation.path
@@ -532,35 +700,8 @@ function moveTowardsNode(userCmd, node)
 			end
 		end
 
-		-- Simple stuck detection and repathing
-		if G.Navigation.currentNodeTicks > 264 then
-			Log:Warn("Stuck for too long, repathing...")
-			local path = G.Navigation.path
-			if path and #path > 1 then
-				local currentNode = path[1]
-				local nextNode = path[2]
-				if currentNode and nextNode then
-					local penalty = 10
-					if not isWalkable.Path(LocalOrigin, nextNode.pos) then
-						if isWalkable.Path(LocalOrigin, nextNode.pos, "Aggressive") then
-							penalty = 50
-						else
-							penalty = 100
-						end
-					end
-					Node.AddFailurePenalty(currentNode, nextNode, penalty)
-					Log:Debug(
-						"Added failure penalty to connection %d -> %d due to prolonged stuck",
-						currentNode.id,
-						nextNode.id
-					)
-				end
-			end
-                        Navigation.ResetTickTimer()
-                        G.currentState = G.States.IDLE
-                        G.lastPathfindingTick = 0
-                end
-        end
+		-- Note: Stuck detection is handled by the STUCK state, no need for duplicate logic here
+	end
 end
 
 -- Main function
@@ -622,22 +763,34 @@ local function OnCreateMove(userCmd)
 		handleStuckState(userCmd)
 	end
 
-        -- Repath when state changes
-        if G.prevState ~= G.currentState then
-                Log:Debug("State changed from %s to %s", tostring(G.prevState), tostring(G.currentState))
-                if WorkManager.attemptWork(33, "StateChangeRepath") then
-                        G.lastPathfindingTick = 0
-                end
-                G.prevState = G.currentState
-        end
+	-- Repath when state changes
+	if G.prevState ~= G.currentState then
+		Log:Debug("State changed from %s to %s", tostring(G.prevState), tostring(G.currentState))
+		if WorkManager.attemptWork(33, "StateChangeRepath") then
+			G.lastPathfindingTick = 0
+		end
+		G.prevState = G.currentState
+	end
 
-	-- Repath if goal node changed
+	-- Repath if goal node changed or if goal is directly reachable
 	if G.Navigation.goalPos and G.Navigation.goalNodeId then
 		if WorkManager.attemptWork(33, "GoalCheck") then
 			local newNode = Navigation.GetClosestNode(G.Navigation.goalPos)
 			if newNode and newNode.id ~= G.Navigation.goalNodeId then
 				G.lastPathfindingTick = 0
 				G.Navigation.goalNodeId = newNode.id
+			end
+
+			-- Check if we're close to goal and should switch to direct movement
+			local distanceToGoal = (G.pLocal.Origin - G.Navigation.goalPos):Length()
+			if distanceToGoal < 200 then
+				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+				if isWalkable.Path(G.pLocal.Origin, G.Navigation.goalPos, walkMode) then
+					-- Only force re-evaluation occasionally when close and path is complex
+					if G.Navigation.path and #G.Navigation.path > 3 then
+						G.lastPathfindingTick = 0
+					end
+				end
 			end
 		end
 	end
