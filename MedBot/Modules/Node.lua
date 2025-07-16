@@ -1723,6 +1723,7 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
         local function applyAreaPenalty(fromAreaId, toAreaId)
                 if not (fromAreaId and toAreaId) then
                         return false
+
                 end
                 for _, cDir in pairs(nodes[fromAreaId] and nodes[fromAreaId].c or {}) do
                         if cDir and cDir.connections then
@@ -1789,6 +1790,40 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
                                 tostring(toArea or toNode.id)
                         )
                 end
+        end
+
+        -- Helper to apply penalty for fine point neighbors
+        local function applyFinePenalty(fromNode, toNode)
+                if not fromNode.neighbors then
+                        return
+                end
+                for _, neighbor in ipairs(fromNode.neighbors) do
+                        if neighbor.point == toNode then
+                                local currentCost = neighbor.cost or 1
+                                local newCost = currentCost + penalty
+                                neighbor.cost = newCost
+                                Log:Debug(
+                                        "Added fine failure penalty to point %d (area %s) -> %d (area %s): %.1f -> %.1f",
+                                        fromNode.id or -1,
+                                        fromNode.parentArea or "?",
+                                        toNode.id or -1,
+                                        toNode.parentArea or "?",
+                                        currentCost,
+                                        newCost
+                                )
+                                return
+                        end
+                end
+        end
+
+        local function applyPenalty(fromNode, toNode)
+                -- First try area-level penalty
+                local fromArea = resolveAreaId(fromNode)
+                local toArea = resolveAreaId(toNode)
+                applyAreaPenalty(fromArea, toArea)
+
+                -- Then fine-point penalty if applicable
+                applyFinePenalty(fromNode, toNode)
         end
 
         -- Apply penalty both directions to discourage repeated failure
