@@ -89,7 +89,6 @@ local function OnDrawMenu()
                         TimMenu.Tooltip("Applies to path following only. Aggressive also enables direct skipping when path is walkable")
                         TimMenu.EndSector()
 
-
                         TimMenu.NextLine()
 
 			-- Advanced Settings Section
