@@ -27,9 +27,6 @@ local G = require("MedBot.Utils.Globals")
 local FastPlayers = require("MedBot.Utils.FastPlayers")
 Common.FastPlayers = FastPlayers
 
-local WrappedPlayer = require("MedBot.Utils.WrappedPlayer")
-Common.WrappedPlayer = WrappedPlayer
-
 --[[ Utility Functions ]]
 --- Normalize a vector
 ---@param vec Vector3

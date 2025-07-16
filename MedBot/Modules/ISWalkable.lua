@@ -91,11 +91,10 @@ function isWalkable.Path(startPos, endPos)
 
 	local blocked = false
 	local currentPos = startPos
-	local MIN_STEP_SIZE = getMinStepSize()
+	local MIN_STEP_SIZE = 7.5 -- Use fixed small step size for robust ground checks
 
 	-- Adjust start position to ground level
 	local startGroundTrace = performTraceHull(startPos + maxStepVector, startPos - MAX_FALL_DISTANCE_Vector)
-
 	currentPos = startGroundTrace.endpos
 
 	-- Initial direction towards goal, adjusted for ground normal
@@ -118,7 +117,7 @@ function isWalkable.Path(startPos, endPos)
 		currentPos = wallTrace.endpos
 
 		if wallTrace.fraction == 0 then
-			blocked = true -- Path is blocked by a wall
+			return false -- Path is blocked by a wall
 		end
 
 		-- Ground collision with segmentation - ensures we always have ground beneath us
@@ -156,11 +155,14 @@ function isWalkable.Path(startPos, endPos)
 		local currentDistance = getHorizontalManhattanDistance(currentPos, endPos)
 		if blocked or currentDistance > MaxDistance then -- if target is unreachable
 			return false
-		elseif currentDistance < 24 then -- within range
+		end
+
+		-- If we're close enough to the goal, check both horizontal and vertical proximity
+		if currentDistance < 24 then -- within horizontal range
 			local verticalDist = math.abs(endPos.z - currentPos.z)
-			if verticalDist < maxStepHeight then -- within vertical range for current mode
+			if verticalDist < 24 then -- within strict vertical range
 				return true -- Goal is within reach; path is walkable
-			else -- unreachable
+			else
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end

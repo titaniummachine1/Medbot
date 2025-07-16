@@ -7,6 +7,7 @@ local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
+local Node = require("MedBot.Modules.Node")
 local SmartJump = require("MedBot.Modules.SmartJump")
 
 require("MedBot.Visuals")
@@ -58,25 +59,6 @@ function Optimiser:getBestTarget(origin, path, startIdx)
 	end
 
 	return best
-end
-
--- Expensive walkability check - only use when stuck
-function Optimiser:verifyWalkability(origin, targetPos, cooldownTicks)
-	local now = globals.TickCount()
-	local cacheKey = string.format("%.0f,%.0f,%.0f", targetPos.x, targetPos.y, targetPos.z)
-
-	-- Check failure cache
-	if self.cache[cacheKey] and now - self.cache[cacheKey] < cooldownTicks then
-		return false -- Recently failed
-	end
-
-	-- Expensive walkability check
-	local isWalkable = Navigation.isWalkable(origin, targetPos)
-	if not isWalkable then
-		self.cache[cacheKey] = now -- Cache failure
-	end
-
-	return isWalkable
 end
 
 --[[ Functions ]]
@@ -236,7 +218,6 @@ function handleStuckState(userCmd)
 			local currentNode = path[1]
 			local nextNode = path[2]
 			if currentNode and nextNode then
-				local Node = require("MedBot.Modules.Node")
 				Node.AddFailurePenalty(currentNode, nextNode)
 				Log:Debug(
 					"Added failure penalty to connection %d -> %d due to prolonged stuck state",
@@ -408,15 +389,18 @@ function moveTowardsNode(userCmd, node)
 		end
 	else
 		------------------------------------------------------------
-		--  Hybrid Skip - Fast distance checks + expensive verification when stuck
+		--  Hybrid Skip - Robust walkability check for node skipping
 		------------------------------------------------------------
+		-- Only skip one node per tick, and only if walkable to the next node
 		if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
-			-- Fast distance-based skipping (no expensive traces)
-			local newIdx = Optimiser:getBestTarget(LocalOrigin, G.Navigation.path, 1)
-			if newIdx > 1 then
-				for i = 1, newIdx - 1 do
-					Navigation.RemoveCurrentNode() -- pop nodes we no longer need
-				end
+			local origin = LocalOrigin
+			local path = G.Navigation.path
+			local nextNode = path[2]
+			if nextNode and Navigation.isWalkable(origin, nextNode.pos) then
+				Navigation.RemoveCurrentNode() -- Skip one node
+				Navigation.ResetTickTimer()
+				return
+				-- Stop skipping for this tick (only one skip allowed)
 			end
 		end
 
@@ -438,7 +422,7 @@ function moveTowardsNode(userCmd, node)
 		-- Expensive walkability verification - only when stuck for a while
 		if G.Navigation.currentNodeTicks > 66 then
 			local cooldownTicks = G.Menu.Main.OptimizerCooldown or 12
-			if not Optimiser:verifyWalkability(LocalOrigin, node.pos, cooldownTicks) then
+			if not isWalkable.Path(LocalOrigin, node.pos) then
 				Log:Warn("Path to current node blocked after being stuck, repathing...")
 				-- Add failure penalty to current connection if we have one
 				local path = G.Navigation.path
@@ -446,7 +430,6 @@ function moveTowardsNode(userCmd, node)
 					local currentNode = path[1]
 					local nextNode = path[2]
 					if currentNode and nextNode then
-						local Node = require("MedBot.Modules.Node")
 						Node.AddFailurePenalty(currentNode, nextNode)
 					end
 				end
@@ -489,7 +472,6 @@ function moveTowardsNode(userCmd, node)
 				local currentNode = path[1]
 				local nextNode = path[2]
 				if currentNode and nextNode then
-					local Node = require("MedBot.Modules.Node")
 					Node.AddFailurePenalty(currentNode, nextNode)
 					Log:Debug(
 						"Added failure penalty to connection %d -> %d due to prolonged stuck",
@@ -591,7 +573,6 @@ end)
 
 Commands.Register("pf_hierarchical", function(args)
 	if args[1] == "network" then
-		local Node = require("MedBot.Modules.Node")
 		Node.GenerateHierarchicalNetwork()
 		Notify.Simple(
 			"Started hierarchical network generation",
@@ -609,7 +590,6 @@ Commands.Register("pf_hierarchical", function(args)
 	elseif args[1] == "info" then
 		local areaId = tonumber(args[2])
 		if areaId then
-			local Node = require("MedBot.Modules.Node")
 			local points = Node.GetAreaPoints(areaId)
 			if points then
 				print(string.format("Area %d: %d fine points", areaId, #points))
@@ -653,8 +633,6 @@ Commands.Register("pf_test_hierarchical", function()
 end)
 
 Commands.Register("pf_connections", function(args)
-	local Node = require("MedBot.Modules.Node")
-
 	if args[1] == "status" then
 		local status = Node.GetConnectionProcessingStatus()
 		if status.isProcessing then
@@ -732,7 +710,6 @@ Commands.Register("pf_optimize", function(args)
 end)
 
 Commands.Register("pf_stairs", function(args)
-	local Node = require("MedBot.Modules.Node")
 	local nodes = Node.GetNodes()
 
 	if not nodes or not next(nodes) then
@@ -797,8 +774,6 @@ Commands.Register("pf_stairs", function(args)
 end)
 
 Commands.Register("pf_costs", function(args)
-	local Node = require("MedBot.Modules.Node")
-
 	if args[1] == "recalc" then
 		Node.RecalculateConnectionCosts()
 		print("Connection costs recalculated for current walking mode")
