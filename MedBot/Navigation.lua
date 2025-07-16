@@ -541,15 +541,15 @@ function Navigation.FindPath(startNode, goalNode)
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
-	-- DUAL A* SYSTEM: Use A* for both high-order (area-to-area) and sub-node (fine points) pathfinding
+	-- HIERARCHICAL A* SYSTEM: Use A* for both area-to-area and fine-point pathfinding
 	if G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
-		Log:Info("Using Dual A* pathfinding (High-order A* + Sub-node A*)")
+		Log:Info("Using hierarchical A* pathfinding (area pathfinding + fine point navigation)")
 
-		-- Phase 1: High-order A* pathfinding between areas
+		-- Phase 1: A* pathfinding between areas
 		local areaPath = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 
 		if areaPath and #areaPath > 1 then
-			-- Phase 2: Sub-node A* pathfinding within areas using fine points
+			-- Phase 2: A* pathfinding within areas using fine points
 			local finalPath = {}
 
 			for i = 1, #areaPath do
@@ -619,24 +619,18 @@ function Navigation.FindPath(startNode, goalNode)
 
 			if #finalPath > 0 then
 				G.Navigation.path = finalPath
-				Log:Info("Dual A* path found: %d areas, %d fine points", #areaPath, #finalPath)
+				Log:Info("Hierarchical A* path found: %d areas, %d fine points", #areaPath, #finalPath)
 				Navigation.pathFound = true
 				Navigation.pathFailed = false
 				return Navigation
 			end
 		end
 
-		Log:Warn("Dual A* pathfinding failed, falling back to simple A*")
+		Log:Warn("Hierarchical A* pathfinding failed, falling back to simple A*")
 	end
 
 	-- Fallback: Simple A* pathfinding on main nodes only
-	if horizontalDistance <= 100 and verticalDistance <= 18 then
-		-- Short distance: direct A*
-		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
-	else
-		-- Long distance: full A* with connection costs
-		G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
-	end
+	G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 
 	if not G.Navigation.path or #G.Navigation.path == 0 then
 		Log:Error("Failed to find path from %d to %d!", startNode.id, goalNode.id)

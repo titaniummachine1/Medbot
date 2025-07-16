@@ -2,13 +2,13 @@
 
 ## MAJOR ISSUES FIXED:
 
-### 1. **DUAL A\* PATHFINDING SYSTEM** ✅
+### 1. **UNIFIED A\* PATHFINDING SYSTEM** ✅
 
 - **REMOVED** broken HPA\* implementation (as requested - "it sucks")
-- **IMPLEMENTED** proper dual A\* system:
-  - **High-order A\***: For pathfinding between major navigation areas
-  - **Sub-node A\***: For fine-grained pathfinding within areas using fine points
-- **RESULT**: Much more accurate and reliable pathfinding
+- **SIMPLIFIED** to use only A\* algorithm for all pathfinding:
+  - **Area-level A\***: For pathfinding between major navigation areas
+  - **Fine-point A\***: For detailed pathfinding within areas using fine points
+- **RESULT**: Consistent, predictable pathfinding using proven A\* algorithm
 
 ### 2. **FIXED INTER-AREA CONNECTIONS** ✅
 
@@ -57,17 +57,17 @@
   - **Faster processing**: Increased from 5 to 10 areas per tick
 - **RESULT**: Much faster setup time with better connection quality
 
-## NEW PATHFINDING FLOW:
+## SIMPLIFIED PATHFINDING FLOW:
 
-### **Phase 1: High-Order A\* (Area-to-Area)**
+### **Phase 1: Area-Level A\***
 
 1. Find path between major navigation areas using A\*
 2. Uses connection costs and penalties for realistic routing
 3. Handles blocked/expensive connections gracefully
 
-### **Phase 2: Sub-Node A\* (Fine Points)**
+### **Phase 2: Fine-Point A\***
 
-1. For each area in the high-order path:
+1. For each area in the area-level path:
    - Find best entry/exit points using edge points
    - Use A\* to navigate through fine points within the area
    - Connect areas smoothly using inter-area connections
@@ -191,4 +191,4 @@ Replaces the old node skipping system with an intelligent binary-search approach
 
 ## SUMMARY:
 
-The pathfinding system has been completely overhauled to use a proper **Dual A\* system** as requested. The broken HPA\* has been removed, inter-area connections are now working, memory leaks are fixed, and the overall system is much more reliable and performant. The bot should now navigate smoothly and accurately without stuttering or memory issues.
+The pathfinding system has been completely overhauled to use **only the A\* algorithm** for all pathfinding as requested. All mentions and usage of GBFS (Greedy Best-First Search) and other suboptimal algorithms have been removed. The broken HPA\* has been eliminated, inter-area connections are now working, memory leaks are fixed, and the system uses consistent A\* pathfinding throughout. The bot should now navigate optimally and reliably without algorithm confusion or suboptimal path choices.

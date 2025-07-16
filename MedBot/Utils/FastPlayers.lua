@@ -1,10 +1,13 @@
 -- fastplayers.lua ─────────────────────────────────────────────────────────
--- FastPlayers: Simplified per-tick cached player lists for MedBot.
+-- FastPlayers: Per-tick cached player lists for MedBot, now using LNXlib's WPlayer directly.
+--
+-- This version uses LNXlib's WPlayer as the player wrapper, removing the old custom WrappedPlayer.
 
 --[[ Imports ]]
---local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
-local WrappedPlayer = require("MedBot.Utils.WrappedPlayer")
+local libLoaded, Lib = pcall(require, "LNXlib")
+assert(libLoaded, "LNXlib not found, please install it!")
+local WPlayer = Lib.TF2.WPlayer
 
 --[[ Module Declaration ]]
 local FastPlayers = {}
@@ -36,7 +39,7 @@ end
 
 --- Returns list of valid, non-dormant players once per tick.
 ---@param excludeLocal boolean? exclude local player if true
----@return WrappedPlayer[]
+---@return table[] -- WPlayer[]
 function FastPlayers.GetAll(excludeLocal)
 	if FastPlayers.AllUpdated then
 		return cachedAllPlayers
@@ -47,7 +50,7 @@ function FastPlayers.GetAll(excludeLocal)
 	-- Gather valid players
 	for _, ent in pairs(entities.FindByClass("CTFPlayer") or {}) do
 		if isValidPlayer(ent, skipEnt) then
-			local wp = WrappedPlayer.FromEntity(ent)
+			local wp = WPlayer.FromEntity(ent)
 			if wp then
 				table.insert(cachedAllPlayers, wp)
 			end
@@ -57,19 +60,19 @@ function FastPlayers.GetAll(excludeLocal)
 	return cachedAllPlayers
 end
 
---- Returns the local player as a WrappedPlayer instance, cached after first wrap.
----@return WrappedPlayer?
+--- Returns the local player as a WPlayer instance, cached after first wrap.
+---@return table|nil -- WPlayer|nil
 function FastPlayers.GetLocal()
 	if not cachedLocal then
 		local rawLocal = entities.GetLocalPlayer()
-		cachedLocal = rawLocal and WrappedPlayer.FromEntity(rawLocal) or nil
+		cachedLocal = rawLocal and WPlayer.FromEntity(rawLocal) or nil
 	end
 	return cachedLocal
 end
 
 --- Returns list of teammates, optionally excluding local player.
 ---@param excludeLocal boolean? exclude local player if true
----@return WrappedPlayer[]
+---@return table[] -- WPlayer[]
 function FastPlayers.GetTeammates(excludeLocal)
 	if not FastPlayers.TeammatesUpdated then
 		if not FastPlayers.AllUpdated then
@@ -78,11 +81,10 @@ function FastPlayers.GetTeammates(excludeLocal)
 		cachedTeammates = {}
 		local localWP = FastPlayers.GetLocal()
 		local ex = excludeLocal and localWP or nil
-		local myTeam = localWP and localWP:GetRawEntity():GetTeamNumber()
+		local myTeam = localWP and localWP:GetTeamNumber()
 		if myTeam then
 			for _, wp in ipairs(cachedAllPlayers) do
-				local ent = wp:GetRawEntity()
-				if ent and ent:GetTeamNumber() == myTeam and wp ~= ex then
+				if wp:GetTeamNumber() == myTeam and wp ~= ex then
 					table.insert(cachedTeammates, wp)
 				end
 			end
@@ -93,7 +95,7 @@ function FastPlayers.GetTeammates(excludeLocal)
 end
 
 --- Returns list of enemies (different team).
----@return WrappedPlayer[]
+---@return table[] -- WPlayer[]
 function FastPlayers.GetEnemies()
 	if not FastPlayers.EnemiesUpdated then
 		if not FastPlayers.AllUpdated then
@@ -101,11 +103,10 @@ function FastPlayers.GetEnemies()
 		end
 		cachedEnemies = {}
 		local localWP = FastPlayers.GetLocal()
-		local myTeam = localWP and localWP:GetRawEntity():GetTeamNumber()
+		local myTeam = localWP and localWP:GetTeamNumber()
 		if myTeam then
 			for _, wp in ipairs(cachedAllPlayers) do
-				local ent = wp:GetRawEntity()
-				if ent and ent:GetTeamNumber() ~= myTeam then
+				if wp:GetTeamNumber() ~= myTeam then
 					table.insert(cachedEnemies, wp)
 				end
 			end

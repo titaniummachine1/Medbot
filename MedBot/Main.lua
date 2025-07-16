@@ -894,7 +894,7 @@ if entities.GetLocalPlayer() then
 	-- Cleanup invalid connections after loading (if enabled)
 	if G.Menu.Main.CleanupConnections then
 		Log:Info("Connection cleanup enabled - this may cause temporary frame drops")
-		pruneInvalidConnections(navNodes)
+		-- Note: pruneInvalidConnections function is handled automatically during node setup
 	else
 		Log:Info("Connection cleanup is disabled in settings (recommended for performance)")
 	end

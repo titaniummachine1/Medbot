@@ -22,7 +22,7 @@ defaultconfig = {
 		UseHierarchicalPathfinding = false, -- Enable fine-grained points within areas for better accuracy
 	},
 	Visuals = {
-		renderDistance = 800,
+		renderDistance = 400,
 		EnableVisuals = true,
 		memoryUsage = true,
 		-- Combo-based display options

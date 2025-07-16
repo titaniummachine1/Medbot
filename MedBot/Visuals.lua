@@ -148,6 +148,14 @@ local function OnDraw()
 
 	local myPos = me:GetAbsOrigin()
 	local currentY = 120
+	-- Draw memory usage if enabled in config
+	if G.Menu.Visuals.memoryUsage then
+		draw.SetFont(Fonts.Verdana) -- Ensure font is set before drawing text
+		draw.Color(255, 255, 255, 200)
+		local memMB = (G.Benchmark and G.Benchmark.MemUsage or 0) / 1024
+		draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
+		currentY = currentY + 20
+	end
 	-- Precompute screen-visible nodes within render distance
 	local visibleNodes = {}
 	-- use menu-configured distance if present
