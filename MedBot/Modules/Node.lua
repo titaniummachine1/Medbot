@@ -1697,7 +1697,8 @@ end
 --- Add penalty to connection when pathfinding fails (adds 100 cost each failure)
 ---@param nodeA table First node (source)
 ---@param nodeB table Second node (destination)
-function Node.AddFailurePenalty(nodeA, nodeB)
+function Node.AddFailurePenalty(nodeA, nodeB, penalty)
+        penalty = penalty or 100
 	if not nodeA or not nodeB then
 		return
 	end
@@ -1706,16 +1707,16 @@ function Node.AddFailurePenalty(nodeA, nodeB)
 		return
 	end
 
-	-- Find and update the connection with +100 penalty
-	for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
-		if cDir and cDir.connections then
-			for i, connection in pairs(cDir.connections) do
-				local targetNodeId = getConnectionNodeId(connection)
-				if targetNodeId == nodeB.id then
-					local currentCost = getConnectionCost(connection)
-					local newCost = currentCost + 100 -- Add 100 penalty each failure
+        -- Find and update the connection with penalty value
+        for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
+                if cDir and cDir.connections then
+                        for i, connection in pairs(cDir.connections) do
+                                local targetNodeId = getConnectionNodeId(connection)
+                                if targetNodeId == nodeB.id then
+                                        local currentCost = getConnectionCost(connection)
+                                        local newCost = currentCost + penalty
 
-					cDir.connections[i] = { node = targetNodeId, cost = newCost }
+                                        cDir.connections[i] = { node = targetNodeId, cost = newCost }
 
 					Log:Debug(
 						"Added failure penalty to connection %d -> %d: %.1f -> %.1f",
