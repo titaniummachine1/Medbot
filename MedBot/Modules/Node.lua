@@ -1707,29 +1707,33 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
 		return
 	end
 
-        -- Find and update the connection with penalty value
-        for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
-                if cDir and cDir.connections then
-                        for i, connection in pairs(cDir.connections) do
-                                local targetNodeId = getConnectionNodeId(connection)
-                                if targetNodeId == nodeB.id then
-                                        local currentCost = getConnectionCost(connection)
-                                        local newCost = currentCost + penalty
+        -- Helper to apply penalty in one direction
+        local function applyPenalty(fromNode, toNode)
+                for _, cDir in pairs(nodes[fromNode.id] and nodes[fromNode.id].c or {}) do
+                        if cDir and cDir.connections then
+                                for i, connection in pairs(cDir.connections) do
+                                        local targetNodeId = getConnectionNodeId(connection)
+                                        if targetNodeId == toNode.id then
+                                                local currentCost = getConnectionCost(connection)
+                                                local newCost = currentCost + penalty
+                                                cDir.connections[i] = { node = targetNodeId, cost = newCost }
+                                                Log:Debug(
+                                                        "Added failure penalty to connection %d -> %d: %.1f -> %.1f",
+                                                        fromNode.id,
+                                                        toNode.id,
+                                                        currentCost,
+                                                        newCost
+                                                )
+                                                return
+                                        end
+                                end
+                        end
+                end
+        end
 
-                                        cDir.connections[i] = { node = targetNodeId, cost = newCost }
-
-					Log:Debug(
-						"Added failure penalty to connection %d -> %d: %.1f -> %.1f",
-						nodeA.id,
-						nodeB.id,
-						currentCost,
-						newCost
-					)
-					return
-				end
-			end
-		end
-	end
+        -- Apply penalty both directions to discourage repeated failure
+        applyPenalty(nodeA, nodeB)
+        applyPenalty(nodeB, nodeA)
 end
 
 --- Get adjacent nodes with accessibility checks (expensive, for pathfinding)
