@@ -168,9 +168,9 @@ function handleIdleState()
        G.Navigation.goalNodeId = goalNode and goalNode.id or nil
 
 	-- Avoid pathfinding if we're already at the goal
-	if startNode.id == goalNode.id then
-		-- Try direct movement or internal path before giving up
-		if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos) then
+       if startNode.id == goalNode.id then
+               -- Try direct movement or internal path before giving up
+               if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos, "Aggressive") then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick
