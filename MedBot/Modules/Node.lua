@@ -1598,14 +1598,26 @@ function Node.GetClosestNode(pos)
 	if not G.Navigation.nodes then
 		return nil
 	end
-	local closest, dist = nil, math.huge
-	for _, node in pairs(G.Navigation.nodes) do
-		local d = (node.pos - pos):Length()
-		if d < dist then
-			dist, closest = d, node
+	local closestArea, minDist = nil, math.huge
+	for _, area in pairs(G.Navigation.nodes) do
+		local finePoints = area.finePoints or area.points
+		if finePoints and #finePoints > 0 then
+			for _, sub in ipairs(finePoints) do
+				local d = (sub.pos - pos):Length()
+				if d < minDist then
+					minDist = d
+					closestArea = area
+				end
+			end
+		else
+			local d = (area.pos - pos):Length()
+			if d < minDist then
+				minDist = d
+				closestArea = area
+			end
 		end
 	end
-	return closest
+	return closestArea
 end
 
 --- Manually trigger connection cleanup (useful for debugging)

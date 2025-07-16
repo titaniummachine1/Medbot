@@ -58,6 +58,26 @@ function Optimiser.skipIfWalkable(origin, path)
 	return false
 end
 
+function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
+	local DEADZONE = 24 -- units, tweak as needed
+	if not goalPos or not origin then
+		return false
+	end
+	local dist = (goalPos - origin):Length()
+	if dist < DEADZONE then
+		Navigation.ClearPath()
+		G.currentState = G.States.IDLE
+		return true
+	end
+	if path and #path > 1 and isWalkable.Path(origin, goalPos) then
+		Navigation.ClearPath()
+		-- Optionally, set a direct path with just the goal as the node
+		G.Navigation.path = { { pos = goalPos } }
+		return true
+	end
+	return false
+end
+
 --[[ Functions ]]
 Common.AddCurrentTask("Objective")
 
@@ -135,32 +155,32 @@ function handleIdleState()
 		return
 	end
 
-        local goalNode, goalPos = findGoalNode(currentTask)
-        if not goalNode then
-                Log:Warn("Could not find goal node")
-                return
-        end
+	local goalNode, goalPos = findGoalNode(currentTask)
+	if not goalNode then
+		Log:Warn("Could not find goal node")
+		return
+	end
 
-        -- Avoid pathfinding if we're already at the goal
-        if startNode.id == goalNode.id then
-                -- Try direct movement or internal path before giving up
-                if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos) then
-                        G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-                        G.currentState = G.States.MOVING
-                        G.lastPathfindingTick = currentTick
-                else
-                        local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
-                        if internal then
-                                G.Navigation.path = internal
-                                G.currentState = G.States.MOVING
-                                G.lastPathfindingTick = currentTick
-                        else
-                                Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
-                                G.lastPathfindingTick = currentTick
-                        end
-                end
-                return
-        end
+	-- Avoid pathfinding if we're already at the goal
+	if startNode.id == goalNode.id then
+		-- Try direct movement or internal path before giving up
+		if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos) then
+			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+			G.currentState = G.States.MOVING
+			G.lastPathfindingTick = currentTick
+		else
+			local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
+			if internal then
+				G.Navigation.path = internal
+				G.currentState = G.States.MOVING
+				G.lastPathfindingTick = currentTick
+			else
+				Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+				G.lastPathfindingTick = currentTick
+			end
+		end
+		return
+	end
 
 	Log:Info("Generating new path from node %d to node %d", startNode.id, goalNode.id)
 	WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
@@ -255,57 +275,57 @@ function findGoalNode(currentTask)
 	local pLocal = G.pLocal.entity
 	local mapName = engine.GetMapName():lower()
 
-        local function findPayloadGoal()
-                G.World.payloads = entities.FindByClass("CObjectCartDispenser")
-                for _, entity in pairs(G.World.payloads) do
-                        if entity:GetTeamNumber() == pLocal:GetTeamNumber() then
-                                local pos = entity:GetAbsOrigin()
-                                return Navigation.GetClosestNode(pos), pos
-                        end
-                end
-        end
+	local function findPayloadGoal()
+		G.World.payloads = entities.FindByClass("CObjectCartDispenser")
+		for _, entity in pairs(G.World.payloads) do
+			if entity:GetTeamNumber() == pLocal:GetTeamNumber() then
+				local pos = entity:GetAbsOrigin()
+				return Navigation.GetClosestNode(pos), pos
+			end
+		end
+	end
 
-        local function findFlagGoal()
-                local myItem = pLocal:GetPropInt("m_hItem")
-                G.World.flags = entities.FindByClass("CCaptureFlag")
-                for _, entity in pairs(G.World.flags) do
-                        local myTeam = entity:GetTeamNumber() == pLocal:GetTeamNumber()
-                        if (myItem > 0 and myTeam) or (myItem < 0 and not myTeam) then
-                                local pos = entity:GetAbsOrigin()
-                                return Navigation.GetClosestNode(pos), pos
-                        end
-                end
-        end
+	local function findFlagGoal()
+		local myItem = pLocal:GetPropInt("m_hItem")
+		G.World.flags = entities.FindByClass("CCaptureFlag")
+		for _, entity in pairs(G.World.flags) do
+			local myTeam = entity:GetTeamNumber() == pLocal:GetTeamNumber()
+			if (myItem > 0 and myTeam) or (myItem < 0 and not myTeam) then
+				local pos = entity:GetAbsOrigin()
+				return Navigation.GetClosestNode(pos), pos
+			end
+		end
+	end
 
-        local function findHealthGoal()
-                local closestDist = math.huge
-                local closestNode = nil
-                local closestPos = nil
-                for _, pos in pairs(G.World.healthPacks) do
-                        local healthNode = Navigation.GetClosestNode(pos)
-                        if healthNode then
-                                local dist = (G.pLocal.Origin - pos):Length()
-                                if dist < closestDist then
-                                        closestDist = dist
-                                        closestNode = healthNode
-                                        closestPos = pos
-                                end
-                        end
-                end
-                return closestNode, closestPos
-        end
+	local function findHealthGoal()
+		local closestDist = math.huge
+		local closestNode = nil
+		local closestPos = nil
+		for _, pos in pairs(G.World.healthPacks) do
+			local healthNode = Navigation.GetClosestNode(pos)
+			if healthNode then
+				local dist = (G.pLocal.Origin - pos):Length()
+				if dist < closestDist then
+					closestDist = dist
+					closestNode = healthNode
+					closestPos = pos
+				end
+			end
+		end
+		return closestNode, closestPos
+	end
 
 	-- Find and follow the closest teammate using FastPlayers
-        local function findFollowGoal()
-                local localWP = Common.FastPlayers.GetLocal()
-                if not localWP then
-                        return nil
-                end
-                local origin = localWP:GetRawEntity():GetAbsOrigin()
-                local closestDist = math.huge
-                local closestNode = nil
-                local targetPos = nil
-                local foundTarget = false
+	local function findFollowGoal()
+		local localWP = Common.FastPlayers.GetLocal()
+		if not localWP then
+			return nil
+		end
+		local origin = localWP:GetRawEntity():GetAbsOrigin()
+		local closestDist = math.huge
+		local closestNode = nil
+		local targetPos = nil
+		local foundTarget = false
 
 		for _, wp in ipairs(Common.FastPlayers.GetTeammates(true)) do
 			local ent = wp:GetRawEntity()
@@ -313,22 +333,22 @@ function findGoalNode(currentTask)
 				foundTarget = true
 				local pos = ent:GetAbsOrigin()
 				local dist = (pos - origin):Length()
-                                if dist < closestDist then
-                                        closestDist = dist
-                                        -- Update our memory of where we last saw this target
-                                        G.Navigation.lastKnownTargetPosition = pos
-                                        closestNode = Navigation.GetClosestNode(pos)
-                                        targetPos = pos
-                                end
-                        end
-                end
+				if dist < closestDist then
+					closestDist = dist
+					-- Update our memory of where we last saw this target
+					G.Navigation.lastKnownTargetPosition = pos
+					closestNode = Navigation.GetClosestNode(pos)
+					targetPos = pos
+				end
+			end
+		end
 
 		-- If no alive teammates found, but we have a last known position, use that
 		if not foundTarget and G.Navigation.lastKnownTargetPosition then
 			Log:Info("No alive teammates found, moving to last known position")
-                        closestNode = Navigation.GetClosestNode(G.Navigation.lastKnownTargetPosition)
-                        targetPos = G.Navigation.lastKnownTargetPosition
-                end
+			closestNode = Navigation.GetClosestNode(G.Navigation.lastKnownTargetPosition)
+			targetPos = G.Navigation.lastKnownTargetPosition
+		end
 
 		-- If the target is very close (same node), add some distance to avoid pathfinding to self
 		if closestNode and closestDist < 150 then -- 150 units is quite close
@@ -349,31 +369,42 @@ function findGoalNode(currentTask)
 			end
 		end
 
-                return closestNode, targetPos
-        end
+		return closestNode, targetPos
+	end
 
 	if currentTask == "Objective" then
 		if mapName:find("plr_") or mapName:find("pl_") then
-                        return findPayloadGoal()
-                elseif mapName:find("ctf_") then
-                        return findFlagGoal()
-                else
-                        -- fallback to following the closest teammate
-                        return findFollowGoal()
-                end
-        elseif currentTask == "Health" then
-                return findHealthGoal()
-        elseif currentTask == "Follow" then
-                return findFollowGoal()
-        else
-                Log:Debug("Unknown task: %s", currentTask)
-        end
-        return nil
+			return findPayloadGoal()
+		elseif mapName:find("ctf_") then
+			return findFlagGoal()
+		else
+			-- fallback to following the closest teammate
+			return findFollowGoal()
+		end
+	elseif currentTask == "Health" then
+		return findHealthGoal()
+	elseif currentTask == "Follow" then
+		return findFollowGoal()
+	else
+		Log:Debug("Unknown task: %s", currentTask)
+	end
+	return nil
 end
 
 -- Function to move towards the current node (simplified for better FPS)
 function moveTowardsNode(userCmd, node)
 	local LocalOrigin = G.pLocal.Origin
+	local goalPos = nil
+	-- Find the goal position from the last node in the path if available
+	if G.Navigation.path and #G.Navigation.path > 0 then
+		goalPos = G.Navigation.path[#G.Navigation.path].pos
+	end
+	-- Try to skip directly to the goal if possible
+	if G.Menu.Main.Skip_Nodes and goalPos then
+		if Optimiser.skipToGoalIfWalkable(LocalOrigin, goalPos, G.Navigation.path) then
+			return -- Stop for this tick if we skipped to goal
+		end
+	end
 
 	-- Only rotate camera if LookingAhead is enabled
 	if G.Menu.Main.LookingAhead then
@@ -434,9 +465,9 @@ function moveTowardsNode(userCmd, node)
 
 		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-                -- Expensive walkability verification - only when stuck for a while
-                if G.Navigation.currentNodeTicks > 66 then
-                        if not isWalkable.Path(LocalOrigin, node.pos) then
+		-- Expensive walkability verification - only when stuck for a while
+		if G.Navigation.currentNodeTicks > 66 then
+			if not isWalkable.Path(LocalOrigin, node.pos) then
 				Log:Warn("Path to current node blocked after being stuck, repathing...")
 				-- Add failure penalty to current connection if we have one
 				local path = G.Navigation.path
@@ -465,7 +496,7 @@ function moveTowardsNode(userCmd, node)
 				local pathNode = path[i]
 				if pathNode and pathNode.pos and (pathNode.pos - origin):LengthSqr() < MAX_SNAP then
 					-- Only do expensive walkability check for potential recovery targets
-					if Optimiser:verifyWalkability(origin, pathNode.pos, 6) then
+					if isWalkable.Path(origin, pathNode.pos) then
 						-- Drop everything before i
 						for j = 1, i - 1 do
 							Navigation.RemoveCurrentNode()
@@ -593,9 +624,9 @@ Commands.Register("pf_hierarchical", function(args)
 			"Will process across multiple ticks to prevent freezing",
 			5
 		)
-        elseif args[1] == "status" then
-                -- Check setup progress by accessing the SetupState
-                if G.Navigation.hierarchical then
+	elseif args[1] == "status" then
+		-- Check setup progress by accessing the SetupState
+		if G.Navigation.hierarchical then
 			print("Hierarchical network ready and available")
 		else
 			print("Hierarchical network not yet available - check if setup is in progress")
@@ -826,7 +857,6 @@ Commands.Register("pf_costs", function(args)
 		print("  info   - Show walking mode and connection cost statistics")
 	end
 end)
-
 
 Notify.Alert("MedBot loaded!")
 if entities.GetLocalPlayer() then
