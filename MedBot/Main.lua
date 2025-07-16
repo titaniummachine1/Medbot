@@ -9,6 +9,7 @@ local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 local Node = require("MedBot.Modules.Node")
 local SmartJump = require("MedBot.Modules.SmartJump")
+local isWalkable = require("MedBot.Modules.ISWalkable")
 
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
@@ -23,42 +24,38 @@ Log.Level = 0
 -- ############################################################
 --  Path optimiser - prevents rubber-banding with smart windowing
 -- ############################################################
+-- Minimal Optimiser: only skip if next node is closer to the player than the current node
 local Optimiser = {}
 
--- Failure cache to avoid retesting failed nodes
-Optimiser.cache = {} -- [nodeIdx] = gameTickWhenLastFailed
-
--- Returns index in G.Navigation.path to aim for (>=1)
-function Optimiser:getBestTarget(origin, path, startIdx)
-	-- Use menu settings for tuning parameters
-	local maxLookahead = G.Menu.Main.OptimizerLookahead or 10
-	local maxLookaheadDistance = G.Menu.Main.OptimizerDistance or 600
-	local cooldownTicks = G.Menu.Main.OptimizerCooldown or 12
-
-	local last = math.min(#path, startIdx + maxLookahead)
-	local best = startIdx -- fallback: don't skip
-
-	-- Simple distance-based skipping (fast, no traces)
-	for i = startIdx + 1, last do
-		local node = path[i]
-		if not node or not node.pos then
-			break -- Stop at invalid nodes
-		end
-
-		-- Check if this node is closer than current best
-		local currentDist = (path[best].pos - origin):Length()
-		local testDist = (node.pos - origin):Length()
-		local heightDiff = math.abs(node.pos.z - origin.z)
-
-		-- Skip to closer nodes within reasonable distance and height
-		if testDist < currentDist and testDist < maxLookaheadDistance and heightDiff <= G.Misc.NodeTouchHeight then
-			best = i
-		else
-			break -- Stop when nodes get farther away
-		end
+function Optimiser.skipIfCloser(origin, path)
+	if not path or #path < 2 then
+		return false
 	end
+	local curNode, nextNode = path[1], path[2]
+	if not (curNode and nextNode and curNode.pos and nextNode.pos) then
+		return false
+	end
+	local distCur = (curNode.pos - origin):Length()
+	local distNext = (nextNode.pos - origin):Length()
+	if distNext < distCur then
+		Navigation.RemoveCurrentNode()
+		Navigation.ResetTickTimer()
+		return true
+	end
+	return false
+end
 
-	return best
+function Optimiser.skipIfWalkable(origin, path)
+	if not path or #path < 2 then
+		return false
+	end
+	local nextNode = path[2]
+	if nextNode and isWalkable.Path(origin, nextNode.pos) then
+		Navigation.RemoveCurrentNode()
+		Navigation.ResetTickTimer()
+		return true
+	end
+	return false
 end
 
 --[[ Functions ]]
@@ -391,16 +388,12 @@ function moveTowardsNode(userCmd, node)
 		------------------------------------------------------------
 		--  Hybrid Skip - Robust walkability check for node skipping
 		------------------------------------------------------------
-		-- Only skip one node per tick, and only if walkable to the next node
+		-- Only skip one node per tick, first if closer, then if walkable
 		if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
-			local origin = LocalOrigin
-			local path = G.Navigation.path
-			local nextNode = path[2]
-			if nextNode and Navigation.isWalkable(origin, nextNode.pos) then
-				Navigation.RemoveCurrentNode() -- Skip one node
-				Navigation.ResetTickTimer()
-				return
-				-- Stop skipping for this tick (only one skip allowed)
+			if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
+				return -- Stop skipping for this tick (only one skip allowed)
+			elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
+				return -- Stop skipping for this tick (only one skip allowed)
 			end
 		end
 
