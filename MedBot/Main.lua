@@ -11,6 +11,48 @@ local Node = require("MedBot.Modules.Node")
 local SmartJump = require("MedBot.Modules.SmartJump")
 local isWalkable = require("MedBot.Modules.ISWalkable")
 
+-- Load Profiler if available (Log not available yet, so use print)
+local Profiler = nil
+local profilerLoaded, profilerModule = pcall(require, "Profiler")
+if profilerLoaded then
+	Profiler = profilerModule
+	Profiler.SetVisible(true)
+	Profiler.Setup({
+		smoothingSpeed = 8.0, -- Fast spike detection for performance hunting
+		smoothingDecay = 4.0, -- Keep peaks visible longer
+		systemMemoryMode = "system",
+		compensateOverhead = true,
+	})
+	print("[MEDBOT] Profiler loaded successfully - performance monitoring enabled")
+else
+	print("[MEDBOT] Profiler not available - continuing without performance monitoring")
+end
+
+-- Helper function for profiler-safe operations
+local function ProfilerBeginSystem(name)
+	if Profiler then
+		Profiler.BeginSystem(name)
+	end
+end
+
+local function ProfilerEndSystem()
+	if Profiler then
+		Profiler.EndSystem()
+	end
+end
+
+local function ProfilerBegin(name)
+	if Profiler then
+		Profiler.Begin(name)
+	end
+end
+
+local function ProfilerEnd()
+	if Profiler then
+		Profiler.End()
+	end
+end
+
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")
@@ -19,6 +61,100 @@ local Lib = Common.Lib
 local Notify, Commands, WPlayer = Lib.UI.Notify, Lib.Utils.Commands, Lib.TF2.WPlayer
 local Log = Common.Log.new("MedBot")
 Log.Level = 0
+
+-- Circuit breaker for problematic connections
+local ConnectionCircuitBreaker = {
+	failures = {}, -- [connectionKey] = { count, lastFailTime, isBlocked }
+	maxFailures = 3, -- Max failures before blocking connection temporarily
+	blockDuration = 300, -- Ticks to block connection (5 seconds)
+	cleanupInterval = 1800, -- Clean up old entries every 30 seconds
+	lastCleanup = 0,
+}
+
+-- Add a connection failure to the circuit breaker
+local function addConnectionFailure(nodeA, nodeB)
+	if not nodeA or not nodeB then
+		return
+	end
+
+	local connectionKey = nodeA.id .. "->" .. nodeB.id
+	local currentTick = globals.TickCount()
+
+	-- Initialize or update failure count
+	if not ConnectionCircuitBreaker.failures[connectionKey] then
+		ConnectionCircuitBreaker.failures[connectionKey] = { count = 0, lastFailTime = 0, isBlocked = false }
+	end
+
+	local failure = ConnectionCircuitBreaker.failures[connectionKey]
+	failure.count = failure.count + 1
+	failure.lastFailTime = currentTick
+
+	-- Block connection if too many failures
+	if failure.count >= ConnectionCircuitBreaker.maxFailures then
+		failure.isBlocked = true
+		Log:Warn("Circuit breaker BLOCKED connection %s after %d failures", connectionKey, failure.count)
+		return true
+	end
+
+	Log:Debug(
+		"Circuit breaker recorded failure %d/%d for connection %s",
+		failure.count,
+		ConnectionCircuitBreaker.maxFailures,
+		connectionKey
+	)
+	return false
+end
+
+-- Check if a connection is blocked by circuit breaker
+local function isConnectionBlocked(nodeA, nodeB)
+	if not nodeA or not nodeB then
+		return false
+	end
+
+	local connectionKey = nodeA.id .. "->" .. nodeB.id
+	local failure = ConnectionCircuitBreaker.failures[connectionKey]
+
+	if not failure or not failure.isBlocked then
+		return false
+	end
+
+	local currentTick = globals.TickCount()
+	-- Unblock if enough time has passed
+	if currentTick - failure.lastFailTime > ConnectionCircuitBreaker.blockDuration then
+		failure.isBlocked = false
+		failure.count = 0 -- Reset failure count
+		Log:Info("Circuit breaker UNBLOCKED connection %s after timeout", connectionKey)
+		return false
+	end
+
+	return true
+end
+
+-- Clean up old circuit breaker entries
+local function cleanupCircuitBreaker()
+	local currentTick = globals.TickCount()
+	if currentTick - ConnectionCircuitBreaker.lastCleanup < ConnectionCircuitBreaker.cleanupInterval then
+		return
+	end
+
+	ConnectionCircuitBreaker.lastCleanup = currentTick
+	local cleaned = 0
+
+	for connectionKey, failure in pairs(ConnectionCircuitBreaker.failures) do
+		-- Clean up old, unblocked entries
+		if
+			not failure.isBlocked
+			and (currentTick - failure.lastFailTime) > ConnectionCircuitBreaker.blockDuration * 2
+		then
+			ConnectionCircuitBreaker.failures[connectionKey] = nil
+			cleaned = cleaned + 1
+		end
+	end
+
+	if cleaned > 0 then
+		Log:Debug("Circuit breaker cleaned up %d old entries", cleaned)
+	end
+end
 
 --[[ Path Optimiser ]]
 -- ############################################################
@@ -139,32 +275,29 @@ end
 
 -- Function to handle the IDLE state
 function handleIdleState()
+	ProfilerBegin("idle_state")
+
 	G.BotIsMoving = false -- Clear movement state when idle
 	local currentTask = Common.GetHighestPriorityTask()
 	if not currentTask then
+		ProfilerEnd()
 		return
 	end
 
+	ProfilerBegin("find_goal")
 	-- Check for immediate goals first (before pathfinding cooldown)
 	local goalNode, goalPos = findGoalNode(currentTask)
+	ProfilerEnd()
+
 	if goalNode and goalPos then
 		local distance = (G.pLocal.Origin - goalPos):Length()
-		-- Use direct movement if we don't have a path, or if path ended and goal is close
-		local shouldTryDirectMovement = (not G.Navigation.path or #G.Navigation.path == 0) and distance > 25
 
-		-- Also try direct movement if we have a goal that's different from our current path goal
-		if not shouldTryDirectMovement and G.Navigation.goalPos then
-			local goalChanged = (G.Navigation.goalPos - goalPos):Length() > 100
-			if goalChanged and distance > 50 then
-				shouldTryDirectMovement = true
-				Log:Debug("Goal changed significantly, trying direct movement (distance: %.1f)", distance)
-			end
-		end
-
-		if shouldTryDirectMovement then
+		-- PRIORITY 1: Always try direct movement to objectives first, regardless of current path
+		if distance > 25 then -- Only if we're not already at the goal
+			ProfilerBegin("direct_walk_check")
 			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-			-- Use aggressive mode for very close goals (likely objectives/intel)
-			if distance < 200 then
+			-- Use aggressive mode for close goals (likely objectives/intel)
+			if distance < 300 then
 				walkMode = "Aggressive"
 			end
 
@@ -179,7 +312,19 @@ function handleIdleState()
 				G.Navigation.goalNodeId = goalNode.id
 				G.currentState = G.States.MOVING
 				G.lastPathfindingTick = globals.TickCount()
+				ProfilerEnd()
+				ProfilerEnd()
 				return
+			end
+			ProfilerEnd()
+		end
+
+		-- PRIORITY 2: Check if goal has changed significantly from current path
+		if G.Navigation.goalPos then
+			local goalChanged = (G.Navigation.goalPos - goalPos):Length() > 150
+			if goalChanged then
+				Log:Info("Goal changed significantly, forcing immediate repath (new distance: %.1f)", distance)
+				G.lastPathfindingTick = 0 -- Force repath immediately
 			end
 		end
 	end
@@ -192,18 +337,24 @@ function handleIdleState()
 
 	-- Only allow pathfinding every 60 ticks (1 second) to prevent spam
 	if currentTick - G.lastPathfindingTick < 60 then
+		ProfilerEnd()
 		return
 	end
 
+	ProfilerBegin("pathfinding_setup")
 	-- Safety check: ensure nodes are available before pathfinding
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
 		Log:Debug("No navigation nodes available, staying in IDLE state")
+		ProfilerEnd()
+		ProfilerEnd()
 		return
 	end
 
 	local startNode = Navigation.GetClosestNode(G.pLocal.Origin)
 	if not startNode then
 		Log:Warn("Could not find start node")
+		ProfilerEnd()
+		ProfilerEnd()
 		return
 	end
 
@@ -212,6 +363,8 @@ function handleIdleState()
 	end
 	if not goalNode then
 		Log:Warn("Could not find goal node")
+		ProfilerEnd()
+		ProfilerEnd()
 		return
 	end
 
@@ -237,6 +390,8 @@ function handleIdleState()
 				G.lastPathfindingTick = currentTick
 			end
 		end
+		ProfilerEnd()
+		ProfilerEnd()
 		return
 	end
 
@@ -244,6 +399,8 @@ function handleIdleState()
 	WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 	G.currentState = G.States.PATHFINDING
 	G.lastPathfindingTick = currentTick
+	ProfilerEnd()
+	ProfilerEnd()
 end
 
 -- Function to handle the PATHFINDING state
@@ -295,9 +452,12 @@ end
 
 -- Function to handle the MOVING state
 function handleMovingState(userCmd)
+	ProfilerBegin("moving_state")
+
 	if not G.Navigation.path or #G.Navigation.path == 0 then
 		Log:Warn("No path available, returning to IDLE state")
 		G.currentState = G.States.IDLE
+		ProfilerEnd()
 		return
 	end
 
@@ -306,26 +466,60 @@ function handleMovingState(userCmd)
 	if not currentNode then
 		Log:Warn("Current node is nil, returning to IDLE state")
 		G.currentState = G.States.IDLE
+		ProfilerEnd()
 		return
 	end
 
+	ProfilerBegin("movement_setup")
 	-- Store the intended movement direction for SmartJump to use
 	local LocalOrigin = G.pLocal.Origin
 	local direction = currentNode.pos - LocalOrigin
 	G.BotMovementDirection = direction:Length() > 0 and (direction / direction:Length()) or Vector3(0, 0, 0)
 	G.BotIsMoving = true
+	ProfilerEnd()
+
+	-- Check if this connection is blocked by circuit breaker before expensive movement
+	ProfilerBegin("circuit_breaker_check")
+	local path = G.Navigation.path
+	if path and #path > 1 then
+		local nextNode = path[2]
+		if isConnectionBlocked(currentNode, nextNode) then
+			Log:Warn(
+				"Next connection %d -> %d is BLOCKED by circuit breaker - forcing repath",
+				currentNode.id,
+				nextNode.id
+			)
+			G.currentState = G.States.STUCK
+			ProfilerEnd()
+			ProfilerEnd()
+			return
+		end
+	end
+	ProfilerEnd()
 
 	moveTowardsNode(userCmd, currentNode)
 
-	-- Check if stuck
-	if G.Navigation.currentNodeTicks > 66 then
+	-- Check if stuck - INCREASED THRESHOLD to prevent oscillation
+	if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to 132 ticks (2 seconds)
 		G.currentState = G.States.STUCK
 	end
+
+	ProfilerEnd()
 end
 
 -- Function to handle the STUCK state
 function handleStuckState(userCmd)
+	ProfilerBegin("stuck_state")
+
 	local currentTick = globals.TickCount()
+
+	-- Initialize stuck timer if not set
+	if not G.Navigation.stuckStartTick then
+		G.Navigation.stuckStartTick = currentTick
+	end
+
+	-- Calculate how long we've been stuck
+	local stuckDuration = currentTick - G.Navigation.stuckStartTick
 
 	-- SmartJump runs independently, just request emergency jump when needed
 	-- Request emergency jump through SmartJump system (don't apply directly)
@@ -335,56 +529,121 @@ function handleStuckState(userCmd)
 		Log:Info("Emergency jump requested - SmartJump will handle it")
 	end
 
-	if G.Navigation.currentNodeTicks > 396 then -- Increased from 264 to allow more time for movement
-		Log:Warn("Stuck for too long, adding heavy penalties and requesting repath...")
-		local path = G.Navigation.path
-		if path and #path > 1 then
-			local currentNode = path[1]
-			local nextNode = path[2]
-			if currentNode and nextNode and currentNode.id ~= nextNode.id then -- Prevent self-loop penalties
-				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-				local penalty = 50 -- Higher base penalty for prolonged stuck
-				if not isWalkable.Path(G.pLocal.Origin, nextNode.pos, walkMode) then
-					if isWalkable.Path(G.pLocal.Origin, nextNode.pos, "Aggressive") then
-						penalty = 125
-						Log:Debug(
-							"Stuck connection %d -> %d: fails with %s but works with Aggressive",
-							currentNode.id,
-							nextNode.id,
-							walkMode
-						)
-					else
-						penalty = 200 -- Very high penalty for completely blocked paths
-						Log:Debug("Stuck connection %d -> %d: completely blocked", currentNode.id, nextNode.id)
-					end
-				else
-					Log:Debug(
-						"Stuck connection %d -> %d: walkable but still stuck (collision/geometry issue?)",
-						currentNode.id,
-						nextNode.id
-					)
-				end
-				Node.AddFailurePenalty(currentNode, nextNode, penalty)
-				Log:Info(
-					"Applied heavy penalty %d to connection %d -> %d due to prolonged stuck",
-					penalty,
+	-- CIRCUIT BREAKER LOGIC - prevent infinite loops on blocked connections
+	ProfilerBegin("stuck_analysis")
+	local path = G.Navigation.path
+	local shouldForceRepath = false
+	local connectionBlocked = false
+
+	if path and #path > 1 then
+		local currentNode = path[1]
+		local nextNode = path[2]
+
+		if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
+			-- Check if this connection is blocked by circuit breaker
+			if isConnectionBlocked(currentNode, nextNode) then
+				Log:Warn(
+					"Connection %d -> %d is BLOCKED by circuit breaker - forcing immediate repath",
 					currentNode.id,
 					nextNode.id
 				)
+				shouldForceRepath = true
+				connectionBlocked = true
+			end
+		end
+	end
+	ProfilerEnd()
+
+	-- INCREASED THRESHOLD - only repath after being stuck for much longer OR if connection is blocked
+	if stuckDuration > 198 or shouldForceRepath then -- 198 ticks = 3 seconds of being stuck
+		if not connectionBlocked then
+			Log:Warn("Stuck for too long (%d ticks), analyzing connection and adding penalties...", stuckDuration)
+		end
+
+		ProfilerBegin("stuck_penalty_analysis")
+		if path and #path > 1 then
+			local currentNode = path[1]
+			local nextNode = path[2]
+			-- Better validation to prevent invalid penalties
+			if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
+				-- Only do expensive walkability check if not already blocked by circuit breaker
+				if not connectionBlocked then
+					local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+					local penalty = 75 -- Higher base penalty for prolonged stuck
+
+					if not isWalkable.Path(G.pLocal.Origin, nextNode.pos, walkMode) then
+						if isWalkable.Path(G.pLocal.Origin, nextNode.pos, "Aggressive") then
+							penalty = 150
+							Log:Debug(
+								"Stuck connection %d -> %d: fails with %s but works with Aggressive",
+								currentNode.id,
+								nextNode.id,
+								walkMode
+							)
+						else
+							penalty = 250 -- Very high penalty for completely blocked paths
+							Log:Debug("Stuck connection %d -> %d: completely blocked", currentNode.id, nextNode.id)
+						end
+					else
+						Log:Debug(
+							"Stuck connection %d -> %d: walkable but still stuck (collision/geometry issue?)",
+							currentNode.id,
+							nextNode.id
+						)
+					end
+
+					Node.AddFailurePenalty(currentNode, nextNode, penalty)
+
+					-- Add to circuit breaker - if this returns true, connection is now blocked
+					if addConnectionFailure(currentNode, nextNode) then
+						Log:Error(
+							"Connection %d -> %d has failed too many times - temporarily BLOCKED",
+							currentNode.id,
+							nextNode.id
+						)
+					end
+
+					Log:Info(
+						"Applied heavy penalty %d to connection %d -> %d after %d ticks stuck",
+						penalty,
+						currentNode.id,
+						nextNode.id,
+						stuckDuration
+					)
+				end
 			else
 				Log:Warn(
-					"Skipping penalty for invalid prolonged stuck connection %d -> %d (self-loop or invalid)",
+					"Skipping penalty for invalid stuck connection: currentNode=%s (id=%s) nextNode=%s (id=%s)",
+					currentNode and "valid" or "nil",
 					currentNode and currentNode.id or "nil",
+					nextNode and "valid" or "nil",
 					nextNode and nextNode.id or "nil"
 				)
 			end
 		end
+		ProfilerEnd()
+
+		-- Clear stuck timer and reset navigation
+		G.Navigation.stuckStartTick = nil
 		Navigation.ResetTickTimer()
 		G.currentState = G.States.PATHFINDING -- Use pathfinding state to trigger WorkManager repath
-		G.lastPathfindingTick = 0
+		G.lastPathfindingTick = 0 -- Force immediate repath
+
+		-- If connection is blocked, also clear the current path to force a completely new one
+		if connectionBlocked then
+			Log:Info("Clearing current path due to blocked connection")
+			Navigation.ClearPath()
+		end
 	else
-		G.currentState = G.States.MOVING
+		-- COOLDOWN: Only switch back to MOVING if we've been stuck for at least 33 ticks (0.5 seconds)
+		if stuckDuration > 33 then
+			G.Navigation.stuckStartTick = nil -- Reset stuck timer
+			G.currentState = G.States.MOVING
+		end
+		-- If stuckDuration <= 33, stay in STUCK state to prevent oscillation
 	end
+
+	ProfilerEnd()
 end
 
 -- Function to find goal node based on the current task
@@ -398,9 +657,15 @@ function findGoalNode(currentTask)
 	local mapName = engine.GetMapName():lower()
 
 	local function findPayloadGoal()
-		G.World.payloads = entities.FindByClass("CObjectCartDispenser")
-		for _, entity in pairs(G.World.payloads) do
-			if entity:GetTeamNumber() == pLocal:GetTeamNumber() then
+		-- Cache payload entities for 90 ticks (1.5 seconds) to avoid expensive entity searches
+		local currentTick = globals.TickCount()
+		if not G.World.payloadCacheTime or (currentTick - G.World.payloadCacheTime) > 90 then
+			G.World.payloads = entities.FindByClass("CObjectCartDispenser")
+			G.World.payloadCacheTime = currentTick
+		end
+
+		for _, entity in pairs(G.World.payloads or {}) do
+			if entity:IsValid() and entity:GetTeamNumber() == pLocal:GetTeamNumber() then
 				local pos = entity:GetAbsOrigin()
 				return Navigation.GetClosestNode(pos), pos
 			end
@@ -409,10 +674,15 @@ function findGoalNode(currentTask)
 
 	local function findFlagGoal()
 		local myItem = pLocal:GetPropInt("m_hItem")
-		G.World.flags = entities.FindByClass("CCaptureFlag")
+
+		-- Cache flag entities for 90 ticks (1.5 seconds) to avoid expensive entity searches
+		local currentTick = globals.TickCount()
+		if not G.World.flagCacheTime or (currentTick - G.World.flagCacheTime) > 90 then
+			G.World.flags = entities.FindByClass("CCaptureFlag")
+			G.World.flagCacheTime = currentTick
+		end
 
 		-- Throttle debug logging to avoid spam (only log every 60 ticks)
-		local currentTick = globals.TickCount()
 		if not G.lastFlagLogTick then
 			G.lastFlagLogTick = 0
 		end
@@ -426,7 +696,7 @@ function findGoalNode(currentTask)
 		local targetFlag = nil
 		local targetPos = nil
 
-		for _, entity in pairs(G.World.flags) do
+		for _, entity in pairs(G.World.flags or {}) do
 			local flagTeam = entity:GetTeamNumber()
 			local myTeam = flagTeam == pLocal:GetTeamNumber()
 			local pos = entity:GetAbsOrigin()
@@ -479,7 +749,7 @@ function findGoalNode(currentTask)
 		return closestNode, closestPos
 	end
 
-	-- Find and follow the closest teammate using FastPlayers
+	-- Find and follow the closest teammate using FastPlayers (throttled to avoid lag)
 	local function findFollowGoal()
 		local localWP = Common.FastPlayers.GetLocal()
 		if not localWP then
@@ -491,9 +761,16 @@ function findGoalNode(currentTask)
 		local targetPos = nil
 		local foundTarget = false
 
-		for _, wp in ipairs(Common.FastPlayers.GetTeammates(true)) do
+		-- Cache teammate search for 30 ticks (0.5 seconds) to reduce expensive player iteration
+		local currentTick = globals.TickCount()
+		if not G.World.teammatesCacheTime or (currentTick - G.World.teammatesCacheTime) > 30 then
+			G.World.cachedTeammates = Common.FastPlayers.GetTeammates(true)
+			G.World.teammatesCacheTime = currentTick
+		end
+
+		for _, wp in ipairs(G.World.cachedTeammates or {}) do
 			local ent = wp:GetRawEntity()
-			if ent and ent:IsAlive() then
+			if ent and ent:IsValid() and ent:IsAlive() then
 				foundTarget = true
 				local pos = ent:GetAbsOrigin()
 				local dist = (pos - origin):Length()
@@ -557,17 +834,24 @@ end
 
 -- Function to move towards the current node (simplified for better FPS)
 function moveTowardsNode(userCmd, node)
+	ProfilerBegin("move_to_node")
+
 	local LocalOrigin = G.pLocal.Origin
 	local goalPos = G.Navigation.goalPos -- Use the stored goal position directly
 
 	-- Try to skip directly to the goal if we have a complex path
+	ProfilerBegin("goal_skip_check")
 	if G.Menu.Main.Skip_Nodes and goalPos and G.Navigation.path and #G.Navigation.path > 1 then
 		if Optimiser.skipToGoalIfWalkable(LocalOrigin, goalPos, G.Navigation.path) then
+			ProfilerEnd()
+			ProfilerEnd()
 			return -- Stop for this tick if we skipped to goal
 		end
 	end
+	ProfilerEnd()
 
 	-- Only rotate camera if LookingAhead is enabled
+	ProfilerBegin("camera_rotation")
 	if G.Menu.Main.LookingAhead then
 		local pLocalWrapped = WPlayer.GetLocal()
 		local angles = Lib.Utils.Math.PositionAngles(pLocalWrapped:GetEyePos(), node.pos)
@@ -583,7 +867,9 @@ function moveTowardsNode(userCmd, node)
 		)
 		engine.SetViewAngles(angles)
 	end
+	ProfilerEnd()
 
+	ProfilerBegin("distance_check")
 	local horizontalDist = math.abs(LocalOrigin.x - node.pos.x) + math.abs(LocalOrigin.y - node.pos.y)
 	local verticalDist = math.abs(LocalOrigin.z - node.pos.z)
 
@@ -599,118 +885,178 @@ function moveTowardsNode(userCmd, node)
 			G.currentState = G.States.IDLE
 			G.lastPathfindingTick = 0 -- Reset cooldown to allow immediate direct movement check
 		end
-	else
-		------------------------------------------------------------
-		--  Hybrid Skip - Robust walkability check for node skipping
-		------------------------------------------------------------
-		-- Only skip one node per tick, first if closer, then if walkable
-		if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
-			local skipped = false
-			if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
-				skipped = true
-			elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
-				skipped = true
-			end
-			if skipped then
-				node = G.Navigation.path[1]
-				if not node then
-					return
-				end
-			end
+		ProfilerEnd()
+		ProfilerEnd()
+		return
+	end
+	ProfilerEnd()
+
+	------------------------------------------------------------
+	--  Hybrid Skip - Robust walkability check for node skipping
+	------------------------------------------------------------
+	ProfilerBegin("node_skipping")
+	-- Only skip one node per tick, first if closer, then if walkable
+	if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
+		local skipped = false
+		if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
+			skipped = true
+		elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
+			skipped = true
 		end
-
-		-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
-		local originalButtons = userCmd.buttons
-
-		-- Simple movement without complex optimizations
-		Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
-
-		-- Preserve SmartJump button inputs (jump and duck commands)
-		-- WalkTo might clear these, so we need to restore them
-		local smartJumpButtons = originalButtons & (IN_JUMP | IN_DUCK)
-		if smartJumpButtons ~= 0 then
-			userCmd:SetButtons(userCmd.buttons | smartJumpButtons)
-		end
-
-		G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
-
-		-- Expensive walkability verification - only when stuck for longer
-		if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to give more time
-			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-			if not isWalkable.Path(LocalOrigin, node.pos, walkMode) then
-				Log:Warn("Path to current node blocked with %s mode after being stuck, repathing...", walkMode)
-				local path = G.Navigation.path
-				if path and #path > 1 then
-					local currentNode = path[1]
-					local nextNode = path[2]
-					if currentNode and nextNode and currentNode.id ~= nextNode.id then -- Prevent self-loop penalties
-						-- Test penalty based on walkability with different modes
-						local penalty = 25 -- Increased base penalty
-						if not isWalkable.Path(LocalOrigin, nextNode.pos, walkMode) then
-							if isWalkable.Path(LocalOrigin, nextNode.pos, "Aggressive") then
-								penalty = 75 -- Higher penalty for mode-specific failures
-								Log:Debug(
-									"Connection %d -> %d fails with %s but works with Aggressive",
-									currentNode.id,
-									nextNode.id,
-									walkMode
-								)
-							else
-								penalty = 150 -- Much higher penalty for completely blocked paths
-								Log:Debug("Connection %d -> %d completely blocked", currentNode.id, nextNode.id)
-							end
-						end
-						Node.AddFailurePenalty(currentNode, nextNode, penalty)
-						Log:Info("Applied penalty %d to connection %d -> %d", penalty, currentNode.id, nextNode.id)
-					else
-						Log:Warn(
-							"Skipping penalty for invalid connection %d -> %d (self-loop or invalid)",
-							currentNode and currentNode.id or "nil",
-							nextNode and nextNode.id or "nil"
-						)
-					end
-				end
-				Navigation.ResetTickTimer()
-				G.currentState = G.States.PATHFINDING -- Use pathfinding state to trigger WorkManager repath
-				G.lastPathfindingTick = 0
+		if skipped then
+			node = G.Navigation.path[1]
+			if not node then
+				ProfilerEnd()
+				ProfilerEnd()
 				return
 			end
 		end
+	end
+	ProfilerEnd()
 
-		-- Fast re-sync when blast displacement < 1200 uu (optional recovery system)
-		local path = G.Navigation.path
-		local origin = G.pLocal.Origin
-		local MAX_SNAP = 1200 * 1200 -- sqDist
+	ProfilerBegin("movement_execution")
+	-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
+	local originalButtons = userCmd.buttons
 
-		if path and #path > 0 and G.Navigation.currentNodeTicks > 30 then -- Only after being stuck for a bit
-			-- Scan *once* from front to back for the first node we can still walk to
-			for i = 1, math.min(#path, 30) do
-				local pathNode = path[i]
-				if pathNode and pathNode.pos and (pathNode.pos - origin):LengthSqr() < MAX_SNAP then
-					-- Only do expensive walkability check for potential recovery targets
-					if isWalkable.Path(origin, pathNode.pos) then
-						-- Drop everything before i
-						for j = 1, i - 1 do
-							Navigation.RemoveCurrentNode()
+	-- Simple movement without complex optimizations
+	Lib.TF2.Helpers.WalkTo(userCmd, G.pLocal.entity, node.pos)
+
+	-- Preserve SmartJump button inputs (jump and duck commands)
+	-- WalkTo might clear these, so we need to restore them
+	local smartJumpButtons = originalButtons & (IN_JUMP | IN_DUCK)
+	if smartJumpButtons ~= 0 then
+		userCmd:SetButtons(userCmd.buttons | smartJumpButtons)
+	end
+
+	G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
+	ProfilerEnd()
+
+	-- Expensive walkability verification - only when stuck for longer
+	ProfilerBegin("stuck_analysis")
+	if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to give more time
+		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+		if not isWalkable.Path(LocalOrigin, node.pos, walkMode) then
+			Log:Warn("Path to current node blocked with %s mode after being stuck, repathing...", walkMode)
+			local path = G.Navigation.path
+			if path and #path > 1 then
+				local currentNode = path[1]
+				local nextNode = path[2]
+				if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then -- Prevent self-loop penalties
+					-- Test penalty based on walkability with different modes
+					local penalty = 50 -- Increased base penalty
+					if not isWalkable.Path(LocalOrigin, nextNode.pos, walkMode) then
+						if isWalkable.Path(LocalOrigin, nextNode.pos, "Aggressive") then
+							penalty = 100 -- Higher penalty for mode-specific failures
+							Log:Debug(
+								"Connection %d -> %d fails with %s but works with Aggressive",
+								currentNode.id,
+								nextNode.id,
+								walkMode
+							)
+						else
+							penalty = 200 -- Much higher penalty for completely blocked paths
+							Log:Debug("Connection %d -> %d completely blocked", currentNode.id, nextNode.id)
 						end
-						Log:Debug("Re-synced to path node %d after displacement", i)
-						break
+					end
+					Node.AddFailurePenalty(currentNode, nextNode, penalty)
+					Log:Info("Applied penalty %d to connection %d -> %d", penalty, currentNode.id, nextNode.id)
+				else
+					Log:Warn(
+						"Skipping penalty for invalid connection: currentNode=%s (id=%s) nextNode=%s (id=%s)",
+						currentNode and "valid" or "nil",
+						currentNode and currentNode.id or "nil",
+						nextNode and "valid" or "nil",
+						nextNode and nextNode.id or "nil"
+					)
+				end
+			end
+			Navigation.ResetTickTimer()
+			G.currentState = G.States.PATHFINDING -- Use pathfinding state to trigger WorkManager repath
+			G.lastPathfindingTick = 0
+			ProfilerEnd()
+			ProfilerEnd()
+			return
+		end
+	end
+	ProfilerEnd()
+
+	-- Smart displacement recovery - only when actually displaced, not when normally stuck
+	ProfilerBegin("displacement_recovery")
+	local path = G.Navigation.path
+	local origin = G.pLocal.Origin
+
+	-- Only check for displacement if we have a substantial path and we're not at the first node
+	if path and #path > 2 and G.Navigation.currentNodeTicks > 60 then -- Increased threshold
+		local currentNode = path[1]
+		local distToCurrentNode = currentNode and (currentNode.pos - origin):Length() or math.huge
+
+		-- Only consider displacement recovery if we're significantly far from our current target node
+		-- This prevents infinite re-sync loops when normally stuck
+		if distToCurrentNode > 300 then -- Must be >300 units away from current node to consider displacement
+			local MAX_SNAP = 800 * 800 -- Reduced from 1200 to be more conservative
+			local bestNodeIndex = nil
+			local bestDistance = math.huge
+
+			-- Find the closest node in our path that we can walk to (skip node 1 to avoid loops)
+			for i = 2, math.min(#path, 15) do -- Start from node 2, reduced scan range
+				local pathNode = path[i]
+				if pathNode and pathNode.pos then
+					local distSqr = (pathNode.pos - origin):LengthSqr()
+					if distSqr < MAX_SNAP and distSqr < bestDistance then
+						-- Only do expensive walkability check for the best candidate
+						if isWalkable.Path(origin, pathNode.pos) then
+							bestNodeIndex = i
+							bestDistance = distSqr
+							break -- Take the first walkable node we find
+						end
 					end
 				end
 			end
-		end
 
-		-- Note: Stuck detection is handled by the STUCK state, no need for duplicate logic here
+			-- Only re-sync if we found a significantly better node (not just node 1)
+			if bestNodeIndex and bestNodeIndex > 1 then
+				-- Store the fact that we used displacement recovery to prevent spam
+				if not G.Navigation.lastDisplacementRecovery then
+					G.Navigation.lastDisplacementRecovery = 0
+				end
+
+				local currentTick = globals.TickCount()
+				-- Only allow displacement recovery once every 5 seconds to prevent spam
+				if (currentTick - G.Navigation.lastDisplacementRecovery) > 300 then
+					-- Drop everything before the best node
+					for j = 1, bestNodeIndex - 1 do
+						Navigation.RemoveCurrentNode()
+					end
+					G.Navigation.lastDisplacementRecovery = currentTick
+					Log:Info(
+						"Displacement recovery: skipped to path node %d (was %.1f units away)",
+						bestNodeIndex,
+						math.sqrt(bestDistance)
+					)
+					-- Reset stuck timer since we made progress
+					Navigation.ResetTickTimer()
+				end
+			end
+		end
 	end
+	ProfilerEnd()
+
+	ProfilerEnd()
+	-- Note: Stuck detection is handled by the STUCK state, no need for duplicate logic here
 end
 
 -- Main function
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
+	ProfilerBeginSystem("medbot_main")
+
+	ProfilerBegin("initial_checks")
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
 		G.currentState = G.States.IDLE
 		Navigation.ClearPath()
+		ProfilerEnd()
+		ProfilerEndSystem()
 		return
 	end
 
@@ -722,14 +1068,18 @@ local function OnCreateMove(userCmd)
 	if not G.Menu.Main.Enable then
 		Navigation.ClearPath()
 		G.BotIsMoving = false -- Clear bot movement state when disabled
+		ProfilerEnd()
+		ProfilerEndSystem()
 		return
 	end
 
 	G.pLocal.entity = pLocal
 	G.pLocal.flags = pLocal:GetPropInt("m_fFlags")
 	G.pLocal.Origin = pLocal:GetAbsOrigin()
+	ProfilerEnd()
 
 	-- PERFORMANCE FIX: Only run memory cleanup every 300 ticks (5 seconds) to prevent frame drops
+	ProfilerBegin("maintenance")
 	local currentTick = globals.TickCount()
 	if not G.lastCleanupTick then
 		G.lastCleanupTick = currentTick
@@ -737,11 +1087,33 @@ local function OnCreateMove(userCmd)
 
 	if currentTick - G.lastCleanupTick > 300 then -- Every 5 seconds
 		G.CleanupMemory()
+
+		-- Clean up performance caches to prevent memory bloat
+		if G.walkabilityCache then
+			local cleaned = 0
+			for key, entry in pairs(G.walkabilityCache) do
+				if (currentTick - entry.timestamp) > 300 then -- Remove entries older than 5 seconds
+					G.walkabilityCache[key] = nil
+					cleaned = cleaned + 1
+				end
+			end
+			if cleaned > 0 then
+				Log:Debug("Cleaned up %d old walkability cache entries", cleaned)
+			end
+		end
+
 		G.lastCleanupTick = currentTick
 	end
 
+	-- Clean up circuit breaker entries
+	cleanupCircuitBreaker()
+	ProfilerEnd()
+
+	ProfilerBegin("user_input")
 	if handleUserInput(userCmd) then
 		G.BotIsMoving = false -- Clear bot movement state when user takes control
+		ProfilerEnd()
+		ProfilerEndSystem()
 		return
 	end --if user is walking
 
@@ -751,8 +1123,122 @@ local function OnCreateMove(userCmd)
 			G.lastPathfindingTick = 0 -- force repath soon
 		end
 	end
+	ProfilerEnd()
 
-	-- Rearrange the conditions for better performance
+	-- PRIORITY CHECK: Throttled check for direct objectives (only every 30 ticks to prevent lag)
+	ProfilerBegin("priority_check")
+	local currentTask = Common.GetHighestPriorityTask()
+
+	-- Initialize priority check timer
+	if not G.lastPriorityCheckTick then
+		G.lastPriorityCheckTick = 0
+	end
+
+	-- Only run expensive priority checks every 30 ticks (0.5 seconds) unless we have no current goal
+	local shouldRunPriorityCheck = false
+	if not G.Navigation.goalPos then
+		-- No current goal - run priority check immediately
+		shouldRunPriorityCheck = true
+	elseif (currentTick - G.lastPriorityCheckTick) > 30 then
+		-- Regular throttled check
+		shouldRunPriorityCheck = true
+		G.lastPriorityCheckTick = currentTick
+	end
+
+	if currentTask and G.currentState ~= G.States.PATHFINDING and shouldRunPriorityCheck then -- Don't interrupt pathfinding
+		local goalNode, goalPos = findGoalNode(currentTask)
+		if goalNode and goalPos then
+			local distance = (G.pLocal.Origin - goalPos):Length()
+
+			-- If we can reach the objective directly, abandon current path and go for it
+			if distance > 25 and distance < 400 then -- Within reasonable range
+				-- Cache the walkability check result briefly to avoid repeated expensive calls
+				local cacheKey = string.format(
+					"%.0f_%.0f_%.0f_to_%.0f_%.0f_%.0f",
+					G.pLocal.Origin.x,
+					G.pLocal.Origin.y,
+					G.pLocal.Origin.z,
+					goalPos.x,
+					goalPos.y,
+					goalPos.z
+				)
+
+				if not G.walkabilityCache then
+					G.walkabilityCache = {}
+				end
+
+				local walkMode = distance < 200 and "Aggressive" or G.Menu.Main.WalkableMode or "Smooth"
+				local cacheEntry = G.walkabilityCache[cacheKey]
+				local isWalkableResult = false
+
+				-- Use cached result if it's recent (within 60 ticks = 1 second)
+				if cacheEntry and (currentTick - cacheEntry.timestamp) < 60 and cacheEntry.walkMode == walkMode then
+					isWalkableResult = cacheEntry.result
+				else
+					-- Expensive check - cache the result
+					isWalkableResult = isWalkable.Path(G.pLocal.Origin, goalPos, walkMode)
+					G.walkabilityCache[cacheKey] = {
+						result = isWalkableResult,
+						timestamp = currentTick,
+						walkMode = walkMode,
+					}
+
+					-- Clean up old cache entries to prevent memory bloat
+					if not G.lastCacheCleanup then
+						G.lastCacheCleanup = 0
+					end
+					if (currentTick - G.lastCacheCleanup) > 300 then -- Clean every 5 seconds
+						for key, entry in pairs(G.walkabilityCache) do
+							if (currentTick - entry.timestamp) > 180 then -- Remove entries older than 3 seconds
+								G.walkabilityCache[key] = nil
+							end
+						end
+						G.lastCacheCleanup = currentTick
+					end
+				end
+
+				if isWalkableResult then
+					-- Check if this is a NEW objective or significantly closer than current goal
+					local shouldSwitch = false
+					if not G.Navigation.goalPos then
+						shouldSwitch = true
+						Log:Info("No current goal, switching to direct objective")
+					else
+						local currentGoalDist = (G.pLocal.Origin - G.Navigation.goalPos):Length()
+						if distance < currentGoalDist * 0.7 then -- New goal is 30% closer
+							shouldSwitch = true
+							Log:Info(
+								"Direct objective is much closer (%.1f vs %.1f), switching",
+								distance,
+								currentGoalDist
+							)
+						elseif (G.Navigation.goalPos - goalPos):Length() > 200 then -- Goal has changed significantly
+							shouldSwitch = true
+							Log:Info("Objective has moved significantly, switching to new position")
+						end
+					end
+
+					if shouldSwitch then
+						Log:Info("Switching to direct objective with %s mode (distance: %.1f)", walkMode, distance)
+						G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+						G.Navigation.goalPos = goalPos
+						G.Navigation.goalNodeId = goalNode.id
+						G.currentState = G.States.MOVING
+						G.lastPathfindingTick = globals.TickCount()
+						Navigation.ResetTickTimer()
+						-- Skip the normal state handling for this tick
+						ProfilerEnd()
+						ProfilerEndSystem()
+						return
+					end
+				end
+			end
+		end
+	end
+	ProfilerEnd()
+
+	-- STATE HANDLING: Rearrange the conditions for better performance
+	ProfilerBegin("state_handling")
 	if G.currentState == G.States.MOVING then
 		handleMovingState(userCmd)
 	elseif G.currentState == G.States.PATHFINDING then
@@ -762,7 +1248,10 @@ local function OnCreateMove(userCmd)
 	elseif G.currentState == G.States.STUCK then
 		handleStuckState(userCmd)
 	end
+	ProfilerEnd()
 
+	-- POST-PROCESSING: Repath triggers and work management
+	ProfilerBegin("post_processing")
 	-- Repath when state changes
 	if G.prevState ~= G.currentState then
 		Log:Debug("State changed from %s to %s", tostring(G.prevState), tostring(G.currentState))
@@ -802,6 +1291,9 @@ local function OnCreateMove(userCmd)
 	end
 
 	WorkManager.processWorks()
+	ProfilerEnd()
+
+	ProfilerEndSystem()
 end
 
 ---@param ctx DrawModelContext
@@ -835,6 +1327,188 @@ callbacks.Register("FireGameEvent", "MedBot.FireGameEvent", OnGameEvent)
 
 Commands.Register("pf_reload", function()
 	Navigation.Setup()
+end)
+
+Commands.Register("pf_circuit_breaker", function(args)
+	if args[1] == "status" then
+		local currentTick = globals.TickCount()
+		local blockedCount = 0
+		local totalFailures = 0
+
+		print("Circuit Breaker Status:")
+		print("======================")
+
+		for connectionKey, failure in pairs(ConnectionCircuitBreaker.failures) do
+			totalFailures = totalFailures + failure.count
+			local status = failure.isBlocked and "BLOCKED" or "active"
+			local timeLeft = ""
+
+			if failure.isBlocked then
+				blockedCount = blockedCount + 1
+				local ticksLeft = ConnectionCircuitBreaker.blockDuration - (currentTick - failure.lastFailTime)
+				timeLeft = string.format(" (%d ticks left)", math.max(0, ticksLeft))
+			end
+
+			print(string.format("  %s: %d failures, %s%s", connectionKey, failure.count, status, timeLeft))
+		end
+
+		print(
+			string.format(
+				"\nSummary: %d connections tracked, %d currently blocked, %d total failures",
+				table.getn and table.getn(ConnectionCircuitBreaker.failures) or 0,
+				blockedCount,
+				totalFailures
+			)
+		)
+		print(
+			string.format(
+				"Settings: max_failures=%d, block_duration=%d ticks",
+				ConnectionCircuitBreaker.maxFailures,
+				ConnectionCircuitBreaker.blockDuration
+			)
+		)
+	elseif args[1] == "clear" then
+		ConnectionCircuitBreaker.failures = {}
+		print("Circuit breaker cleared - all connections reset")
+	elseif args[1] == "block" and args[2] and args[3] then
+		local nodeA = tonumber(args[2])
+		local nodeB = tonumber(args[3])
+		if nodeA and nodeB then
+			local connectionKey = nodeA .. "->" .. nodeB
+			ConnectionCircuitBreaker.failures[connectionKey] = {
+				count = ConnectionCircuitBreaker.maxFailures,
+				lastFailTime = globals.TickCount(),
+				isBlocked = true,
+			}
+			print(string.format("Manually blocked connection %s", connectionKey))
+		else
+			print("Usage: pf_circuit_breaker block <nodeA_id> <nodeB_id>")
+		end
+	elseif args[1] == "unblock" and args[2] and args[3] then
+		local nodeA = tonumber(args[2])
+		local nodeB = tonumber(args[3])
+		if nodeA and nodeB then
+			local connectionKey = nodeA .. "->" .. nodeB
+			if ConnectionCircuitBreaker.failures[connectionKey] then
+				ConnectionCircuitBreaker.failures[connectionKey].isBlocked = false
+				ConnectionCircuitBreaker.failures[connectionKey].count = 0
+				print(string.format("Manually unblocked connection %s", connectionKey))
+			else
+				print(string.format("Connection %s not found in circuit breaker", connectionKey))
+			end
+		else
+			print("Usage: pf_circuit_breaker unblock <nodeA_id> <nodeB_id>")
+		end
+	else
+		print("Usage: pf_circuit_breaker status | clear | block <nodeA> <nodeB> | unblock <nodeA> <nodeB>")
+		print("  status  - Show all tracked connections and their status")
+		print("  clear   - Reset all circuit breaker data")
+		print("  block   - Manually block a specific connection")
+		print("  unblock - Manually unblock a specific connection")
+	end
+end)
+
+Commands.Register("pf_profiler", function(args)
+	if not Profiler then
+		print("Profiler not available - please install the Profiler module")
+		return
+	end
+
+	if args[1] == "show" then
+		Profiler.SetVisible(true)
+		print("Profiler display enabled")
+	elseif args[1] == "hide" then
+		Profiler.SetVisible(false)
+		print("Profiler display disabled")
+	elseif args[1] == "reset" then
+		Profiler.Reset()
+		print("Profiler data reset")
+	elseif args[1] == "config" then
+		if args[2] == "performance" then
+			Profiler.Setup({
+				smoothingSpeed = 12.0, -- Fast spike detection
+				smoothingDecay = 3.0, -- Keep peaks visible longer
+				systemMemoryMode = "system",
+				compensateOverhead = true,
+			})
+			print("Profiler configured for performance hunting")
+		elseif args[2] == "smooth" then
+			Profiler.Setup({
+				smoothingSpeed = 2.5, -- Smooth animations
+				smoothingDecay = 1.5, -- Slow decay
+				systemMemoryMode = "components",
+				compensateOverhead = true,
+			})
+			print("Profiler configured for smooth monitoring")
+		else
+			print("Usage: pf_profiler config performance | smooth")
+		end
+	else
+		print("Usage: pf_profiler show | hide | reset | config <performance|smooth>")
+		print("  show   - Enable profiler display")
+		print("  hide   - Disable profiler display")
+		print("  reset  - Clear all profiler data")
+		print("  config - Configure profiler for different use cases")
+	end
+end)
+
+Commands.Register("pf_performance", function(args)
+	local currentTick = globals.TickCount()
+
+	if args[1] == "cache" then
+		print("Performance Cache Status:")
+		print("========================")
+
+		-- Walkability cache
+		if G.walkabilityCache then
+			local cacheCount = 0
+			local oldEntries = 0
+			for key, entry in pairs(G.walkabilityCache) do
+				cacheCount = cacheCount + 1
+				if (currentTick - entry.timestamp) > 180 then
+					oldEntries = oldEntries + 1
+				end
+			end
+			print(string.format("Walkability cache: %d entries (%d old)", cacheCount, oldEntries))
+		else
+			print("Walkability cache: not initialized")
+		end
+
+		-- Entity caches
+		local flagCacheAge = G.World.flagCacheTime and (currentTick - G.World.flagCacheTime) or "never"
+		local payloadCacheAge = G.World.payloadCacheTime and (currentTick - G.World.payloadCacheTime) or "never"
+		local teammatesCacheAge = G.World.teammatesCacheTime and (currentTick - G.World.teammatesCacheTime) or "never"
+
+		print(string.format("Flag cache age: %s ticks", tostring(flagCacheAge)))
+		print(string.format("Payload cache age: %s ticks", tostring(payloadCacheAge)))
+		print(string.format("Teammates cache age: %s ticks", tostring(teammatesCacheAge)))
+
+		-- Priority check throttling
+		local priorityCheckAge = G.lastPriorityCheckTick and (currentTick - G.lastPriorityCheckTick) or "never"
+		print(string.format("Last priority check: %s ticks ago", tostring(priorityCheckAge)))
+	elseif args[1] == "clear" then
+		G.walkabilityCache = {}
+		G.World.flagCacheTime = nil
+		G.World.payloadCacheTime = nil
+		G.World.teammatesCacheTime = nil
+		G.lastPriorityCheckTick = 0
+		print("All performance caches cleared")
+	elseif args[1] == "stats" then
+		print("Performance Optimization Stats:")
+		print("==============================")
+		print("Throttling intervals:")
+		print("  Priority check: every 30 ticks (0.5s)")
+		print("  Entity searches: every 90 ticks (1.5s)")
+		print("  Teammate search: every 30 ticks (0.5s)")
+		print("  Walkability cache: 60 tick lifetime (1s)")
+		print("  Circuit breaker cleanup: every 1800 ticks (30s)")
+		print("  Memory cleanup: every 300 ticks (5s)")
+	else
+		print("Usage: pf_performance cache | clear | stats")
+		print("  cache - Show current cache status and ages")
+		print("  clear - Clear all performance caches")
+		print("  stats - Show performance optimization settings")
+	end
 end)
 
 Commands.Register("pf_hierarchical", function(args)

@@ -10,9 +10,9 @@ Log.Level = 0 -- Default log level
 
 -- Utility wrapper to respect debug toggle
 local function DebugLog(...)
-        if G.Menu.SmartJump and G.Menu.SmartJump.Debug then
-                Log:Debug(...)
-        end
+	if G.Menu.SmartJump and G.Menu.SmartJump.Debug then
+		Log:Debug(...)
+	end
 end
 
 -- Constants
@@ -32,13 +32,13 @@ local STATE_DESCENDING = "STATE_DESCENDING"
 
 -- Initialize SmartJump's own menu settings and state
 if not G.Menu.SmartJump then
-        G.Menu.SmartJump = {}
+	G.Menu.SmartJump = {}
 end
 if G.Menu.SmartJump.Enable == nil then
-        G.Menu.SmartJump.Enable = true -- Default to enabled
+	G.Menu.SmartJump.Enable = true -- Default to enabled
 end
 if G.Menu.SmartJump.Debug == nil then
-        G.Menu.SmartJump.Debug = false -- Disable debug logs by default
+	G.Menu.SmartJump.Debug = false -- Disable debug logs by default
 end
 
 -- Initialize jump state
@@ -146,7 +146,7 @@ local function SmartVelocity(cmd, pLocal)
 
 		-- Create movement vector in command space (note: sidemove is negated in the original code)
 		moveDir = Vector3(forwardComponent * 450, -rightComponent * 450, 0) -- 450 is typical max speed
-                DebugLog("SmartJump: Using bot movement direction (%.1f, %.1f)", forwardComponent, rightComponent)
+		DebugLog("SmartJump: Using bot movement direction (%.1f, %.1f)", forwardComponent, rightComponent)
 	end
 
 	local viewAngles = engine.GetViewAngles()
@@ -271,31 +271,66 @@ function SmartJump.Main(cmd)
 	local ducking = isPlayerDucking(pLocal)
 	local viewOffset = pLocal:GetPropVector("m_vecViewOffset[0]").z
 
+	-- Initialize jump cooldown if not set
+	if not G.SmartJump.lastJumpTime then
+		G.SmartJump.lastJumpTime = 0
+	end
+
+	-- Add cooldown to prevent spam jumping (30 ticks = 0.5 seconds)
+	local currentTick = globals.TickCount()
+	local jumpCooldown = currentTick - G.SmartJump.lastJumpTime < 30
+
 	-- Handle emergency jump request from stuck detection
 	local shouldJump = false
-	if G.RequestEmergencyJump then
+	if G.RequestEmergencyJump and not jumpCooldown then
 		shouldJump = true
 		G.RequestEmergencyJump = false
 		G.LastSmartJumpAttempt = globals.TickCount()
 		G.SmartJump.jumpState = STATE_PREPARE_JUMP
+		G.SmartJump.lastJumpTime = currentTick
 		Log:Info("SmartJump: Processing emergency jump request")
 	end
 
-	-- Check if the player is on the ground and fully crouched, handle edge case
-	if onGround and (viewOffset < 65 or ducking) and G.SmartJump.jumpState ~= STATE_CTAP then
-		G.SmartJump.jumpState = STATE_CTAP -- Transition to STATE_CTAP to resolve logical error
-                DebugLog("SmartJump: Edge case - player crouched on ground, transitioning to CTAP")
+	-- Get bot movement intent for better detection
+	local hasMovementIntent = false
+	local moveDir = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
+
+	-- Check if bot is actually trying to move
+	if moveDir:Length() > 0 or (G.BotIsMoving and G.BotMovementDirection and G.BotMovementDirection:Length() > 0) then
+		hasMovementIntent = true
+	end
+
+	-- FIXED: Much more conservative edge case detection
+	-- Only trigger if ALL conditions are met:
+	-- 1. Player is on ground and actually ducking (not just low viewOffset)
+	-- 2. Has movement intent (trying to walk somewhere)
+	-- 3. Not in jump cooldown
+	-- 4. Not already in a jump state
+	-- 5. Actually detects an obstacle ahead
+	if onGround and ducking and hasMovementIntent and not jumpCooldown and G.SmartJump.jumpState == STATE_IDLE then
+		-- Only trigger if SmartJumpDetection actually finds an obstacle
+		local obstacleDetected = SmartJumpDetection(cmd, pLocal)
+		if obstacleDetected then
+			G.SmartJump.jumpState = STATE_PREPARE_JUMP
+			G.SmartJump.lastJumpTime = currentTick
+			DebugLog("SmartJump: Crouched movement with obstacle detected, initiating jump")
+		else
+			-- If no obstacle detected while crouched, just stay idle
+			DebugLog("SmartJump: Crouched movement but no obstacle detected, staying idle")
+		end
 	end
 
 	-- State machine for CTAP and jumping (user's exact logic)
 	if G.SmartJump.jumpState == STATE_IDLE then
 		-- STATE_IDLE: Waiting for jump commands
-		local smartJumpDetected = SmartJumpDetection(cmd, pLocal)
+		-- Only check for smart jump if we have movement intent and no cooldown
+		if onGround and hasMovementIntent and not jumpCooldown then
+			local smartJumpDetected = SmartJumpDetection(cmd, pLocal)
 
-		if onGround and (smartJumpDetected or shouldJump) then
 			if smartJumpDetected or shouldJump then
 				G.SmartJump.jumpState = STATE_PREPARE_JUMP
-                                DebugLog("SmartJump: IDLE -> PREPARE_JUMP")
+				G.SmartJump.lastJumpTime = currentTick
+				DebugLog("SmartJump: IDLE -> PREPARE_JUMP (obstacle detected)")
 			end
 		end
 	elseif G.SmartJump.jumpState == STATE_PREPARE_JUMP then
@@ -303,14 +338,14 @@ function SmartJump.Main(cmd)
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		cmd:SetButtons(cmd.buttons & ~IN_JUMP)
 		G.SmartJump.jumpState = STATE_CTAP
-                DebugLog("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
+		DebugLog("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
 		return true
 	elseif G.SmartJump.jumpState == STATE_CTAP then
 		-- STATE_CTAP: Uncrouch and jump
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 		cmd:SetButtons(cmd.buttons | IN_JUMP)
 		G.SmartJump.jumpState = STATE_ASCENDING
-                DebugLog("SmartJump: CTAP -> ASCENDING (unduck + jump)")
+		DebugLog("SmartJump: CTAP -> ASCENDING (unduck + jump)")
 		return true
 	elseif G.SmartJump.jumpState == STATE_ASCENDING then
 		-- STATE_ASCENDING: Player is moving upwards
@@ -318,40 +353,53 @@ function SmartJump.Main(cmd)
 		local velocity = pLocal:EstimateAbsVelocity()
 		if velocity.z <= 0 then
 			G.SmartJump.jumpState = STATE_DESCENDING
-                        DebugLog("SmartJump: ASCENDING -> DESCENDING (velocity.z <= 0)")
+			DebugLog("SmartJump: ASCENDING -> DESCENDING (velocity.z <= 0)")
 		end
 		return true
 	elseif G.SmartJump.jumpState == STATE_DESCENDING then
 		-- STATE_DESCENDING: Player is falling down
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 
-		-- Use prediction for bhop detection
-		local WLocal = Common.WPlayer.GetLocal()
-		if WLocal then
-			local strafeAngle = CalcStrafe(pLocal)
-			local predData = Common.TF2.Prediction.Player(WLocal, 1, strafeAngle, nil)
-			if predData then
-				G.SmartJump.PredPos = predData.pos[1]
+		-- Use prediction for bhop detection, but only if we have movement intent
+		if hasMovementIntent then
+			local WLocal = Common.WPlayer.GetLocal()
+			if WLocal then
+				local strafeAngle = CalcStrafe(pLocal)
+				local predData = Common.TF2.Prediction.Player(WLocal, 1, strafeAngle, nil)
+				if predData then
+					G.SmartJump.PredPos = predData.pos[1]
 
-				if not predData.onGround[1] or not onGround then
-					local bhopJump = SmartJumpDetection(cmd, pLocal)
-					if bhopJump then
-						cmd:SetButtons(cmd.buttons & ~IN_DUCK)
-						cmd:SetButtons(cmd.buttons | IN_JUMP)
-						G.SmartJump.jumpState = STATE_PREPARE_JUMP
-                                                DebugLog("SmartJump: DESCENDING -> PREPARE_JUMP (bhop)")
+					if not predData.onGround[1] and not onGround then
+						-- Only bhop if there's still an obstacle and not in cooldown
+						if not jumpCooldown then
+							local bhopJump = SmartJumpDetection(cmd, pLocal)
+							if bhopJump then
+								cmd:SetButtons(cmd.buttons & ~IN_DUCK)
+								cmd:SetButtons(cmd.buttons | IN_JUMP)
+								G.SmartJump.jumpState = STATE_PREPARE_JUMP
+								G.SmartJump.lastJumpTime = currentTick
+								DebugLog("SmartJump: DESCENDING -> PREPARE_JUMP (bhop with obstacle)")
+								return true
+							end
+						end
+					else
+						-- Landed safely, return to idle
+						G.SmartJump.jumpState = STATE_IDLE
+						DebugLog("SmartJump: DESCENDING -> IDLE (landed)")
 					end
-				else
-					cmd:SetButtons(cmd.buttons | IN_DUCK)
+				end
+			else
+				-- Fallback without prediction
+				if onGround then
 					G.SmartJump.jumpState = STATE_IDLE
-                                        DebugLog("SmartJump: DESCENDING -> IDLE (landed)")
+					DebugLog("SmartJump: DESCENDING -> IDLE (fallback - landed)")
 				end
 			end
 		else
-			-- Fallback without prediction
+			-- No movement intent, land and return to idle
 			if onGround then
 				G.SmartJump.jumpState = STATE_IDLE
-                                DebugLog("SmartJump: DESCENDING -> IDLE (fallback - landed)")
+				DebugLog("SmartJump: DESCENDING -> IDLE (no movement intent)")
 			end
 		end
 		return true

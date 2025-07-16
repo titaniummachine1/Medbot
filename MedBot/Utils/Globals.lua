@@ -41,12 +41,13 @@ G.Navigation = {
 	nodes = nil,
 	currentNodeIndex = 1, -- Current node we're moving towards (1 = first node in path)
 	currentNodeTicks = 0,
+	stuckStartTick = nil, -- Track when we first entered stuck state
 	FirstAgentNode = 1,
 	SecondAgentNode = 2,
-       lastKnownTargetPosition = nil, -- Remember last position of follow target
-       goalPos = nil, -- Current goal world position
-       goalNodeId = nil, -- Closest node to the goal position
-       navMeshUpdated = false, -- Set when navmesh is rebuilt
+	lastKnownTargetPosition = nil, -- Remember last position of follow target
+	goalPos = nil, -- Current goal world position
+	goalNodeId = nil, -- Closest node to the goal position
+	navMeshUpdated = false, -- Set when navmesh is rebuilt
 }
 
 -- SmartJump integration
@@ -132,6 +133,13 @@ function G.CleanupMemory()
 	if not G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
 		G.Navigation.hierarchical = nil
 		print("Cleared hierarchical data (not in use)")
+	end
+
+	-- Reset stuck timer if it's been set for too long (prevents infinite stuck states)
+	if G.Navigation.stuckStartTick and (currentTick - G.Navigation.stuckStartTick) > 1000 then
+		print("Reset stuck timer during cleanup (was stuck for >1000 ticks)")
+		G.Navigation.stuckStartTick = nil
+		G.Navigation.currentNodeTicks = 0
 	end
 
 	-- Force garbage collection if memory usage is high
