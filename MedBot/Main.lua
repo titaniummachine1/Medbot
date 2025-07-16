@@ -60,24 +60,26 @@ function Optimiser.skipIfWalkable(origin, path)
 end
 
 function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
-	local DEADZONE = 24 -- units, tweak as needed
-	if not goalPos or not origin then
-		return false
-	end
-	local dist = (goalPos - origin):Length()
-	if dist < DEADZONE then
-		Navigation.ClearPath()
-		G.currentState = G.States.IDLE
-		return true
-	end
-	-- Use aggressive checks when trying to move directly to the goal
-	if path and #path > 1 and isWalkable.Path(origin, goalPos, "Aggressive") then
-		Navigation.ClearPath()
-		-- Optionally, set a direct path with just the goal as the node
-		G.Navigation.path = { { pos = goalPos } }
-		return true
-	end
-	return false
+        local DEADZONE = 24 -- units, tweak as needed
+        if not goalPos or not origin then
+                return false
+        end
+        local dist = (goalPos - origin):Length()
+        if dist < DEADZONE then
+                Navigation.ClearPath()
+                G.currentState = G.States.IDLE
+                G.lastPathfindingTick = 0
+                return true
+        end
+        -- Use aggressive checks when trying to move directly to the goal
+        if isWalkable.Path(origin, goalPos, "Aggressive") then
+                Navigation.ClearPath()
+                -- Optionally, set a direct path with just the goal as the node
+                G.Navigation.path = { { pos = goalPos } }
+                G.lastPathfindingTick = 0
+                return true
+        end
+        return false
 end
 
 --[[ Functions ]]
@@ -271,11 +273,12 @@ function handleStuckState(userCmd)
 				)
 			end
 		end
-		Navigation.ResetTickTimer()
-		G.currentState = G.States.PATHFINDING
-	else
-		G.currentState = G.States.MOVING
-	end
+                Navigation.ResetTickTimer()
+                G.currentState = G.States.IDLE
+                G.lastPathfindingTick = 0
+        else
+                G.currentState = G.States.MOVING
+        end
 end
 
 -- Function to find goal node based on the current task
@@ -445,11 +448,12 @@ function moveTowardsNode(userCmd, node)
 		Navigation.ResetTickTimer()
 
 		-- Check if we've reached the end of the path
-		if #G.Navigation.path == 0 then
-			Navigation.ClearPath()
-			Log:Info("Reached end of path")
-			G.currentState = G.States.IDLE
-		end
+                if #G.Navigation.path == 0 then
+                        Navigation.ClearPath()
+                        Log:Info("Reached end of path")
+                        G.currentState = G.States.IDLE
+                        G.lastPathfindingTick = 0
+                end
 	else
 		------------------------------------------------------------
 		--  Hybrid Skip - Robust walkability check for node skipping
@@ -498,11 +502,12 @@ function moveTowardsNode(userCmd, node)
 						Node.AddFailurePenalty(currentNode, nextNode, penalty)
 					end
 				end
-				Navigation.ResetTickTimer()
-				G.currentState = G.States.PATHFINDING
-				return
-			end
-		end
+                                Navigation.ResetTickTimer()
+                                G.currentState = G.States.IDLE
+                                G.lastPathfindingTick = 0
+                                return
+                        end
+                end
 
 		-- Fast re-sync when blast displacement < 1200 uu (optional recovery system)
 		local path = G.Navigation.path
@@ -551,10 +556,11 @@ function moveTowardsNode(userCmd, node)
 					)
 				end
 			end
-			Navigation.ResetTickTimer()
-			G.currentState = G.States.PATHFINDING
-		end
-	end
+                        Navigation.ResetTickTimer()
+                        G.currentState = G.States.IDLE
+                        G.lastPathfindingTick = 0
+                end
+        end
 end
 
 -- Main function
@@ -616,13 +622,14 @@ local function OnCreateMove(userCmd)
 		handleStuckState(userCmd)
 	end
 
-	-- Repath when state changes
-	if G.prevState ~= G.currentState then
-		if WorkManager.attemptWork(33, "StateChangeRepath") then
-			G.lastPathfindingTick = 0
-		end
-		G.prevState = G.currentState
-	end
+        -- Repath when state changes
+        if G.prevState ~= G.currentState then
+                Log:Debug("State changed from %s to %s", tostring(G.prevState), tostring(G.currentState))
+                if WorkManager.attemptWork(33, "StateChangeRepath") then
+                        G.lastPathfindingTick = 0
+                end
+                G.prevState = G.currentState
+        end
 
 	-- Repath if goal node changed
 	if G.Navigation.goalPos and G.Navigation.goalNodeId then
