@@ -132,9 +132,8 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 		return
 	end
 
-	-- Use Node module's implementation to avoid duplication
-	local Node = require("MedBot.Modules.Node")
-	Node.AddCostToConnection(nodeA, nodeB, cost)
+        -- Use Node module's implementation to avoid duplication
+        Node.AddCostToConnection(nodeA, nodeB, cost)
 end
 
 --[[
@@ -572,9 +571,7 @@ function Navigation.GetInternalPath(startPos, endPos, maxDistance)
 		end
 
 		-- If both positions are in the same area, use fine points for internal navigation
-		if startArea and endArea and startArea.id == endArea.id then
-			local Node = require("MedBot.Modules.Node")
-			local AStar = require("MedBot.Utils.A-Star")
+                if startArea and endArea and startArea.id == endArea.id then
 
 			-- Find closest fine points to start and end
 			local startPoint = Node.GetClosestAreaPoint(startArea.id, startPos)
