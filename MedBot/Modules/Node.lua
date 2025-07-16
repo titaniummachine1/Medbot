@@ -1553,9 +1553,10 @@ local function processSetupTick()
 		applyHeightPenaltiesToConnections(SetupState.processedAreas)
 		buildHierarchicalStructure(SetupState.processedAreas)
 
-		SetupState.currentPhase = 0 -- Setup complete
-		Log:Info("Multi-tick hierarchical setup complete!")
-		return false -- Setup finished
+               SetupState.currentPhase = 0 -- Setup complete
+               Log:Info("Multi-tick hierarchical setup complete!")
+               G.Navigation.navMeshUpdated = true
+               return false -- Setup finished
 	end
 
 	return false

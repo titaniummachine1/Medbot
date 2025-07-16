@@ -76,9 +76,9 @@ end
 -- Main function to check if the path between the current position and the node is walkable.
 -- Uses robust algorithm from standstill dummy to prevent walking over walls
 -- Respects Walkable Mode setting: "Step" = 18-unit steps only, "Jump" = 72-unit duck jumps allowed
-function isWalkable.Path(startPos, endPos)
-	-- Get walkable mode from menu (default to "Smooth" for conservative behavior)
-	local walkableMode = G.Menu.Main.WalkableMode or "Smooth"
+function isWalkable.Path(startPos, endPos, overrideMode)
+       -- Get walkable mode from menu or override value
+       local walkableMode = overrideMode or G.Menu.Main.WalkableMode or "Smooth"
 	local maxStepHeight = walkableMode == "Aggressive" and 72 or STEP_HEIGHT -- 72 for duck jumps, 18 for steps
 	local maxStepVector = Vector3(0, 0, maxStepHeight)
 	local stepFraction = maxStepHeight / MAX_FALL_DISTANCE
@@ -158,14 +158,14 @@ function isWalkable.Path(startPos, endPos)
 		end
 
 		-- If we're close enough to the goal, check both horizontal and vertical proximity
-		if currentDistance < 24 then -- within horizontal range
-			local verticalDist = math.abs(endPos.z - currentPos.z)
-			if verticalDist < 24 then -- within strict vertical range
-				return true -- Goal is within reach; path is walkable
-			else
-				return false -- Goal is too far vertically; path is unwalkable
-			end
-		end
+               if currentDistance < 24 then -- within horizontal range
+                       local verticalDist = math.abs(endPos.z - currentPos.z)
+                       if verticalDist < maxStepHeight then
+                               return true -- Goal is within reach for current mode
+                       else
+                               return false -- Goal too far vertically for this mode
+                       end
+               end
 
 		-- Prepare for the next iteration
 		lastPos = currentPos
