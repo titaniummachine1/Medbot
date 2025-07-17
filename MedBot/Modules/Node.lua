@@ -1709,6 +1709,7 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
         end
 
         -- Resolve area IDs for both nodes (supports fine points)
+
         -- Prefer parentArea when present to avoid mixing fine point IDs with area IDs
         local function resolveAreaId(n)
                 if not n then
@@ -1720,6 +1721,7 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
                 end
 
                 return n.id
+
         end
 
         -- Helper to apply penalty in one direction for area connections
@@ -1759,6 +1761,7 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
                         if neighbor.point == toNode
                                 or (neighbor.point.id == (toNode.id)
                                         and neighbor.point.parentArea == toNode.parentArea) then
+
                                 local currentCost = neighbor.cost or 1
                                 local newCost = currentCost + penalty
                                 neighbor.cost = newCost
