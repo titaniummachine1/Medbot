@@ -1709,6 +1709,7 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
         end
 
         -- Resolve area IDs for both nodes (supports fine points)
+
         -- Prefer parentArea when present to avoid mixing fine point IDs with area IDs
         local function resolveAreaId(n)
                 if not n then
