@@ -1721,7 +1721,6 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
                 end
 
                 return n.id
-
         end
 
         -- Helper to apply penalty in one direction for area connections
@@ -1758,10 +1757,10 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
                         return false
                 end
                 for _, neighbor in ipairs(fromNode.neighbors) do
-                        if neighbor.point == toNode
-                                or (neighbor.point.id == (toNode.id)
-                                        and neighbor.point.parentArea == toNode.parentArea) then
-
+                        if neighbor.point
+                                and (neighbor.point == toNode
+                                        or (neighbor.point.id == toNode.id
+                                                and neighbor.point.parentArea == toNode.parentArea)) then
                                 local currentCost = neighbor.cost or 1
                                 local newCost = currentCost + penalty
                                 neighbor.cost = newCost
