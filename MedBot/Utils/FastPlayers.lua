@@ -30,6 +30,18 @@ local function ProfilerEndSystem()
         end
 end
 
+local function ProfilerBegin(name)
+        if Profiler then
+                Profiler.Begin(name)
+        end
+end
+
+local function ProfilerEnd()
+        if Profiler then
+                Profiler.End()
+        end
+end
+
 --[[ Module Declaration ]]
 local FastPlayers = {}
 
@@ -43,6 +55,7 @@ FastPlayers.EnemiesUpdated = false
 --[[ Private: Reset per-tick caches ]]
 local function ResetCaches()
         ProfilerBeginSystem("fastplayers_reset")
+        ProfilerBegin("reset_tables")
         cachedAllPlayers = nil
         cachedTeammates = nil
         cachedEnemies = nil
@@ -50,6 +63,7 @@ local function ResetCaches()
         FastPlayers.AllUpdated = false
         FastPlayers.TeammatesUpdated = false
         FastPlayers.EnemiesUpdated = false
+        ProfilerEnd()
 
         ProfilerEndSystem()
 end

@@ -39,6 +39,18 @@ local function ProfilerEndSystem()
                 Profiler.EndSystem()
         end
 end
+
+local function ProfilerBegin(name)
+        if Profiler then
+                Profiler.Begin(name)
+        end
+end
+
+local function ProfilerEnd()
+        if Profiler then
+                Profiler.End()
+        end
+end
 Common.Json = require("MedBot.Utils.Json")
 
 -- Globals
@@ -116,7 +128,9 @@ client.Command('play "ui/buttonclickrelease"', true)
 local function OnUnload()
         ProfilerBeginSystem("common_unload")
 
+        ProfilerBegin("notify")
         client.Command('play "ui/buttonclickrelease"', true)
+        ProfilerEnd()
 
         ProfilerEndSystem()
 end

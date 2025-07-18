@@ -37,6 +37,18 @@ local function ProfilerEndSystem()
         end
 end
 
+local function ProfilerBegin(name)
+        if Profiler then
+                Profiler.Begin(name)
+        end
+end
+
+local function ProfilerEnd()
+        if Profiler then
+                Profiler.End()
+        end
+end
+
 -- Try loading TimMenu
 ---@type boolean, table
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
@@ -52,14 +64,16 @@ local function OnDrawMenu()
                 return
         end
 
-	if TimMenu.Begin("MedBot Control") then
-		-- Tab control
-		G.Menu.Tab = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, G.Menu.Tab)
-		TimMenu.NextLine()
+    if TimMenu.Begin("MedBot Control") then
+            ProfilerBegin("tab_control")
+            G.Menu.Tab = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, G.Menu.Tab)
+            TimMenu.NextLine()
+            ProfilerEnd()
 
-		if G.Menu.Tab == "Main" then
-			-- Bot Control Section
-			TimMenu.BeginSector("Bot Control")
+    if G.Menu.Tab == "Main" then
+            ProfilerBegin("main_tab")
+            -- Bot Control Section
+            TimMenu.BeginSector("Bot Control")
 			G.Menu.Main.Enable = TimMenu.Checkbox("Enable Bot", G.Menu.Main.Enable)
 			TimMenu.NextLine()
 
@@ -74,7 +88,8 @@ local function OnDrawMenu()
 			G.Menu.Main.smoothFactor = G.Menu.Main.smoothFactor or 0.1
 			G.Menu.Main.smoothFactor = TimMenu.Slider("Smooth Factor", G.Menu.Main.smoothFactor, 0.01, 1, 0.01)
 			TimMenu.Tooltip("Camera rotation smoothness (only when Auto Rotate Camera is enabled)")
-			TimMenu.EndSector()
+            TimMenu.EndSector()
+            ProfilerEnd()
 
 			TimMenu.NextLine()
 
@@ -178,9 +193,10 @@ local function OnDrawMenu()
 			end
 
 			TimMenu.EndSector()
-		elseif G.Menu.Tab == "Visuals" then
-			-- Visual Settings Section
-			TimMenu.BeginSector("Visual Settings")
+    elseif G.Menu.Tab == "Visuals" then
+            ProfilerBegin("visuals_tab")
+            -- Visual Settings Section
+            TimMenu.BeginSector("Visual Settings")
 			G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 			TimMenu.NextLine()
 
@@ -233,8 +249,9 @@ local function OnDrawMenu()
 				G.Menu.Visuals.showInterConnections = G.Menu.Visuals.connectionDisplay[2]
 				G.Menu.Visuals.showEdgeConnections = G.Menu.Visuals.connectionDisplay[3]
 			end
-			TimMenu.EndSector()
-		end
+            TimMenu.EndSector()
+            ProfilerEnd()
+    end
 
                 TimMenu.End() -- Properly close the menu
         end

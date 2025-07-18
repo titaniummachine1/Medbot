@@ -26,6 +26,18 @@ local function ProfilerEndSystem()
         end
 end
 
+local function ProfilerBegin(name)
+        if Profiler then
+                Profiler.Begin(name)
+        end
+end
+
+local function ProfilerEnd()
+        if Profiler then
+                Profiler.End()
+        end
+end
+
 local Log = Common.Log.new("SmartJump")
 Log.Level = 0 -- Default log level
 
@@ -475,20 +487,25 @@ SmartJump.GetJumpPeak = GetJumpPeak
 -- Standalone CreateMove callback for SmartJump (works independently of MedBot)
 local function OnCreateMoveStandalone(cmd)
         ProfilerBeginSystem("smartjump_move")
-
+        ProfilerBegin("checks")
         local pLocal = entities.GetLocalPlayer()
         if not pLocal or not pLocal:IsAlive() then
+                ProfilerEnd()
                 ProfilerEndSystem()
                 return
         end
 
         if not G.Menu.SmartJump.Enable then
+                ProfilerEnd()
                 ProfilerEndSystem()
                 return
         end
+        ProfilerEnd()
 
+        ProfilerBegin("state_machine")
         -- Run SmartJump state machine
         SmartJump.Main(cmd)
+        ProfilerEnd()
 
         -- Note: The state machine handles all button inputs directly in SmartJump.Main()
         -- No need to apply additional jump commands here
@@ -500,18 +517,22 @@ end
 local function OnDrawSmartJump()
         ProfilerBeginSystem("smartjump_draw")
 
+        ProfilerBegin("checks")
         local pLocal = entities.GetLocalPlayer()
         if not pLocal or not G.Menu.SmartJump.Enable then
+                ProfilerEnd()
                 ProfilerEndSystem()
                 return
         end
+        ProfilerEnd()
 
-	-- Draw prediction position (red square)
-	local screenPos = client.WorldToScreen(G.SmartJump.PredPos)
-	if screenPos then
-		draw.Color(255, 0, 0, 255)
-		draw.FilledRect(screenPos[1] - 5, screenPos[2] - 5, screenPos[1] + 5, screenPos[2] + 5)
-	end
+        ProfilerBegin("drawing")
+        -- Draw prediction position (red square)
+        local screenPos = client.WorldToScreen(G.SmartJump.PredPos)
+        if screenPos then
+                draw.Color(255, 0, 0, 255)
+                draw.FilledRect(screenPos[1] - 5, screenPos[2] - 5, screenPos[1] + 5, screenPos[2] + 5)
+        end
 
 	-- Draw jump peek position (green square)
 	local screenpeekpos = client.WorldToScreen(G.SmartJump.JumpPeekPos)
@@ -573,8 +594,9 @@ local function OnDrawSmartJump()
 	end
 
 	-- Draw current state info
-	draw.Color(255, 255, 255, 255)
+        draw.Color(255, 255, 255, 255)
         draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
+        ProfilerEnd()
 
         ProfilerEndSystem()
 end

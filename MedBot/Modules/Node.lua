@@ -29,6 +29,18 @@ local function ProfilerEndSystem()
         end
 end
 
+local function ProfilerBegin(name)
+        if Profiler then
+                Profiler.Begin(name)
+        end
+end
+
+local function ProfilerEnd()
+        if Profiler then
+                Profiler.End()
+        end
+end
+
 local Log = Common.Log.new("Node") -- default Verbose in dev-build
 Log.Level = 0
 
@@ -341,7 +353,8 @@ local function processBatch(nodes)
 	local processed = 0
 
 	-- Phase 1: Basic connection validation (no expensive checks)
-	if ConnectionProcessor.currentPhase == 1 then
+    if ConnectionProcessor.currentPhase == 1 then
+            ProfilerBegin("phase1")
 		while processed < ConnectionProcessor.currentBatchSize and #ConnectionProcessor.nodeQueue > 0 do
 			local nodeData = table.remove(ConnectionProcessor.nodeQueue, 1)
 			local nodeId, node = nodeData.id, nodeData.node
@@ -418,11 +431,13 @@ local function processBatch(nodes)
 
 			ConnectionProcessor.currentPhase = 2
 			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 4) -- Slower for expensive checks
-		end
+                end
+                ProfilerEnd()
 
-	-- Phase 2: Expensive fallback checks to improve high-penalty connections
-	elseif ConnectionProcessor.currentPhase == 2 then
-		local pendingProcessed = 0
+        -- Phase 2: Expensive fallback checks to improve high-penalty connections
+        elseif ConnectionProcessor.currentPhase == 2 then
+                ProfilerBegin("phase2")
+                local pendingProcessed = 0
 
 		for nodeId, pendingConnections in pairs(ConnectionProcessor.pendingNodes) do
 			if pendingProcessed >= ConnectionProcessor.currentBatchSize then
@@ -495,12 +510,14 @@ local function processBatch(nodes)
 				ConnectionProcessor.expensiveChecksUsed
 			)
 			ConnectionProcessor.currentPhase = 3
-			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 2) -- Moderate speed for stair patching
-		end
+                        ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 2) -- Moderate speed for stair patching
+                end
+                ProfilerEnd()
 
-	-- Phase 3: Stair connection patching - add missing reverse connections for stairs
-	elseif ConnectionProcessor.currentPhase == 3 then
-		local processed = 0
+        -- Phase 3: Stair connection patching - add missing reverse connections for stairs
+        elseif ConnectionProcessor.currentPhase == 3 then
+                ProfilerBegin("phase3")
+                local processed = 0
 		local maxProcessPerFrame = ConnectionProcessor.currentBatchSize
 		local patchedConnections = 0
 
@@ -602,12 +619,14 @@ local function processBatch(nodes)
 			Log:Info("Stair patching complete: %d reverse connections added", patchedConnections)
 			ConnectionProcessor.currentPhase = 4
 			ConnectionProcessor.currentBatchSize = math.max(1, ConnectionProcessor.currentBatchSize / 2)
-			ConnectionProcessor.finePointConnectionsAdded = patchedConnections
-		end
+                        ConnectionProcessor.finePointConnectionsAdded = patchedConnections
+                end
+                ProfilerEnd()
 
 	-- Phase 4: Fine point expensive stitching for missing inter-area connections
-	elseif ConnectionProcessor.currentPhase == 4 then
-		if G.Navigation.hierarchical and G.Navigation.hierarchical.areas then
+        elseif ConnectionProcessor.currentPhase == 4 then
+                ProfilerBegin("phase4")
+                if G.Navigation.hierarchical and G.Navigation.hierarchical.areas then
 			local processed = 0
 			local maxProcessPerFrame = ConnectionProcessor.currentBatchSize
 
@@ -704,11 +723,12 @@ local function processBatch(nodes)
 			Log:Info("No hierarchical data available, skipping fine point stitching")
 			ConnectionProcessor.isProcessing = false
 			return false
-		end
-	end
+                end
+                ProfilerEnd()
+        end
 
-	-- Adjust batch size based on frame time
-	adjustBatchSize()
+        -- Adjust batch size based on frame time
+        adjustBatchSize()
 
 	return true -- Continue processing
 end

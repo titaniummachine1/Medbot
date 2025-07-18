@@ -26,6 +26,18 @@ local function ProfilerEndSystem()
         end
 end
 
+local function ProfilerBegin(name)
+        if Profiler then
+                Profiler.Begin(name)
+        end
+end
+
+local function ProfilerEnd()
+        if Profiler then
+                Profiler.End()
+        end
+end
+
 local Config = {}
 
 local Log = Common.Log
@@ -120,12 +132,14 @@ local function ConfigAutoSaveOnUnload()
 
         print("[CONFIG] Unloading script, saving configuration...")
 
-	-- Save the current configuration state
-	if G.Menu then
-		Config.CreateCFG(G.Menu)
-	else
-		printc(255, 0, 0, 255, "[CONFIG] Warning: Unable to save config, G.Menu is nil")
+        -- Save the current configuration state
+        ProfilerBegin("save_cfg")
+        if G.Menu then
+                Config.CreateCFG(G.Menu)
+        else
+                printc(255, 0, 0, 255, "[CONFIG] Warning: Unable to save config, G.Menu is nil")
         end
+        ProfilerEnd()
 
         ProfilerEndSystem()
 end

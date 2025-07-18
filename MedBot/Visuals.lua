@@ -24,6 +24,18 @@ local function ProfilerEndSystem()
         end
 end
 
+local function ProfilerBegin(name)
+        if Profiler then
+                Profiler.Begin(name)
+        end
+end
+
+local function ProfilerEnd()
+        if Profiler then
+                Profiler.End()
+        end
+end
+
 local Visuals = {}
 
 local Lib = Common.Lib
@@ -246,8 +258,9 @@ end
 local function OnDraw()
         ProfilerBeginSystem("visuals_draw")
 
+        ProfilerBegin("setup")
         draw.SetFont(Fonts.Verdana)
-	draw.Color(255, 0, 0, 255)
+        draw.Color(255, 0, 0, 255)
 
 	local me = entities.GetLocalPlayer()
 	if not me then
@@ -260,13 +273,16 @@ local function OnDraw()
 
         local currentY = 120
 	-- Draw memory usage if enabled in config
-	if G.Menu.Visuals.memoryUsage then
-		draw.SetFont(Fonts.Verdana) -- Ensure font is set before drawing text
-		draw.Color(255, 255, 255, 200)
-		local memMB = (G.Benchmark and G.Benchmark.MemUsage or 0) / 1024
-		draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
-		currentY = currentY + 20
-	end
+        if G.Menu.Visuals.memoryUsage then
+                draw.SetFont(Fonts.Verdana) -- Ensure font is set before drawing text
+                draw.Color(255, 255, 255, 200)
+                local memMB = (G.Benchmark and G.Benchmark.MemUsage or 0) / 1024
+                draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
+                currentY = currentY + 20
+        end
+        ProfilerEnd()
+
+        ProfilerBegin("collect_visible")
         -- Collect visible nodes using chunk grid
         Visuals.MaybeRebuildGrid()
         collectVisible(me)
@@ -281,15 +297,18 @@ local function OnDraw()
                         end
                 end
         end
-	G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
-	if G.Navigation.currentNodeIndex == nil then
-		return
-	end
+        G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
+        if G.Navigation.currentNodeIndex == nil then
+                return
+        end
 
+        ProfilerEnd()
+
+        ProfilerBegin("draw_path")
         if G.Navigation.path then
-		-- Visualizing agents
-		local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
-			and G.Navigation.path[G.Navigation.FirstAgentNode].pos
+                -- Visualizing agents
+                local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
+                        and G.Navigation.path[G.Navigation.FirstAgentNode].pos
 		local agent2Pos = G.Navigation.path[G.Navigation.SecondAgentNode]
 			and G.Navigation.path[G.Navigation.SecondAgentNode].pos
 
@@ -302,13 +321,15 @@ local function OnDraw()
 		end
 	end
 
-	if agent2Pos then
-		local screenPos2 = client.WorldToScreen(agent2Pos)
-		if screenPos2 then
-			draw.Color(0, 255, 0, 255) -- Green color for the second agent
-			Draw3DBox(20, agent2Pos) -- Larger size for the second agent
-		end
-	end
+        if agent2Pos then
+                local screenPos2 = client.WorldToScreen(agent2Pos)
+                if screenPos2 then
+                        draw.Color(0, 255, 0, 255) -- Green color for the second agent
+                        Draw3DBox(20, agent2Pos) -- Larger size for the second agent
+                end
+        end
+
+        ProfilerEnd()
 
 	-- Show connections between nav nodes (colored by directionality)
 	if G.Menu.Visuals.showConnections then
