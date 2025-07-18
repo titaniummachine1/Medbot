@@ -21,9 +21,11 @@ defaultconfig = {
 		-- Hierarchical pathfinding settings (fixed 24-unit spacing)
 		UseHierarchicalPathfinding = false, -- Enable fine-grained points within areas for better accuracy
 	},
-	Visuals = {
-		renderDistance = 400,
-		EnableVisuals = true,
+        Visuals = {
+                renderDistance = 400,
+                chunkSize = 256,
+                renderChunks = 3,
+                EnableVisuals = true,
 		memoryUsage = true,
 		-- Combo-based display options
 		basicDisplay = { true, true, true, true, false }, -- Show Nodes, Node IDs, Nav Connections, Areas, Fine Points

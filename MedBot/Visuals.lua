@@ -10,6 +10,14 @@ local Notify = Lib.UI.Notify
 local Fonts = Lib.UI.Fonts
 local tahoma_bold = draw.CreateFont("Tahoma", 12, 800, FONTFLAG_OUTLINE)
 
+-- Grid-based rendering helpers
+local gridIndex = {}
+local nodeCell = {}
+local visBuf = {}
+local visCount = 0
+Visuals.lastChunkSize = nil
+Visuals.lastRenderChunks = nil
+
 --[[ Functions ]]
 local function Draw3DBox(size, pos)
 	local halfSize = size / 2
@@ -131,8 +139,88 @@ end
 local AREA_FILL_COLOR = { 55, 255, 155, 12 } -- r, g, b, a for filled area
 local AREA_OUTLINE_COLOR = { 255, 255, 255, 77 } -- r, g, b, a for area outline
 
--- maximum distance to render visuals (in world units)
-local RENDER_DISTANCE = 800 -- fallback default; overridden by G.Menu.Visuals.renderDistance
+-- Convert world position to chunk cell
+local function worldToCell(pos)
+    local size = G.Menu.Visuals.chunkSize or 256
+    if size <= 0 then
+        error("chunkSize must be greater than 0")
+    end
+    return math.floor(pos.x / size),
+        math.floor(pos.y / size),
+        math.floor(pos.z / size)
+end
+
+-- Build lookup grid of node ids per cell
+local function buildGrid()
+    gridIndex = {}
+    nodeCell = {}
+    local size = G.Menu.Visuals.chunkSize or 256
+    for id, node in pairs(G.Navigation.nodes or {}) do
+        if not node or not node.pos then
+            Log:Warn("Visuals.buildGrid: skipping invalid node %s", tostring(id))
+            goto continue
+        end
+        local cx, cy, cz = worldToCell(node.pos)
+        gridIndex[cx] = gridIndex[cx] or {}
+        gridIndex[cx][cy] = gridIndex[cx][cy] or {}
+        gridIndex[cx][cy][cz] = gridIndex[cx][cy][cz] or {}
+        table.insert(gridIndex[cx][cy][cz], id)
+        nodeCell[id] = { cx, cy, cz }
+        ::continue::
+    end
+    Visuals.lastChunkSize = size
+    Visuals.lastRenderChunks = G.Menu.Visuals.renderChunks or 3
+end
+
+-- Rebuild grid if configuration changed
+function Visuals.MaybeRebuildGrid()
+    local size = G.Menu.Visuals.chunkSize or 256
+    local chunks = G.Menu.Visuals.renderChunks or 3
+    if size ~= Visuals.lastChunkSize or chunks ~= Visuals.lastRenderChunks then
+        buildGrid()
+    end
+end
+
+-- External access to rebuild grid
+function Visuals.BuildGrid()
+    buildGrid()
+end
+
+function Visuals.Initialize()
+    local success, err = pcall(buildGrid)
+    if not success then
+        print("Error initializing visuals grid: " .. tostring(err))
+        gridIndex = {}
+        nodeCell = {}
+        visBuf = {}
+        visCount = 0
+    end
+end
+
+-- Collect visible node ids around player
+local function collectVisible(me)
+    visCount = 0
+    local px, py, pz = worldToCell(me:GetAbsOrigin())
+    local r = G.Menu.Visuals.renderChunks or 3
+    for dx = -r, r do
+        local ax = math.abs(dx)
+        for dy = -(r - ax), (r - ax) do
+            local dzMax = r - ax - math.abs(dy)
+            for dz = -dzMax, dzMax do
+                local bx = gridIndex[px + dx]
+                local by = bx and bx[py + dy]
+                local bucket = by and by[pz + dz]
+                if bucket then
+                    for _, id in ipairs(bucket) do
+                        visCount = visCount + 1
+                        visBuf[visCount] = id
+                    end
+                end
+            end
+        end
+    end
+end
+
 
 local function OnDraw()
 	draw.SetFont(Fonts.Verdana)
@@ -147,8 +235,7 @@ local function OnDraw()
 		return
 	end
 
-	local myPos = me:GetAbsOrigin()
-	local currentY = 120
+        local currentY = 120
 	-- Draw memory usage if enabled in config
 	if G.Menu.Visuals.memoryUsage then
 		draw.SetFont(Fonts.Verdana) -- Ensure font is set before drawing text
@@ -157,19 +244,20 @@ local function OnDraw()
 		draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
 		currentY = currentY + 20
 	end
-	-- Precompute screen-visible nodes within render distance
-	local visibleNodes = {}
-	-- use menu-configured distance if present
-	local maxDist = G.Menu.Visuals.renderDistance or RENDER_DISTANCE
-	for id, node in pairs(G.Navigation.nodes or {}) do
-		local dist = (myPos - node.pos):Length()
-		if dist <= maxDist then
-			local scr = client.WorldToScreen(node.pos)
-			if scr then
-				visibleNodes[id] = { node = node, screen = scr }
-			end
-		end
-	end
+        -- Collect visible nodes using chunk grid
+        Visuals.MaybeRebuildGrid()
+        collectVisible(me)
+        local visibleNodes = {}
+        for i = 1, visCount do
+                local id = visBuf[i]
+                local node = G.Navigation.nodes and G.Navigation.nodes[id]
+                if node then
+                        local scr = client.WorldToScreen(node.pos)
+                        if scr then
+                                visibleNodes[id] = { node = node, screen = scr }
+                        end
+                end
+        end
 	G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
 	if G.Navigation.currentNodeIndex == nil then
 		return
