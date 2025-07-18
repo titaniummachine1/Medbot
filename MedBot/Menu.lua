@@ -14,6 +14,7 @@ local MenuModule = {}
 -- Import globals
 local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
+local Visuals = require("MedBot.Visuals")
 
 -- Try loading TimMenu
 ---@type boolean, table
@@ -159,10 +160,21 @@ local function OnDrawMenu()
 			G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 			TimMenu.NextLine()
 
-			G.Menu.Visuals.renderDistance = G.Menu.Visuals.renderDistance or 800
-			G.Menu.Visuals.renderDistance =
-				TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
-			TimMenu.EndSector()
+                        G.Menu.Visuals.renderDistance = G.Menu.Visuals.renderDistance or 800
+                        G.Menu.Visuals.renderDistance =
+                                TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
+                        TimMenu.NextLine()
+
+                        G.Menu.Visuals.chunkSize = G.Menu.Visuals.chunkSize or 256
+                        G.Menu.Visuals.chunkSize =
+                                TimMenu.Slider("Chunk Size", G.Menu.Visuals.chunkSize, 64, 512, 16)
+                        TimMenu.NextLine()
+
+                        G.Menu.Visuals.renderChunks = G.Menu.Visuals.renderChunks or 3
+                        G.Menu.Visuals.renderChunks =
+                                TimMenu.Slider("Render Chunks", G.Menu.Visuals.renderChunks, 1, 10, 1)
+                        Visuals.MaybeRebuildGrid()
+                        TimMenu.EndSector()
 
 			TimMenu.NextLine()
 

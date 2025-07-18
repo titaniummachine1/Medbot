@@ -17,6 +17,7 @@ local Navigation = {}
 local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
+local Visuals = require("MedBot.Visuals")
 local AStar = require("MedBot.Utils.A-Star")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
@@ -253,10 +254,13 @@ end
 ]]
 
 function Navigation.Setup()
-	if engine.GetMapName() then
-		Node.Setup()
-		Navigation.ClearPath()
-	end
+        if engine.GetMapName() then
+                Node.Setup()
+                if Visuals and Visuals.BuildGrid then
+                        Visuals.BuildGrid()
+                end
+                Navigation.ClearPath()
+        end
 end
 
 -- Get the current path
