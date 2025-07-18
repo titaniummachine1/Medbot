@@ -142,7 +142,12 @@ local AREA_OUTLINE_COLOR = { 255, 255, 255, 77 } -- r, g, b, a for area outline
 -- Convert world position to chunk cell
 local function worldToCell(pos)
     local size = G.Menu.Visuals.chunkSize or 256
-    return math.floor(pos.x / size), math.floor(pos.y / size), math.floor(pos.z / size)
+    if size <= 0 then
+        error("chunkSize must be greater than 0")
+    end
+    return math.floor(pos.x / size),
+        math.floor(pos.y / size),
+        math.floor(pos.z / size)
 end
 
 -- Build lookup grid of node ids per cell
@@ -151,12 +156,17 @@ local function buildGrid()
     nodeCell = {}
     local size = G.Menu.Visuals.chunkSize or 256
     for id, node in pairs(G.Navigation.nodes or {}) do
+        if not node or not node.pos then
+            Log:Warn("Visuals.buildGrid: skipping invalid node %s", tostring(id))
+            goto continue
+        end
         local cx, cy, cz = worldToCell(node.pos)
         gridIndex[cx] = gridIndex[cx] or {}
         gridIndex[cx][cy] = gridIndex[cx][cy] or {}
         gridIndex[cx][cy][cz] = gridIndex[cx][cy][cz] or {}
         table.insert(gridIndex[cx][cy][cz], id)
         nodeCell[id] = { cx, cy, cz }
+        ::continue::
     end
     Visuals.lastChunkSize = size
     Visuals.lastRenderChunks = G.Menu.Visuals.renderChunks or 3
@@ -177,7 +187,14 @@ function Visuals.BuildGrid()
 end
 
 function Visuals.Initialize()
-    buildGrid()
+    local success, err = pcall(buildGrid)
+    if not success then
+        print("Error initializing visuals grid: " .. tostring(err))
+        gridIndex = {}
+        nodeCell = {}
+        visBuf = {}
+        visCount = 0
+    end
 end
 
 -- Collect visible node ids around player
