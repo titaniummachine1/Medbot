@@ -6,6 +6,9 @@ Support: https://dsc.gg/rosnehook
 
 Credits for original code: Inx00
 
+For an overview of the lightweight nav-mesh rendering method, see
+[FAST_NAV_DRAWING.md](FAST_NAV_DRAWING.md).
+
 # How to use
 
 First, go to https://nodejs.org/ and download and install the stable version of Node.JS
