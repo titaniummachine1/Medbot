@@ -98,36 +98,17 @@ G.wasManualWalking = false -- Track if user manually walked last tick
 
 -- Function to clean up memory and caches
 function G.CleanupMemory()
-	local currentTick = globals.TickCount()
-	if currentTick - G.Cache.lastCleanup < G.Cache.cleanupInterval then
-		return -- Too soon to cleanup
-	end
+        local currentTick = globals.TickCount()
+        if currentTick - G.Cache.lastCleanup < G.Cache.cleanupInterval then
+                return -- Too soon to cleanup
+        end
 
-	-- Clear old cached fine points if we have too many areas cached
-	if G.Navigation.nodes then
-		local cachedCount = 0
-		local areasToClean = {}
+        -- Update memory usage statistics
+        local memUsage = collectgarbage("count")
+        G.Benchmark.MemUsage = memUsage
 
-		for areaId, area in pairs(G.Navigation.nodes) do
-			if area.finePoints then
-				cachedCount = cachedCount + 1
-				if cachedCount > G.Cache.maxCacheSize then
-					table.insert(areasToClean, areaId)
-				end
-			end
-		end
-
-		-- Clear oldest cached fine points
-		for _, areaId in ipairs(areasToClean) do
-			if G.Navigation.nodes[areaId] then
-				G.Navigation.nodes[areaId].finePoints = nil
-			end
-		end
-
-		if #areasToClean > 0 then
-			print(string.format("Cleaned up %d cached fine point areas", #areasToClean))
-		end
-	end
+        -- NOTE: Fine point caches are kept to avoid expensive re-generation
+        -- when garbage collection happens.
 
 	-- Clear unused hierarchical data if pathfinding is disabled
 	if not G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
@@ -142,12 +123,14 @@ function G.CleanupMemory()
 		G.Navigation.currentNodeTicks = 0
 	end
 
-	-- Force garbage collection if memory usage is high
-	local memUsage = collectgarbage("count")
-	if memUsage > 512 * 1024 then -- More than 512MB
-		collectgarbage("collect")
-		print(string.format("Force GC: %.2f MB -> %.2f MB", memUsage / 1024, collectgarbage("count") / 1024))
-	end
+        -- Force garbage collection if memory usage is high
+        local memBefore = memUsage
+        if memUsage > 1024 * 1024 then -- More than 1GB
+                collectgarbage("collect")
+                memUsage = collectgarbage("count")
+                G.Benchmark.MemUsage = memUsage
+                print(string.format("Force GC: %.2f MB -> %.2f MB", memBefore / 1024, memUsage / 1024))
+        end
 
 	G.Cache.lastCleanup = currentTick
 end
