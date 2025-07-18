@@ -3,6 +3,27 @@ local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
 
+-- Optional profiler support
+local Profiler = nil
+do
+        local loaded, mod = pcall(require, "Profiler")
+        if loaded then
+                Profiler = mod
+        end
+end
+
+local function ProfilerBeginSystem(name)
+        if Profiler then
+                Profiler.BeginSystem(name)
+        end
+end
+
+local function ProfilerEndSystem()
+        if Profiler then
+                Profiler.EndSystem()
+        end
+end
+
 local Visuals = {}
 
 local Lib = Common.Lib
@@ -223,7 +244,9 @@ end
 
 
 local function OnDraw()
-	draw.SetFont(Fonts.Verdana)
+        ProfilerBeginSystem("visuals_draw")
+
+        draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 0, 0, 255)
 
 	local me = entities.GetLocalPlayer()
@@ -263,7 +286,7 @@ local function OnDraw()
 		return
 	end
 
-	if G.Navigation.path then
+        if G.Navigation.path then
 		-- Visualizing agents
 		local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
 			and G.Navigation.path[G.Navigation.FirstAgentNode].pos
@@ -524,8 +547,8 @@ local function OnDraw()
 	end
 
 	-- Draw current node
-	if G.Menu.Visuals.drawCurrentNode and G.Navigation.path then
-		draw.Color(255, 0, 0, 255)
+        if G.Menu.Visuals.drawCurrentNode and G.Navigation.path then
+                draw.Color(255, 0, 0, 255)
 
 		local currentNode = G.Navigation.path[G.Navigation.currentNodeIndex]
 		local currentNodePos = currentNode.pos
@@ -534,8 +557,10 @@ local function OnDraw()
 		if screenPos then
 			Draw3DBox(20, currentNodePos)
 			draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentNodeIndex))
-		end
-	end
+        end
+
+        ProfilerEndSystem()
+end
 end
 
 --[[ Callbacks ]]
