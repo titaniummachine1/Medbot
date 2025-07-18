@@ -5,6 +5,27 @@ local SmartJump = {}
 local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 
+-- Optional profiler support
+local Profiler = nil
+do
+        local loaded, mod = pcall(require, "Profiler")
+        if loaded then
+                Profiler = mod
+        end
+end
+
+local function ProfilerBeginSystem(name)
+        if Profiler then
+                Profiler.BeginSystem(name)
+        end
+end
+
+local function ProfilerEndSystem()
+        if Profiler then
+                Profiler.EndSystem()
+        end
+end
+
 local Log = Common.Log.new("SmartJump")
 Log.Level = 0 -- Default log level
 
@@ -453,28 +474,37 @@ SmartJump.GetJumpPeak = GetJumpPeak
 
 -- Standalone CreateMove callback for SmartJump (works independently of MedBot)
 local function OnCreateMoveStandalone(cmd)
-	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsAlive() then
-		return
-	end
+        ProfilerBeginSystem("smartjump_move")
 
-	if not G.Menu.SmartJump.Enable then
-		return
-	end
+        local pLocal = entities.GetLocalPlayer()
+        if not pLocal or not pLocal:IsAlive() then
+                ProfilerEndSystem()
+                return
+        end
 
-	-- Run SmartJump state machine
-	SmartJump.Main(cmd)
+        if not G.Menu.SmartJump.Enable then
+                ProfilerEndSystem()
+                return
+        end
 
-	-- Note: The state machine handles all button inputs directly in SmartJump.Main()
-	-- No need to apply additional jump commands here
+        -- Run SmartJump state machine
+        SmartJump.Main(cmd)
+
+        -- Note: The state machine handles all button inputs directly in SmartJump.Main()
+        -- No need to apply additional jump commands here
+
+        ProfilerEndSystem()
 end
 
 -- Visual debugging (matching user's exact visual logic)
 local function OnDrawSmartJump()
-	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not G.Menu.SmartJump.Enable then
-		return
-	end
+        ProfilerBeginSystem("smartjump_draw")
+
+        local pLocal = entities.GetLocalPlayer()
+        if not pLocal or not G.Menu.SmartJump.Enable then
+                ProfilerEndSystem()
+                return
+        end
 
 	-- Draw prediction position (red square)
 	local screenPos = client.WorldToScreen(G.SmartJump.PredPos)
@@ -544,7 +574,9 @@ local function OnDrawSmartJump()
 
 	-- Draw current state info
 	draw.Color(255, 255, 255, 255)
-	draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
+        draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
+
+        ProfilerEndSystem()
 end
 
 -- Register callbacks

@@ -8,6 +8,27 @@ local G = require("MedBot.Utils.Globals")
 local SourceNav = require("MedBot.Utils.SourceNav")
 local isWalkable = require("MedBot.Modules.ISWalkable")
 
+-- Optional profiler support
+local Profiler = nil
+do
+        local loaded, mod = pcall(require, "Profiler")
+        if loaded then
+                Profiler = mod
+        end
+end
+
+local function ProfilerBeginSystem(name)
+        if Profiler then
+                Profiler.BeginSystem(name)
+        end
+end
+
+local function ProfilerEndSystem()
+        if Profiler then
+                Profiler.EndSystem()
+        end
+end
+
 local Log = Common.Log.new("Node") -- default Verbose in dev-build
 Log.Level = 0
 
@@ -1570,13 +1591,20 @@ function Node.GenerateHierarchicalNetwork(maxAreas)
 	initializeSetup()
 
 	-- Register callback to process setup across multiple ticks
-	callbacks.Unregister("CreateMove", "HierarchicalSetup")
-	callbacks.Register("CreateMove", "HierarchicalSetup", function()
-		if not processSetupTick() then
-			-- Setup complete, unregister callback
-			callbacks.Unregister("CreateMove", "HierarchicalSetup")
-		end
-	end)
+       callbacks.Unregister("CreateMove", "HierarchicalSetup")
+
+       local function HierarchicalSetupTick()
+               ProfilerBeginSystem("hierarchical_setup")
+
+               if not processSetupTick() then
+                       -- Setup complete, unregister callback
+                       callbacks.Unregister("CreateMove", "HierarchicalSetup")
+               end
+
+               ProfilerEndSystem()
+       end
+
+       callbacks.Register("CreateMove", "HierarchicalSetup", HierarchicalSetupTick)
 end
 
 --==========================================================================
@@ -2082,7 +2110,11 @@ end
 
 -- Register OnDraw callback for background connection processing
 local function OnDrawConnectionProcessing()
-	Node.ProcessConnectionsBackground()
+        ProfilerBeginSystem("node_connection_draw")
+
+        Node.ProcessConnectionsBackground()
+
+        ProfilerEndSystem()
 end
 
 callbacks.Unregister("Draw", "Node.ConnectionProcessing")

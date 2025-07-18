@@ -5,6 +5,27 @@ local Common = require("MedBot.Common")
 local json = require("MedBot.Utils.Json")
 local Default_Config = require("MedBot.Utils.DefaultConfig")
 
+-- Optional profiler support
+local Profiler = nil
+do
+        local loaded, mod = pcall(require, "Profiler")
+        if loaded then
+                Profiler = mod
+        end
+end
+
+local function ProfilerBeginSystem(name)
+        if Profiler then
+                Profiler.BeginSystem(name)
+        end
+end
+
+local function ProfilerEndSystem()
+        if Profiler then
+                Profiler.EndSystem()
+        end
+end
+
 local Config = {}
 
 local Log = Common.Log
@@ -95,14 +116,18 @@ Config.LoadCFG()
 
 -- Save configuration automatically when the script unloads
 local function ConfigAutoSaveOnUnload()
-	print("[CONFIG] Unloading script, saving configuration...")
+        ProfilerBeginSystem("config_unload")
+
+        print("[CONFIG] Unloading script, saving configuration...")
 
 	-- Save the current configuration state
 	if G.Menu then
 		Config.CreateCFG(G.Menu)
 	else
 		printc(255, 0, 0, 255, "[CONFIG] Warning: Unable to save config, G.Menu is nil")
-	end
+        end
+
+        ProfilerEndSystem()
 end
 
 callbacks.Register("Unload", "ConfigAutoSaveOnUnload", ConfigAutoSaveOnUnload)

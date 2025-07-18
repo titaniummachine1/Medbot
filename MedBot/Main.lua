@@ -1572,20 +1572,28 @@ end
 
 ---@param ctx DrawModelContext
 local function OnDrawModel(ctx)
-	if ctx:GetModelName():find("medkit") then
-		local entity = ctx:GetEntity()
-		G.World.healthPacks[entity:GetIndex()] = entity:GetAbsOrigin()
-	end
+        ProfilerBeginSystem("draw_model")
+
+        if ctx:GetModelName():find("medkit") then
+                local entity = ctx:GetEntity()
+                G.World.healthPacks[entity:GetIndex()] = entity:GetAbsOrigin()
+        end
+
+        ProfilerEndSystem()
 end
 
 ---@param event GameEvent
 local function OnGameEvent(event)
-	local eventName = event:GetName()
+        ProfilerBeginSystem("game_event")
 
-	if eventName == "game_newmap" then
-		Log:Info("New map detected, reloading nav file...")
-		Navigation.Setup()
-	end
+        local eventName = event:GetName()
+
+        if eventName == "game_newmap" then
+                Log:Info("New map detected, reloading nav file...")
+                Navigation.Setup()
+        end
+
+        ProfilerEndSystem()
 end
 
 -- Ensure SmartJump callback runs BEFORE MedBot's callback by using a name that comes after alphabetically
