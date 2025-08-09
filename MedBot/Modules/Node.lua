@@ -543,20 +543,37 @@ local function computeOverlapParams(aLeft, aRight, bLeft, bRight)
 
 	local tAL, tAR = math.min(tA0, tA1), math.max(tA0, tA1)
 	local tBL, tBR = math.min(tB0, tB1), math.max(tB0, tB1)
-	return tAL, tAR, tBL, tBR
+	-- Also return axis values to allow clamping to common domain with clearance
+	return {
+		useX = useX,
+		a0 = a0,
+		a1 = a1,
+		b0 = b0,
+		b1 = b1,
+		aMin = aMin,
+		aMax = aMax,
+		bMin = bMin,
+		bMax = bMax,
+		oMin = oMin,
+		oMax = oMax,
+		tAL = tAL,
+		tAR = tAR,
+		tBL = tBL,
+		tBR = tBR,
+	}
 end
 
 -- Returns tLeft, tRight (inclusive) on A-edge and minDiff across the reachable span; nil if none
 local function findReachableSpan(aLeft, aRight, bLeft, bRight)
-	local tAL, tAR, tBL, tBR = computeOverlapParams(aLeft, aRight, bLeft, bRight)
-	if not tAL then
+	local p = computeOverlapParams(aLeft, aRight, bLeft, bRight)
+	if not p then
 		return nil
 	end
 	-- Defensive: ensure numeric params for linters/types
-	tAL = tAL or 0.0
-	tAR = tAR or 1.0
-	tBL = tBL or 0.0
-	tBR = tBR or 1.0
+	local tAL = p.tAL or 0.0
+	local tAR = p.tAR or 1.0
+	local tBL = p.tBL or 0.0
+	local tBR = p.tBR or 1.0
 
 	local aStart, aEnd = lerpVec(aLeft, aRight, tAL), lerpVec(aLeft, aRight, tAR)
 	local bStart, bEnd = lerpVec(bLeft, bRight, tBL), lerpVec(bLeft, bRight, tBR)
@@ -570,20 +587,29 @@ local function findReachableSpan(aLeft, aRight, bLeft, bRight)
 	end
 
 	if startReach and endReach then
+		-- Clamp to common domain on the shared axis with 24u from each area's corners when possible
 		local edgeLen = (aRight - aLeft):Length()
-		local overlapLen = (tAR - tAL) * edgeLen
-		local clearanceDist = HITBOX_WIDTH -- 24u desired clearance when not using cutoff
-
-		local tL, tR = tAL, tAR
-		if edgeLen > 0 and overlapLen > (2 * clearanceDist) then
-			local tEdgeClear = clearanceDist / edgeLen
-			-- Ensure 24u clearance measured from the physical area side corners, not the overlap ends.
-			-- For A’s side, the physical corners are at t=0 and t=1, so we clamp within [tEdgeClear, 1-tEdgeClear]
-			tL = math.max(tAL, tEdgeClear)
-			tR = math.min(tAR, 1 - tEdgeClear)
+		local domainMin, domainMax = p.oMin, p.oMax
+		local widthA = p.aMax - p.aMin
+		local widthB = p.bMax - p.bMin
+		local clearance = HITBOX_WIDTH
+		if widthA > (2 * clearance) then
+			domainMin = math.max(domainMin, p.aMin + clearance)
+			domainMax = math.min(domainMax, p.aMax - clearance)
+		end
+		if widthB > (2 * clearance) then
+			domainMin = math.max(domainMin, p.bMin + clearance)
+			domainMax = math.min(domainMax, p.bMax - clearance)
+		end
+		if domainMax <= domainMin then
+			domainMin, domainMax = p.oMin, p.oMax
 		end
 
-		-- Keep order and ensure non-negative length
+		local denomA = (p.a1 - p.a0)
+		local tL = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tAL
+		local tR = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tAR
+		tL = math.max(tAL, math.max(0, math.min(1, tL)))
+		tR = math.min(tAR, math.max(0, math.min(1, tR)))
 		tR = math.max(tL, tR)
 		local minDiff = math.min(dStart, dEnd)
 		return tL, tR, minDiff
