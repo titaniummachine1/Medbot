@@ -1,5 +1,6 @@
----@alias Connection { count: integer, connections: integer[] }
----@alias Node { x: number, y: number, z: number, id: integer, c: { [1]: Connection, [2]: Connection, [3]: Connection, [4]: Connection } }
+---@alias ConnectionObj { node: integer, cost: number, left: Vector3|nil, middle: Vector3|nil, right: Vector3|nil }
+---@alias ConnectionDir { count: integer, connections: ConnectionObj[] }
+---@alias Node { pos: Vector3, id: integer, c: { [1]: ConnectionDir, [2]: ConnectionDir, [3]: ConnectionDir, [4]: ConnectionDir } }
 ---@class Pathfinding
 ---@field pathFound boolean
 ---@field pathFailed boolean
@@ -46,47 +47,9 @@ function Navigation.AddConnection(nodeA, nodeB)
 		print("One or both nodes are nil, exiting function")
 		return
 	end
-
-	local nodes = G.Navigation.nodes
-
-       for dir = 1, 4 do
-               local conDir = nodes[nodeA.id].c[dir]
-		if conDir and conDir.connections then
-			-- Check if connection already exists
-			local exists = false
-			for _, existingId in ipairs(conDir.connections) do
-				if existingId == nodeB.id then
-					exists = true
-					break
-				end
-			end
-			if not exists then
-				print("Adding connection between " .. nodeA.id .. " and " .. nodeB.id)
-				table.insert(conDir.connections, nodeB.id)
-				conDir.count = conDir.count + 1
-                       end
-               end
-       end
-
-       for dir = 1, 4 do
-               local conDir = nodes[nodeB.id].c[dir]
-		if conDir and conDir.connections then
-			-- Check if reverse connection already exists
-			local exists = false
-			for _, existingId in ipairs(conDir.connections) do
-				if existingId == nodeA.id then
-					exists = true
-					break
-				end
-			end
-			if not exists then
-				print("Adding reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
-				table.insert(conDir.connections, nodeA.id)
-				conDir.count = conDir.count + 1
-                       end
-               end
-       end
-       G.Navigation.navMeshUpdated = true
+	Node.AddConnection(nodeA, nodeB)
+	Node.AddConnection(nodeB, nodeA)
+	G.Navigation.navMeshUpdated = true
 end
 
 -- Remove a connection between two nodes
@@ -95,37 +58,9 @@ function Navigation.RemoveConnection(nodeA, nodeB)
 		print("One or both nodes are nil, exiting function")
 		return
 	end
-
-	local nodes = G.Navigation.nodes
-
-       for dir = 1, 4 do
-		local conDir = nodes[nodeA.id].c[dir]
-		if conDir and conDir.connections then
-			for i, con in ipairs(conDir.connections) do
-				if con == nodeB.id then
-					print("Removing connection between " .. nodeA.id .. " and " .. nodeB.id)
-					table.remove(conDir.connections, i)
-					conDir.count = conDir.count - 1
-					break
-               end
-       end
-		end
-	end
-
-       for dir = 1, 4 do
-		local conDir = nodes[nodeB.id].c[dir]
-		if conDir and conDir.connections then
-			for i, con in ipairs(conDir.connections) do
-				if con == nodeA.id then
-					print("Removing reverse connection between " .. nodeB.id .. " and " .. nodeA.id)
-					table.remove(conDir.connections, i)
-					conDir.count = conDir.count - 1
-					break
-               end
-       end
-       G.Navigation.navMeshUpdated = true
-end
-	end
+	Node.RemoveConnection(nodeA, nodeB)
+	Node.RemoveConnection(nodeB, nodeA)
+	G.Navigation.navMeshUpdated = true
 end
 
 -- Add cost to a connection between two nodes
@@ -135,8 +70,8 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 		return
 	end
 
-        -- Use Node module's implementation to avoid duplication
-        Node.AddCostToConnection(nodeA, nodeB, cost)
+	-- Use Node module's implementation to avoid duplication
+	Node.AddCostToConnection(nodeA, nodeB, cost)
 end
 
 --[[
@@ -254,13 +189,13 @@ end
 ]]
 
 function Navigation.Setup()
-        if engine.GetMapName() then
-                Node.Setup()
-                if Visuals and Visuals.BuildGrid then
-                        Visuals.BuildGrid()
-                end
-                Navigation.ClearPath()
-        end
+	if engine.GetMapName() then
+		Node.Setup()
+		if Visuals and Visuals.BuildGrid then
+			Visuals.BuildGrid()
+		end
+		Navigation.ClearPath()
+	end
 end
 
 -- Get the current path
@@ -417,115 +352,37 @@ function Navigation.WalkTo(pCmd, pLocal, pDestination)
 end
 
 ---@param pos Vector3|{ x:number, y:number, z:number }
----@return Node
+---@return Node|nil
 function Navigation.GetClosestNode(pos)
 	-- Safety check: ensure nodes are available
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
 		Log:Debug("No navigation nodes available for GetClosestNode")
 		return nil
 	end
-	return Node.GetClosestNode(pos)
+	local n = Node.GetClosestNode(pos)
+	if not n then
+		return nil
+	end
+	return n
 end
 
 -- Main pathfinding function - FIXED TO USE DUAL A* SYSTEM
 ---@param startNode Node
 ---@param goalNode Node
 function Navigation.FindPath(startNode, goalNode)
-	assert(startNode and startNode.pos, "Navigation.FindPath: startNode is nil or has no pos")
-	assert(goalNode and goalNode.pos, "Navigation.FindPath: goalNode is nil or has no pos")
+	if not startNode or not startNode.pos then
+		Log:Error("Navigation.FindPath: invalid start node")
+		return Navigation
+	end
+	if not goalNode or not goalNode.pos then
+		Log:Error("Navigation.FindPath: invalid goal node")
+		return Navigation
+	end
 
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
-	-- HIERARCHICAL A* SYSTEM: Use A* for both area-to-area and fine-point pathfinding
-	if G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
-		Log:Info("Using hierarchical A* pathfinding (area pathfinding + fine point navigation)")
-
-		-- Phase 1: A* pathfinding between areas
-		local areaPath = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
-
-		if areaPath and #areaPath > 1 then
-			-- Phase 2: A* pathfinding within areas using fine points
-			local finalPath = {}
-
-			for i = 1, #areaPath do
-				local currentArea = areaPath[i]
-				local areaInfo = G.Navigation.hierarchical.areas[currentArea.id]
-
-				if areaInfo and areaInfo.points and #areaInfo.points > 0 then
-					if i == 1 then
-						-- First area: add fine points from start to area exit
-						local startPoint = Node.GetClosestAreaPoint(currentArea.id, startNode.pos)
-						if #areaPath > 1 then
-							local nextArea = areaPath[i + 1]
-							local exitPoint = Navigation.FindBestAreaExitPoint(currentArea, nextArea, areaInfo)
-							if startPoint and exitPoint then
-								local subPath = AStar.AStarOnFinePoints(startPoint, exitPoint, areaInfo.points)
-								if subPath then
-									for _, point in ipairs(subPath) do
-										table.insert(finalPath, point)
-									end
-								end
-							end
-						else
-							-- Only one area, path to goal
-							local goalPoint = Node.GetClosestAreaPoint(currentArea.id, goalNode.pos)
-							if startPoint and goalPoint then
-								local subPath = AStar.AStarOnFinePoints(startPoint, goalPoint, areaInfo.points)
-								if subPath then
-									for _, point in ipairs(subPath) do
-										table.insert(finalPath, point)
-									end
-								end
-							end
-						end
-					elseif i == #areaPath then
-						-- Last area: add fine points from area entry to goal
-						local goalPoint = Node.GetClosestAreaPoint(currentArea.id, goalNode.pos)
-						local prevArea = areaPath[i - 1]
-						local entryPoint = Navigation.FindBestAreaEntryPoint(currentArea, prevArea, areaInfo)
-						if entryPoint and goalPoint then
-							local subPath = AStar.AStarOnFinePoints(entryPoint, goalPoint, areaInfo.points)
-							if subPath then
-								for _, point in ipairs(subPath) do
-									table.insert(finalPath, point)
-								end
-							end
-						end
-					else
-						-- Middle areas: path from entry to exit using fine points
-						local prevArea = areaPath[i - 1]
-						local nextArea = areaPath[i + 1]
-						local entryPoint = Navigation.FindBestAreaEntryPoint(currentArea, prevArea, areaInfo)
-						local exitPoint = Navigation.FindBestAreaExitPoint(currentArea, nextArea, areaInfo)
-						if entryPoint and exitPoint then
-							local subPath = AStar.AStarOnFinePoints(entryPoint, exitPoint, areaInfo.points)
-							if subPath then
-								for _, point in ipairs(subPath) do
-									table.insert(finalPath, point)
-								end
-							end
-						end
-					end
-				else
-					-- No fine points available, use area center as fallback
-					table.insert(finalPath, currentArea)
-				end
-			end
-
-			if #finalPath > 0 then
-				G.Navigation.path = finalPath
-				Log:Info("Hierarchical A* path found: %d areas, %d fine points", #areaPath, #finalPath)
-				Navigation.pathFound = true
-				Navigation.pathFailed = false
-				return Navigation
-			end
-		end
-
-		Log:Warn("Hierarchical A* pathfinding failed, falling back to simple A*")
-	end
-
-	-- Fallback: Simple A* pathfinding on main nodes only
+	-- Simple A* pathfinding on main areas only (subnodes removed)
 	G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 
 	if not G.Navigation.path or #G.Navigation.path == 0 then
@@ -577,19 +434,15 @@ function Navigation.GetInternalPath(startPos, endPos, maxDistance)
 		end
 
 		-- If both positions are in the same area, use fine points for internal navigation
-                if startArea and endArea and startArea.id == endArea.id then
-
+		if startArea and endArea and startArea.id == endArea.id then
 			-- Find closest fine points to start and end
 			local startPoint = Node.GetClosestAreaPoint(startArea.id, startPos)
 			local endPoint = Node.GetClosestAreaPoint(startArea.id, endPos)
 
 			if startPoint and endPoint and startPoint.id ~= endPoint.id then
 				-- Use A* on fine points for smooth internal navigation
-				local finePath = AStar.AStarOnFinePoints(startPoint, endPoint, startArea.points)
-				if finePath and #finePath > 2 then
-					Log:Debug("Using A* internal navigation with %d fine points", #finePath)
-					return finePath
-				end
+				-- Subnodes removed: skip fine point A* and fall back to direct move
+				return nil
 			end
 		end
 	end

@@ -77,8 +77,8 @@ end
 -- Uses robust algorithm from standstill dummy to prevent walking over walls
 -- Respects Walkable Mode setting: "Step" = 18-unit steps only, "Jump" = 72-unit duck jumps allowed
 function isWalkable.Path(startPos, endPos, overrideMode)
-       -- Get walkable mode from menu or override value
-       local walkableMode = overrideMode or G.Menu.Main.WalkableMode or "Smooth"
+	-- Get walkable mode from menu or override value
+	local walkableMode = overrideMode or G.Menu.Main.WalkableMode or "Smooth"
 	local maxStepHeight = walkableMode == "Aggressive" and 72 or STEP_HEIGHT -- 72 for duck jumps, 18 for steps
 	local maxStepVector = Vector3(0, 0, maxStepHeight)
 	local stepFraction = maxStepHeight / MAX_FALL_DISTANCE
@@ -116,8 +116,16 @@ function isWalkable.Path(startPos, endPos, overrideMode)
 		local wallTrace = performTraceHull(lastPos + maxStepVector, NextPos + maxStepVector)
 		currentPos = wallTrace.endpos
 
+		-- If we start inside a wall, it's not walkable
 		if wallTrace.fraction == 0 then
-			return false -- Path is blocked by a wall
+			return false
+		end
+		-- If we immediately hit an obstacle and barely progressed, treat as blocked
+		if wallTrace.fraction < 1 then
+			local progressed = (currentPos - lastPos):Length()
+			if progressed < (MIN_STEP_SIZE * 0.5) then
+				return false
+			end
 		end
 
 		-- Ground collision with segmentation - ensures we always have ground beneath us
@@ -142,7 +150,8 @@ function isWalkable.Path(startPos, endPos, overrideMode)
 				return false -- Obstacle too high for current mode
 			end
 
-			if groundTrace.fraction > stepFraction or seg == numSegments then
+			-- Stronger step acceptance: require either we reached near the ground or we are at the last segment
+			if groundTrace.fraction >= (stepFraction * 0.9) or seg == numSegments then
 				-- Adjust position to ground
 				direction = adjustDirectionToSurface(direction, groundTrace.plane)
 				currentPos = groundTrace.endpos
@@ -158,14 +167,20 @@ function isWalkable.Path(startPos, endPos, overrideMode)
 		end
 
 		-- If we're close enough to the goal, check both horizontal and vertical proximity
-               if currentDistance < 24 then -- within horizontal range
-                       local verticalDist = math.abs(endPos.z - currentPos.z)
-                       if verticalDist < maxStepHeight then
-                               return true -- Goal is within reach for current mode
-                       else
-                               return false -- Goal too far vertically for this mode
-                       end
-               end
+		if currentDistance < 24 then
+			local verticalDist = math.abs(endPos.z - currentPos.z)
+			if verticalDist < maxStepHeight then
+				-- Final forward micro-check to avoid clipping through thin objects near the goal
+				local microEnd = endPos
+				local microTrace = performTraceHull(currentPos + maxStepVector, microEnd + maxStepVector)
+				if microTrace.fraction < 1 and (microTrace.endpos - currentPos):Length() < 24 then
+					return false
+				end
+				return true
+			else
+				return false
+			end
+		end
 
 		-- Prepare for the next iteration
 		lastPos = currentPos

@@ -709,29 +709,29 @@ function handleStuckState(userCmd)
 	local shouldForceRepath = false
 	local connectionBlocked = false
 
-                if path and #path > 1 then
-                        local currentNode, nextNode
+	if path and #path > 1 then
+		local currentNode, nextNode
 
-                        -- Determine which path segment we are closest to
-                        local closestIndex, closestDist = 1, math.huge
-                        local pPos = G.pLocal.Origin
-                        for i = 1, #path do
-                                local node = path[i]
-                                local dist = (node.pos - pPos):Length()
-                                if dist < closestDist then
-                                        closestDist = dist
-                                        closestIndex = i
-                                end
-                        end
+		-- Determine which path segment we are closest to
+		local closestIndex, closestDist = 1, math.huge
+		local pPos = G.pLocal.Origin
+		for i = 1, #path do
+			local node = path[i]
+			local dist = (node.pos - pPos):Length()
+			if dist < closestDist then
+				closestDist = dist
+				closestIndex = i
+			end
+		end
 
-                        if closestIndex >= #path then
-                                closestIndex = #path - 1
-                        end
+		if closestIndex >= #path then
+			closestIndex = #path - 1
+		end
 
-                        if closestIndex >= 1 then
-                                currentNode = path[closestIndex]
-                                nextNode = path[closestIndex + 1]
-                        end
+		if closestIndex >= 1 then
+			currentNode = path[closestIndex]
+			nextNode = path[closestIndex + 1]
+		end
 
 		if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
 			-- Check if this connection is blocked by circuit breaker
@@ -755,28 +755,28 @@ function handleStuckState(userCmd)
 		end
 
 		ProfilerBegin("stuck_penalty_analysis")
-                if path and #path > 1 then
-                        local currentNode, nextNode
-                        -- Reuse closest segment logic to target the problematic edge
-                        local closestIndex, closestDist = 1, math.huge
-                        local pPos = G.pLocal.Origin
-                        for i = 1, #path do
-                                local node = path[i]
-                                local dist = (node.pos - pPos):Length()
-                                if dist < closestDist then
-                                        closestDist = dist
-                                        closestIndex = i
-                                end
-                        end
+		if path and #path > 1 then
+			local currentNode, nextNode
+			-- Reuse closest segment logic to target the problematic edge
+			local closestIndex, closestDist = 1, math.huge
+			local pPos = G.pLocal.Origin
+			for i = 1, #path do
+				local node = path[i]
+				local dist = (node.pos - pPos):Length()
+				if dist < closestDist then
+					closestDist = dist
+					closestIndex = i
+				end
+			end
 
-                        if closestIndex >= #path then
-                                closestIndex = #path - 1
-                        end
+			if closestIndex >= #path then
+				closestIndex = #path - 1
+			end
 
-                        if closestIndex >= 1 then
-                                currentNode = path[closestIndex]
-                                nextNode = path[closestIndex + 1]
-                        end
+			if closestIndex >= 1 then
+				currentNode = path[closestIndex]
+				nextNode = path[closestIndex + 1]
+			end
 			-- Better validation to prevent invalid penalties
 			if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
 				-- Only do expensive walkability check if not already blocked by circuit breaker

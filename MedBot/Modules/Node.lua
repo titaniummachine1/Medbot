@@ -11,22 +11,22 @@ local isWalkable = require("MedBot.Modules.ISWalkable")
 -- Optional profiler support
 local Profiler = nil
 do
-        local loaded, mod = pcall(require, "Profiler")
-        if loaded then
-                Profiler = mod
-        end
+	local loaded, mod = pcall(require, "Profiler")
+	if loaded then
+		Profiler = mod
+	end
 end
 
 local function ProfilerBeginSystem(name)
-        if Profiler then
-                Profiler.BeginSystem(name)
-        end
+	if Profiler then
+		Profiler.BeginSystem(name)
+	end
 end
 
 local function ProfilerEndSystem()
-        if Profiler then
-                Profiler.EndSystem()
-        end
+	if Profiler then
+		Profiler.EndSystem()
+	end
 end
 
 local Log = Common.Log.new("Node") -- default Verbose in dev-build
@@ -230,7 +230,8 @@ end
 ---@return integer Node ID
 local function getConnectionNodeId(connection)
 	if type(connection) == "table" then
-		return connection.node
+		-- Support new enriched connection objects
+		return connection.node or connection.neighborId
 	else
 		return connection
 	end
@@ -244,6 +245,53 @@ local function getConnectionCost(connection)
 		return connection.cost or 1
 	else
 		return 1
+	end
+end
+
+-- Normalize a single connection entry to the enriched table form
+-- Keeps code simple and consistent across the codebase.
+local function normalizeConnectionEntry(entry)
+	if type(entry) == "table" then
+		-- Ensure required keys exist; preserve any extra fields (flatten door points)
+		entry.node = entry.node or entry.neighborId
+		entry.cost = entry.cost or 1
+		entry.left = entry.left or (entry.door and entry.door.left) or nil
+		entry.middle = entry.middle or (entry.door and (entry.door.middle or entry.door.mid)) or nil
+		entry.right = entry.right or (entry.door and entry.door.right) or nil
+		entry.door = nil -- flatten to keep structure simple per project philosophy
+		return entry
+	else
+		-- Integer neighbor id -> enriched object
+		return {
+			node = entry,
+			cost = 1,
+			left = nil,
+			middle = nil,
+			right = nil,
+		}
+	end
+end
+
+--- Convert all raw integer connections to enriched objects with {node, cost, left, middle, right}
+function Node.NormalizeConnections()
+	local nodes = Node.GetNodes()
+	if not nodes then
+		return
+	end
+
+	for _, area in pairs(nodes) do
+		if area and area.c then
+			for dir = 1, 4 do
+				local cDir = area.c[dir]
+				if cDir and cDir.connections then
+					local newList = {}
+					for _, entry in ipairs(cDir.connections) do
+						newList[#newList + 1] = normalizeConnectionEntry(entry)
+					end
+					cDir.connections = newList
+				end
+			end
+		end
 	end
 end
 
@@ -371,12 +419,15 @@ local function processBatch(nodes)
 									end
 								end
 
-								-- Always keep connection but adjust cost based on accessibility
-								if finalCost > 1 then
-									table.insert(validConnections, { node = targetNodeId, cost = finalCost })
-								else
-									table.insert(validConnections, targetNodeId)
-								end
+								-- Always keep connection but adjust cost; preserve door points if any
+								local base = normalizeConnectionEntry(connection)
+								table.insert(validConnections, {
+									node = targetNodeId,
+									cost = finalCost,
+									left = base.left,
+									middle = base.middle,
+									right = base.right,
+								})
 
 								ConnectionProcessor.connectionsFound = ConnectionProcessor.connectionsFound + 1
 
@@ -395,7 +446,7 @@ local function processBatch(nodes)
 							end
 						end
 
-						-- Update connections
+						-- Update connections (always enriched objects)
 						connectionDir.connections = validConnections
 						connectionDir.count = #validConnections
 					end
@@ -410,10 +461,14 @@ local function processBatch(nodes)
 
 		-- Check if phase 1 is complete
 		if #ConnectionProcessor.nodeQueue == 0 then
+			local pendingCount = 0
+			for _ in pairs(ConnectionProcessor.pendingNodes) do
+				pendingCount = pendingCount + 1
+			end
 			Log:Info(
 				"Phase 1 complete: %d basic connections found, %d nodes need expensive checks",
 				ConnectionProcessor.connectionsFound,
-				table.getn and table.getn(ConnectionProcessor.pendingNodes) or #ConnectionProcessor.pendingNodes
+				pendingCount
 			)
 
 			ConnectionProcessor.currentPhase = 2
@@ -447,15 +502,14 @@ local function processBatch(nodes)
 							local improvedCost = connectionData.originalCost * costMultiplier
 
 							-- Update the connection cost
-							if type(existingConnection) == "table" then
-								existingConnection.cost = improvedCost
-							else
-								-- Convert to table format if needed
-								connectionDir.connections[connectionData.connectionIndex] = {
-									node = connectionData.targetId,
-									cost = improvedCost,
-								}
-							end
+							local base = normalizeConnectionEntry(existingConnection)
+							connectionDir.connections[connectionData.connectionIndex] = {
+								node = base.node,
+								cost = improvedCost,
+								left = base.left,
+								middle = base.middle,
+								right = base.right,
+							}
 
 							ConnectionProcessor.expensiveChecksUsed = ConnectionProcessor.expensiveChecksUsed + 1
 
@@ -567,7 +621,13 @@ local function processBatch(nodes)
 
 													table.insert(
 														targetConnectionDir.connections,
-														{ node = nodeId, cost = reverseCost }
+														{
+															node = nodeId,
+															cost = reverseCost,
+															left = nil,
+															middle = nil,
+															right = nil,
+														}
 													)
 													targetConnectionDir.count = targetConnectionDir.count + 1
 													patchedConnections = patchedConnections + 1
@@ -737,12 +797,15 @@ local function pruneInvalidConnections(nodes)
 							local isAccessible, costMultiplier = isNodeAccessible(node, targetNode, true)
 							local finalCost = currentCost * costMultiplier
 
-							-- Always keep connection, just adjust cost
-							if finalCost > 1 then
-								table.insert(updatedConnections, { node = targetNodeId, cost = finalCost })
-							else
-								table.insert(updatedConnections, targetNodeId)
-							end
+							-- Always keep connection, just adjust cost; preserve door points if any
+							local base = normalizeConnectionEntry(connection)
+							table.insert(updatedConnections, {
+								node = targetNodeId,
+								cost = finalCost,
+								left = base.left,
+								middle = base.middle,
+								right = base.right,
+							})
 
 							if costMultiplier > 1 then
 								penalizedConnections = penalizedConnections + 1
@@ -1237,7 +1300,7 @@ local function connectPair(areaA, areaB)
 		-- Find all candidates within max distance
 		for _, pointB in ipairs(edgeB) do
 			local distance = (pointA.pos - pointB.pos):Length()
-			if distance <= maxDistance and isNodeAccessible(pointA, pointB) then
+			if distance <= maxDistance and isNodeAccessible(pointA, pointB, true) then
 				table.insert(candidates, {
 					point = pointB,
 					distance = distance,
@@ -1272,7 +1335,7 @@ local function connectPair(areaA, areaB)
 		-- Find all candidates within max distance
 		for _, pointA in ipairs(edgeA) do
 			local distance = (pointB.pos - pointA.pos):Length()
-			if distance <= maxDistance and isNodeAccessible(pointB, pointA) then
+			if distance <= maxDistance and isNodeAccessible(pointB, pointA, true) then
 				-- Check if this connection already exists to avoid duplicates
 				local alreadyConnected = false
 				for _, neighbor in ipairs(pointB.neighbors) do
@@ -1574,10 +1637,10 @@ local function processSetupTick()
 		applyHeightPenaltiesToConnections(SetupState.processedAreas)
 		buildHierarchicalStructure(SetupState.processedAreas)
 
-               SetupState.currentPhase = 0 -- Setup complete
-               Log:Info("Multi-tick hierarchical setup complete!")
-               G.Navigation.navMeshUpdated = true
-               return false -- Setup finished
+		SetupState.currentPhase = 0 -- Setup complete
+		Log:Info("Multi-tick hierarchical setup complete!")
+		G.Navigation.navMeshUpdated = true
+		return false -- Setup finished
 	end
 
 	return false
@@ -1591,20 +1654,20 @@ function Node.GenerateHierarchicalNetwork(maxAreas)
 	initializeSetup()
 
 	-- Register callback to process setup across multiple ticks
-       callbacks.Unregister("CreateMove", "HierarchicalSetup")
+	callbacks.Unregister("CreateMove", "HierarchicalSetup")
 
-       local function HierarchicalSetupTick()
-               ProfilerBeginSystem("hierarchical_setup")
+	local function HierarchicalSetupTick()
+		ProfilerBeginSystem("hierarchical_setup")
 
-               if not processSetupTick() then
-                       -- Setup complete, unregister callback
-                       callbacks.Unregister("CreateMove", "HierarchicalSetup")
-               end
+		if not processSetupTick() then
+			-- Setup complete, unregister callback
+			callbacks.Unregister("CreateMove", "HierarchicalSetup")
+		end
 
-               ProfilerEndSystem()
-       end
+		ProfilerEndSystem()
+	end
 
-       callbacks.Register("CreateMove", "HierarchicalSetup", HierarchicalSetupTick)
+	callbacks.Register("CreateMove", "HierarchicalSetup", HierarchicalSetupTick)
 end
 
 --==========================================================================
@@ -1629,21 +1692,10 @@ function Node.GetClosestNode(pos)
 	end
 	local closestArea, minDist = nil, math.huge
 	for _, area in pairs(G.Navigation.nodes) do
-		local finePoints = area.finePoints or area.points
-		if finePoints and #finePoints > 0 then
-			for _, sub in ipairs(finePoints) do
-				local d = (sub.pos - pos):Length()
-				if d < minDist then
-					minDist = d
-					closestArea = area
-				end
-			end
-		else
-			local d = (area.pos - pos):Length()
-			if d < minDist then
-				minDist = d
-				closestArea = area
-			end
+		local d = (area.pos - pos):Length()
+		if d < minDist then
+			minDist = d
+			closestArea = area
 		end
 	end
 	return closestArea
@@ -1670,7 +1722,7 @@ function Node.AddConnection(nodeA, nodeB)
 	-- Simplified connection adding
 	for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
 		if cDir and cDir.connections then
-			table.insert(cDir.connections, nodeB.id)
+			table.insert(cDir.connections, { node = nodeB.id, cost = 1, left = nil, middle = nil, right = nil })
 			cDir.count = cDir.count + 1
 			break
 		end
@@ -1726,109 +1778,112 @@ end
 ---@param nodeA table First node (source)
 ---@param nodeB table Second node (destination)
 function Node.AddFailurePenalty(nodeA, nodeB, penalty)
-        penalty = penalty or 100
-        if not nodeA or not nodeB then
-                return
-        end
+	penalty = penalty or 100
+	if not nodeA or not nodeB then
+		return
+	end
 
-        local nodes = G.Navigation.nodes
-        if not nodes then
-                return
-        end
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return
+	end
 
-        -- Resolve area IDs for both nodes (supports fine points)
+	-- Resolve area IDs for both nodes (supports fine points)
 
-        -- Prefer parentArea when present to avoid mixing fine point IDs with area IDs
-        local function resolveAreaId(n)
-                if not n then
-                        return nil
-                end
+	-- Prefer parentArea when present to avoid mixing fine point IDs with area IDs
+	local function resolveAreaId(n)
+		if not n then
+			return nil
+		end
 
-                if n.parentArea then
-                        return n.parentArea
-                end
+		if n.parentArea then
+			return n.parentArea
+		end
 
-                return n.id
-        end
+		return n.id
+	end
 
-        -- Helper to apply penalty in one direction for area connections
-        local function applyAreaPenalty(fromAreaId, toAreaId)
-                if not (fromAreaId and toAreaId) then
-                        return false
-                end
-                for _, cDir in pairs(nodes[fromAreaId] and nodes[fromAreaId].c or {}) do
-                        if cDir and cDir.connections then
-                                for i, connection in pairs(cDir.connections) do
-                                        local targetNodeId = getConnectionNodeId(connection)
-                                        if targetNodeId == toAreaId then
-                                                local currentCost = getConnectionCost(connection)
-                                                local newCost = currentCost + penalty
-                                                cDir.connections[i] = { node = targetNodeId, cost = newCost }
-                                                Log:Debug(
-                                                        "Added failure penalty to connection %d -> %d: %.1f -> %.1f",
-                                                        fromAreaId,
-                                                        toAreaId,
-                                                        currentCost,
-                                                        newCost
-                                                )
-                                                return true
-                                        end
-                                end
-                        end
-                end
-                return false
-        end
+	-- Helper to apply penalty in one direction for area connections
+	local function applyAreaPenalty(fromAreaId, toAreaId)
+		if not (fromAreaId and toAreaId) then
+			return false
+		end
+		for _, cDir in pairs(nodes[fromAreaId] and nodes[fromAreaId].c or {}) do
+			if cDir and cDir.connections then
+				for i, connection in pairs(cDir.connections) do
+					local targetNodeId = getConnectionNodeId(connection)
+					if targetNodeId == toAreaId then
+						local currentCost = getConnectionCost(connection)
+						local newCost = currentCost + penalty
+						cDir.connections[i] = { node = targetNodeId, cost = newCost }
+						Log:Debug(
+							"Added failure penalty to connection %d -> %d: %.1f -> %.1f",
+							fromAreaId,
+							toAreaId,
+							currentCost,
+							newCost
+						)
+						return true
+					end
+				end
+			end
+		end
+		return false
+	end
 
-        -- Helper to apply penalty for fine point neighbors
-        local function applyFinePenalty(fromNode, toNode)
-                if not fromNode.neighbors then
-                        return false
-                end
-                for _, neighbor in ipairs(fromNode.neighbors) do
-                        if neighbor.point
-                                and (neighbor.point == toNode
-                                        or (neighbor.point.id == toNode.id
-                                                and neighbor.point.parentArea == toNode.parentArea)) then
-                                local currentCost = neighbor.cost or 1
-                                local newCost = currentCost + penalty
-                                neighbor.cost = newCost
-                                Log:Debug(
-                                        "Added fine failure penalty to point %d (area %s) -> %d (area %s): %.1f -> %.1f",
-                                        fromNode.id or -1,
-                                        fromNode.parentArea or "?",
-                                        toNode.id or -1,
-                                        toNode.parentArea or "?",
-                                        currentCost,
-                                        newCost
-                                )
-                                return true
-                        end
-                end
-                return false
-        end
+	-- Helper to apply penalty for fine point neighbors
+	local function applyFinePenalty(fromNode, toNode)
+		if not fromNode.neighbors then
+			return false
+		end
+		for _, neighbor in ipairs(fromNode.neighbors) do
+			if
+				neighbor.point
+				and (
+					neighbor.point == toNode
+					or (neighbor.point.id == toNode.id and neighbor.point.parentArea == toNode.parentArea)
+				)
+			then
+				local currentCost = neighbor.cost or 1
+				local newCost = currentCost + penalty
+				neighbor.cost = newCost
+				Log:Debug(
+					"Added fine failure penalty to point %d (area %s) -> %d (area %s): %.1f -> %.1f",
+					fromNode.id or -1,
+					fromNode.parentArea or "?",
+					toNode.id or -1,
+					toNode.parentArea or "?",
+					currentCost,
+					newCost
+				)
+				return true
+			end
+		end
+		return false
+	end
 
-        local function applyPenalty(fromNode, toNode)
-                -- First try area-level penalty
-                local fromArea = resolveAreaId(fromNode)
-                local toArea = resolveAreaId(toNode)
-                local appliedArea = applyAreaPenalty(fromArea, toArea)
+	local function applyPenalty(fromNode, toNode)
+		-- First try area-level penalty
+		local fromArea = resolveAreaId(fromNode)
+		local toArea = resolveAreaId(toNode)
+		local appliedArea = applyAreaPenalty(fromArea, toArea)
 
-                -- Then fine-point penalty if applicable
-                local appliedFine = applyFinePenalty(fromNode, toNode)
+		-- Then fine-point penalty if applicable
+		local appliedFine = applyFinePenalty(fromNode, toNode)
 
-                -- Debug if no connection was updated
-                if not appliedArea and not appliedFine then
-                        Log:Warn(
-                                "Skipping penalty for invalid connection: %s->%s",
-                                tostring(fromArea or fromNode.id),
-                                tostring(toArea or toNode.id)
-                        )
-                end
-        end
+		-- Debug if no connection was updated
+		if not appliedArea and not appliedFine then
+			Log:Warn(
+				"Skipping penalty for invalid connection: %s->%s",
+				tostring(fromArea or fromNode.id),
+				tostring(toArea or toNode.id)
+			)
+		end
+	end
 
-        -- Apply penalty both directions to discourage repeated failure
-        applyPenalty(nodeA, nodeB)
-        applyPenalty(nodeB, nodeA)
+	-- Apply penalty both directions to discourage repeated failure
+	applyPenalty(nodeA, nodeB)
+	applyPenalty(nodeB, nodeA)
 end
 
 --- Get adjacent nodes with accessibility checks (expensive, for pathfinding)
@@ -1851,7 +1906,7 @@ function Node.GetAdjacentNodes(node, nodes)
 				local targetNode = nodes[targetNodeId]
 				if targetNode and targetNode.pos then
 					-- Use centralized accessibility check (EXPENSIVE)
-					if isNodeAccessible(node, targetNode) then
+					if isNodeAccessible(node, targetNode, true) then
 						table.insert(adjacent, targetNode)
 					end
 				end
@@ -1948,7 +2003,7 @@ function Node.GetAdjacentNodesClean(node, nodes)
 			for _, connection in pairs(dir.connections) do
 				local targetNodeId = getConnectionNodeId(connection)
 				local targetNode = nodes[targetNodeId]
-				if targetNode and isNodeAccessible(node, targetNode) then
+				if targetNode and isNodeAccessible(node, targetNode, true) then
 					out[#out + 1] = targetNode
 				end
 			end
@@ -1979,6 +2034,8 @@ function Node.LoadFile(navFile)
 
 	local navNodes = processNavData(navData)
 	Node.SetNodes(navNodes)
+	-- Ensure all connections use enriched structure { node, cost, left, middle, right }
+	Node.NormalizeConnections()
 
 	-- Fix: Count nodes properly for hash table
 	local nodeCount = 0
@@ -2012,15 +2069,8 @@ function Node.Setup()
 	if mapName and mapName ~= "" and mapName ~= "menu" then
 		Log:Info("Setting up navigation for map: %s", mapName)
 		Node.LoadNavFile()
-
-		-- Automatically generate hierarchical network after loading nav file
-		local nodes = Node.GetNodes()
-		if nodes and next(nodes) then
-			Log:Info("Auto-generating hierarchical network...")
-			Node.GenerateHierarchicalNetwork() -- Process all areas
-		else
-			Log:Warn("No nodes loaded, skipping hierarchical network generation")
-		end
+		-- Subnodes/hierarchical network removed for simplicity & maintainability
+		-- Pathfinding now uses only main areas and enriched connections
 	else
 		Log:Info("No valid map loaded, initializing empty navigation nodes")
 		-- Initialize empty nodes table to prevent crashes when no map is loaded
@@ -2110,11 +2160,11 @@ end
 
 -- Register OnDraw callback for background connection processing
 local function OnDrawConnectionProcessing()
-        ProfilerBeginSystem("node_connection_draw")
+	ProfilerBeginSystem("node_connection_draw")
 
-        Node.ProcessConnectionsBackground()
+	Node.ProcessConnectionsBackground()
 
-        ProfilerEndSystem()
+	ProfilerEndSystem()
 end
 
 callbacks.Unregister("Draw", "Node.ConnectionProcessing")
