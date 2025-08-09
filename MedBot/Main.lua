@@ -1177,8 +1177,22 @@ function moveTowardsNode(userCmd, node)
 	-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
 	local originalButtons = userCmd.buttons
 
+	-- Prefer door transition points when traversing between areas
+	local destPos = node.pos
+	local path = G.Navigation.path
+	if path and #path > 1 then
+		local currentArea = path[1]
+		local nextArea = path[2]
+		if currentArea and nextArea and currentArea.id and nextArea.id then
+			local doorTarget = Node.GetDoorTargetPoint(currentArea, nextArea)
+			if doorTarget then
+				destPos = doorTarget
+			end
+		end
+	end
+
 	-- Use superior physics-accurate movement from standstill dummy
-	WalkTo(userCmd, G.pLocal.entity, node.pos)
+	WalkTo(userCmd, G.pLocal.entity, destPos)
 
 	-- Preserve SmartJump button inputs (jump and duck commands)
 	-- WalkTo only sets forward/side move, so button state is preserved automatically

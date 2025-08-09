@@ -659,8 +659,44 @@ local function createDoorForAreas(areaA, areaB)
 
 	-- Only consider the two facing sides (no cross-side mapping). Use overlap along their shared axis.
 	local tL, tR, minDiff = findReachableSpan(aLeft, aRight, bLeft, bRight)
+
+	-- If normal reachable-span fails, allow one-way DOWNWARD connections (falling).
 	if not tL then
-		return nil
+		-- Compare average heights of areas to detect downward transition
+		local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
+		local bZ = (areaB.nw.z + areaB.ne.z + areaB.se.z + areaB.sw.z) * 0.25
+		if bZ < aZ - 0.5 then
+			-- Build overlap domain directly and accept it regardless of height delta
+			local p = computeOverlapParams(aLeft, aRight, bLeft, bRight)
+			if not p then
+				return nil
+			end
+			local tAL = p.tAL or 0.0
+			local tAR = p.tAR or 1.0
+			-- Apply a small clearance similar to findReachableSpan
+			local domainMin, domainMax = p.oMin, p.oMax
+			local widthA = p.aMax - p.aMin
+			local widthB = p.bMax - p.bMin
+			local clearance = HITBOX_WIDTH
+			if widthA > (2 * clearance) then
+				domainMin = math.max(domainMin, p.aMin + clearance)
+				domainMax = math.min(domainMax, p.aMax - clearance)
+			end
+			if widthB > (2 * clearance) then
+				domainMin = math.max(domainMin, p.bMin + clearance)
+				domainMax = math.min(domainMax, p.bMax - clearance)
+			end
+			local denomA = (p.a1 - p.a0)
+			local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tAL
+			local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tAR
+			-- Clamp
+			tLval = math.max(tAL, math.max(0, math.min(1, tLval)))
+			tRval = math.min(tAR, math.max(0, math.min(1, tRval)))
+			tRval = math.max(tLval, tRval)
+			tL, tR = tLval, tRval
+		else
+			return nil
+		end
 	end
 
 	local aDoorLeft = lerpVec(aLeft, aRight, tL)
@@ -732,6 +768,93 @@ end
 ---@return number Cost value
 function Node.GetConnectionCost(connection)
 	return getConnectionCost(connection)
+end
+
+--- Returns the enriched connection entry (with door points) from A->B if present
+---@param nodeA table
+---@param nodeB table
+---@return table|nil
+function Node.GetConnectionEntry(nodeA, nodeB)
+	if not nodeA or not nodeB then
+		return nil
+	end
+	local nodes = Node.GetNodes()
+	if not nodes then
+		return nil
+	end
+	local areaA = nodes[nodeA.id]
+	if not (areaA and areaA.c) then
+		return nil
+	end
+	for _, cDir in pairs(areaA.c) do
+		if cDir and cDir.connections then
+			for _, connection in ipairs(cDir.connections) do
+				local targetNodeId = getConnectionNodeId(connection)
+				if targetNodeId == nodeB.id then
+					return normalizeConnectionEntry(connection)
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- Cache for quick door target lookup
+local DoorTargetCache = {}
+
+--- Get a door target point for transitioning from areaA to areaB.
+--- Chooses middle for N/S, right for E, left for W. Falls back to middle when uncertain.
+---@param areaA table
+---@param areaB table
+---@return Vector3|nil
+function Node.GetDoorTargetPoint(areaA, areaB)
+	if not (areaA and areaB) then
+		return nil
+	end
+	local key = tostring(areaA.id) .. "->" .. tostring(areaB.id)
+	if DoorTargetCache[key] then
+		return DoorTargetCache[key]
+	end
+
+	-- Prefer precomputed door points on the connection
+	local entry = Node.GetConnectionEntry(areaA, areaB)
+	local doorLeft, doorMid, doorRight = nil, nil, nil
+	if entry then
+		doorLeft, doorMid, doorRight = entry.left, entry.middle, entry.right
+	end
+
+	-- If we lack door points, try constructing them on the fly
+	if not (doorLeft and doorMid and doorRight) then
+		local dirAX, dirAY = cardinalDirectionFromBounds(areaA, areaB)
+		local aLeft, aRight = getFacingEdgeCorners(areaA, dirAX, dirAY, areaB.pos)
+		local bLeft, bRight = getFacingEdgeCorners(areaB, -dirAX, -dirAY, areaA.pos)
+		if aLeft and aRight and bLeft and bRight then
+			local tL, tR = findReachableSpan(aLeft, aRight, bLeft, bRight)
+			if tL and tR then
+				doorLeft = lerpVec(aLeft, aRight, tL)
+				doorRight = lerpVec(aLeft, aRight, tR)
+				doorMid = lerpVec(doorLeft, doorRight, 0.5)
+			end
+		end
+	end
+
+	if not (doorLeft or doorMid or doorRight) then
+		return nil
+	end
+
+	-- Choose side by cardinal direction: E=right, W=left, N/S=middle
+	local dirX, dirY = cardinalDirectionFromBounds(areaA, areaB)
+	local target = nil
+	if dirX == 1 then
+		target = doorRight or doorMid or doorLeft
+	elseif dirX == -1 then
+		target = doorLeft or doorMid or doorRight
+	else
+		target = doorMid or doorLeft or doorRight
+	end
+
+	DoorTargetCache[key] = target
+	return target
 end
 
 --==========================================================================
