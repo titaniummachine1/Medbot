@@ -1274,7 +1274,7 @@ function moveTowardsNode(userCmd, node)
 					destPos = wp.pos
 				end
 			end
-		elseif wp.pos then
+		elseif wp.kind == "center" and wp.pos then
 			destPos = wp.pos
 			local distToWp = (LocalOrigin - destPos):Length()
 			if distToWp < (G.Misc.NodeTouchDistance * 1.5) then
@@ -1289,6 +1289,19 @@ function moveTowardsNode(userCmd, node)
 						destPos = nextWp.points[1]
 					end
 				end
+			end
+		elseif wp.kind == "goal" and wp.pos then
+			-- Final exact destination: prioritize reaching it even if area path is done
+			destPos = wp.pos
+			local distToGoal = (LocalOrigin - destPos):Length()
+			if distToGoal < (G.Misc.NodeTouchDistance * 1.5) then
+				-- Goal reached; clear path and waypoints and go idle
+				Navigation.ClearPath()
+				G.currentState = G.States.IDLE
+				G.lastPathfindingTick = 0
+				Navigation.ResetTickTimer()
+				ProfilerEnd()
+				return
 			end
 		end
 	end

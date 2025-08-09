@@ -208,6 +208,9 @@ end
 function Navigation.ClearPath()
 	G.Navigation.path = {}
 	G.Navigation.currentNodeIndex = 1
+	-- Also clear door/center/goal waypoints to avoid stale movement/visuals
+	G.Navigation.waypoints = {}
+	G.Navigation.currentWaypointIndex = 1
 end
 
 -- Set the current path
@@ -299,6 +302,11 @@ function Navigation.BuildDoorWaypointsFromPath()
 			end
 			table.insert(G.Navigation.waypoints, { pos = b.pos, kind = "center", areaId = b.id })
 		end
+	end
+	-- Append final precise goal position if available, so we walk to the actual target
+	local goalPos = G.Navigation.goalPos
+	if goalPos then
+		table.insert(G.Navigation.waypoints, { pos = goalPos, kind = "goal" })
 	end
 end
 
