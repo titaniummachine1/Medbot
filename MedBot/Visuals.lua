@@ -249,14 +249,16 @@ local function OnDraw()
         draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 0, 0, 255)
 
-	local me = entities.GetLocalPlayer()
-	if not me then
-		return
-	end
-	-- Master enable switch for visuals
-	if not G.Menu.Visuals.EnableVisuals then
-		return
-	end
+    local me = entities.GetLocalPlayer()
+    if not me then
+        ProfilerEndSystem()
+        return
+    end
+    -- Master enable switch for visuals
+    if not G.Menu.Visuals.EnableVisuals then
+        ProfilerEndSystem()
+        return
+    end
 
         local currentY = 120
 	-- Draw memory usage if enabled in config
@@ -283,10 +285,11 @@ local function OnDraw()
                         end
                 end
         end
-	G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
-	if G.Navigation.currentNodeIndex == nil then
-		return
-	end
+    G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
+    if G.Navigation.currentNodeIndex == nil then
+        ProfilerEndSystem()
+        return
+    end
 
         if G.Navigation.path then
 		-- Visualizing agents
@@ -304,7 +307,7 @@ local function OnDraw()
 		end
 	end
 
-	if agent2Pos then
+    if agent2Pos then
 		local screenPos2 = client.WorldToScreen(agent2Pos)
 		if screenPos2 then
 			draw.Color(0, 255, 0, 255) -- Green color for the second agent
@@ -312,15 +315,16 @@ local function OnDraw()
 		end
 	end
 
-	-- Show connections between nav nodes (colored by directionality)
-	if G.Menu.Visuals.showConnections then
+    -- Show connections between nav nodes (colored by directionality)
+    if G.Menu.Visuals.showConnections then
 		for id, entry in pairs(visibleNodes) do
 			local node = entry.node
 			for dir = 1, 4 do
 				local cDir = node.c[dir]
 				if cDir and cDir.connections then
-					for _, nid in ipairs(cDir.connections) do
-						local otherEntry = visibleNodes[nid]
+                    for _, conn in ipairs(cDir.connections) do
+                        local nid = (type(conn) == "table") and conn.node or conn
+                        local otherEntry = visibleNodes[nid]
 						if otherEntry then
 							local s1, s2 = entry.screen, otherEntry.screen
 							-- determine if other->id exists in its connections
@@ -329,8 +333,9 @@ local function OnDraw()
 							for d2 = 1, 4 do
 								local otherCDir = otherNode.c[d2]
 								if otherCDir and otherCDir.connections then
-									for _, backId in ipairs(otherCDir.connections) do
-										if backId == id then
+                                    for _, backConn in ipairs(otherCDir.connections) do
+                                        local backId = (type(backConn) == "table") and backConn.node or backConn
+                                        if backId == id then
 											bidir = true
 											break
 										end
@@ -346,7 +351,7 @@ local function OnDraw()
 							else
 								draw.Color(255, 0, 0, 70)
 							end
-							draw.Line(s1[1], s1[2], s2[1], s2[2])
+                            draw.Line(s1[1], s1[2], s2[1], s2[2])
 						end
 					end
 				end
@@ -354,8 +359,57 @@ local function OnDraw()
 		end
 	end
 
+    -- Draw Doors (left, middle, right) if enabled
+    if G.Menu.Visuals.showDoors then
+        for id, entry in pairs(visibleNodes) do
+            local node = entry.node
+            for dir = 1, 4 do
+                local cDir = node.c[dir]
+                if cDir and cDir.connections then
+                    for _, conn in ipairs(cDir.connections) do
+                        local doorLeft = conn.left
+                        local doorMid = conn.middle
+                        local doorRight = conn.right
+                        if doorLeft and doorMid and doorRight then
+                            local sL = client.WorldToScreen(doorLeft)
+                            local sM = client.WorldToScreen(doorMid)
+                            local sR = client.WorldToScreen(doorRight)
+                            if sL and sM and sR then
+                                -- Door line
+                                draw.Color(0, 200, 255, 180)
+                                draw.Line(sL[1], sL[2], sR[1], sR[2])
+                                -- Left and right ticks
+                                draw.Color(0, 200, 255, 220)
+                                draw.FilledRect(sL[1] - 2, sL[2] - 2, sL[1] + 2, sL[2] + 2)
+                                draw.FilledRect(sR[1] - 2, sR[2] - 2, sR[1] + 2, sR[2] + 2)
+                                -- Middle marker color based on needJump
+                                if conn.needJump then
+                                    draw.Color(255, 140, 0, 220) -- orange means jump required
+                                else
+                                    draw.Color(0, 255, 0, 220) -- green means walkable
+                                end
+                                draw.FilledRect(sM[1] - 2, sM[2] - 2, sM[1] + 2, sM[2] + 2)
+                            else
+                                -- If only two points present (left/right), compute middle as midpoint
+                                local sL2 = doorLeft and client.WorldToScreen(doorLeft)
+                                local sR2 = doorRight and client.WorldToScreen(doorRight)
+                                if sL2 and sR2 then
+                                    draw.Color(0, 200, 255, 180)
+                                    draw.Line(sL2[1], sL2[2], sR2[1], sR2[2])
+                                    draw.Color(0, 200, 255, 220)
+                                    draw.FilledRect(sL2[1] - 2, sL2[2] - 2, sL2[1] + 2, sL2[2] + 2)
+                                    draw.FilledRect(sR2[1] - 2, sR2[2] - 2, sR2[1] + 2, sR2[2] + 2)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
 	-- Fill and outline areas using fixed corners from Navigation
-	if G.Menu.Visuals.showAreas then
+    if G.Menu.Visuals.showAreas then
 		for id, entry in pairs(visibleNodes) do
 			local node = entry.node
 			-- Collect the four corner vectors from the node
@@ -384,8 +438,8 @@ local function OnDraw()
 		end
 	end
 
-	-- Draw fine-grained points within areas (hierarchical pathfinding)
-        if G.Menu.Visuals.showFinePoints and G.Menu.Main.UseHierarchicalPathfinding then
+    -- Fine points removed
+        if false then
                 -- Track drawn inter-area connections to avoid duplicates
                 local drawnInterConnections = {}
                 local drawnIntraConnections = {}
@@ -513,7 +567,7 @@ local function OnDraw()
 	end
 
 	-- Draw all nodes
-	if G.Menu.Visuals.drawNodes then
+    if G.Menu.Visuals.drawNodes then
 		draw.Color(0, 255, 0, 255)
 		for id, entry in pairs(visibleNodes) do
 			local s = entry.screen
@@ -525,7 +579,7 @@ local function OnDraw()
 	end
 
 	-- Draw current path
-	if G.Menu.Visuals.drawPath and G.Navigation.path and #G.Navigation.path > 0 then
+    if G.Menu.Visuals.drawPath and G.Navigation.path and #G.Navigation.path > 0 then
 		draw.Color(255, 255, 255, 255)
 
 		for i = 1, #G.Navigation.path - 1 do
@@ -549,21 +603,22 @@ local function OnDraw()
 	end
 
 	-- Draw current node
-        if G.Menu.Visuals.drawCurrentNode and G.Navigation.path then
+    if G.Menu.Visuals.drawCurrentNode and G.Navigation.path then
                 draw.Color(255, 0, 0, 255)
 
 		local currentNode = G.Navigation.path[G.Navigation.currentNodeIndex]
 		local currentNodePos = currentNode.pos
 
-		local screenPos = client.WorldToScreen(currentNodePos)
-		if screenPos then
-			Draw3DBox(20, currentNodePos)
-			draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentNodeIndex))
+        local screenPos = client.WorldToScreen(currentNodePos)
+        if screenPos then
+            Draw3DBox(20, currentNodePos)
+            draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentNodeIndex))
         end
+    end
 
-        ProfilerEndSystem()
+    ProfilerEndSystem()
 end
-end
+
 
 --[[ Callbacks ]]
 callbacks.Unregister("Draw", "MCT_Draw") -- unregister the "Draw" callback

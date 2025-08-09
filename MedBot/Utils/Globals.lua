@@ -11,10 +11,10 @@ G.Default = {
 	Class = 1,
 	flags = 1,
 	OnGround = true,
-	Origin = Vector3({ 0, 0, 0 }),
-	ViewAngles = EulerAngles({ 90, 0, 0 }),
-	Viewheight = Vector3({ 0, 0, 75 }),
-	VisPos = Vector3({ 0, 0, 75 }),
+	Origin = Vector3(0, 0, 0),
+	ViewAngles = EulerAngles(90, 0, 0),
+	Viewheight = Vector3(0, 0, 75),
+	VisPos = Vector3(0, 0, 75),
 	vHitbox = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 45) },
 }
 
@@ -98,23 +98,20 @@ G.wasManualWalking = false -- Track if user manually walked last tick
 
 -- Function to clean up memory and caches
 function G.CleanupMemory()
-        local currentTick = globals.TickCount()
-        if currentTick - G.Cache.lastCleanup < G.Cache.cleanupInterval then
-                return -- Too soon to cleanup
-        end
-
-        -- Update memory usage statistics
-        local memUsage = collectgarbage("count")
-        G.Benchmark.MemUsage = memUsage
-
-        -- NOTE: Fine point caches are kept to avoid expensive re-generation
-        -- when garbage collection happens.
-
-	-- Clear unused hierarchical data if pathfinding is disabled
-	if not G.Menu.Main.UseHierarchicalPathfinding and G.Navigation.hierarchical then
-		G.Navigation.hierarchical = nil
-		print("Cleared hierarchical data (not in use)")
+	local currentTick = globals.TickCount()
+	if currentTick - G.Cache.lastCleanup < G.Cache.cleanupInterval then
+		return -- Too soon to cleanup
 	end
+
+	-- Update memory usage statistics
+	local memUsage = collectgarbage("count")
+	G.Benchmark.MemUsage = memUsage
+
+	-- NOTE: Fine point caches are kept to avoid expensive re-generation
+	-- when garbage collection happens.
+
+	-- Hierarchical pathfinding removed
+	G.Navigation.hierarchical = nil
 
 	-- Reset stuck timer if it's been set for too long (prevents infinite stuck states)
 	if G.Navigation.stuckStartTick and (currentTick - G.Navigation.stuckStartTick) > 1000 then
@@ -123,14 +120,14 @@ function G.CleanupMemory()
 		G.Navigation.currentNodeTicks = 0
 	end
 
-        -- Force garbage collection if memory usage is high
-        local memBefore = memUsage
-        if memUsage > 1024 * 1024 then -- More than 1GB
-                collectgarbage("collect")
-                memUsage = collectgarbage("count")
-                G.Benchmark.MemUsage = memUsage
-                print(string.format("Force GC: %.2f MB -> %.2f MB", memBefore / 1024, memUsage / 1024))
-        end
+	-- Force garbage collection if memory usage is high
+	local memBefore = memUsage
+	if memUsage > 1024 * 1024 then -- More than 1GB
+		collectgarbage("collect")
+		memUsage = collectgarbage("count")
+		G.Benchmark.MemUsage = memUsage
+		print(string.format("Force GC: %.2f MB -> %.2f MB", memBefore / 1024, memUsage / 1024))
+	end
 
 	G.Cache.lastCleanup = currentTick
 end

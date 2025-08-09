@@ -281,14 +281,390 @@ function Node.NormalizeConnections()
 
 	for _, area in pairs(nodes) do
 		if area and area.c then
-			for dir = 1, 4 do
-				local cDir = area.c[dir]
+			-- Prefer numeric 1..4 order for determinism
+			for idx = 1, 4 do
+				local cDir = area.c[idx]
 				if cDir and cDir.connections then
 					local newList = {}
 					for _, entry in ipairs(cDir.connections) do
 						newList[#newList + 1] = normalizeConnectionEntry(entry)
 					end
 					cDir.connections = newList
+				end
+			end
+		end
+	end
+end
+
+--=========================================================================
+--  Door building on connections (Left, Middle, Right + needJump)
+--=========================================================================
+
+local HITBOX_WIDTH = 24
+local STEP_HEIGHT = 18
+local MAX_JUMP = 72
+local CLEARANCE_OFFSET = 34 -- Move toward reachable side by 34 units after cutoff
+
+local function signDirection(delta, threshold)
+	if delta > threshold then
+		return 1
+	elseif delta < -threshold then
+		return -1
+	end
+	return 0
+end
+
+-- Determine primary axis direction based purely on center delta.
+-- Chooses the dominant axis by magnitude; sign encodes direction.
+-- Examples:
+--   dx=50, dy=100   -> dirX=0,  dirY= 1
+--   dx=50, dy=-100  -> dirX=0,  dirY=-1
+--   dx=-120,dy=40   -> dirX=-1, dirY= 0
+local function determineDirection(fromPos, toPos)
+	local dx = toPos.x - fromPos.x
+	local dy = toPos.y - fromPos.y
+	if math.abs(dx) >= math.abs(dy) then
+		return (dx >= 0) and 1 or -1, 0
+	else
+		return 0, (dy >= 0) and 1 or -1
+	end
+end
+
+-- Robust cardinal direction using area bounds overlap (axis-aligned).
+-- Returns dirX, dirY in {-1,0,1}. Falls back to center-based when ambiguous.
+local function cardinalDirectionFromBounds(areaA, areaB)
+	local function bounds(area)
+		local minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+		local maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+		local minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+		local maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+		return minX, maxX, minY, maxY
+	end
+	local aMinX, aMaxX, aMinY, aMaxY = bounds(areaA)
+	local bMinX, bMaxX, bMinY, bMaxY = bounds(areaB)
+	local eps = 2.0
+	local overlapY = (aMinY <= bMaxY + eps) and (bMinY <= aMaxY + eps)
+	local overlapX = (aMinX <= bMaxX + eps) and (bMinX <= aMaxX + eps)
+
+	if overlapY and (aMaxX <= bMinX) then
+		return 1, 0 -- A -> B is East
+	end
+	if overlapY and (bMaxX <= aMinX) then
+		return -1, 0 -- A -> B is West
+	end
+	if overlapX and (aMaxY <= bMinY) then
+		return 0, 1 -- A -> B is North
+	end
+	if overlapX and (bMaxY <= aMinY) then
+		return 0, -1 -- A -> B is South
+	end
+	-- Fallback
+	return determineDirection(areaA.pos, areaB.pos)
+end
+
+local function cross2D(ax, ay, bx, by)
+	return ax * by - ay * bx
+end
+
+local function orderEdgeLeftRight(area, targetPos, c1, c2)
+	local dir = Vector3(targetPos.x - area.pos.x, targetPos.y - area.pos.y, 0)
+	local v1 = Vector3(c1.x - area.pos.x, c1.y - area.pos.y, 0)
+	local v2 = Vector3(c2.x - area.pos.x, c2.y - area.pos.y, 0)
+	local s1 = cross2D(dir.x, dir.y, v1.x, v1.y)
+	local s2 = cross2D(dir.x, dir.y, v2.x, v2.y)
+	if s1 == s2 then
+		-- Fallback: keep original order
+		return c1, c2
+	end
+	if s1 > s2 then
+		return c1, c2 -- c1 is left of dir
+	else
+		return c2, c1
+	end
+end
+
+local function getNearestEdgeCorners(area, targetPos)
+	-- Return the edge whose segment is closest in XY to targetPos
+	local edges = {
+		{ area.nw, area.ne }, -- North
+		{ area.ne, area.se }, -- East
+		{ area.se, area.sw }, -- South
+		{ area.sw, area.nw }, -- West
+	}
+	local function distPointToSeg2(p, a, b)
+		local px, py = p.x, p.y
+		local ax, ay = a.x, a.y
+		local bx, by = b.x, b.y
+		local vx, vy = bx - ax, by - ay
+		local wx, wy = px - ax, py - ay
+		local vv = vx * vx + vy * vy
+		local t = vv > 0 and ((wx * vx + wy * vy) / vv) or 0
+		if t < 0 then
+			t = 0
+		elseif t > 1 then
+			t = 1
+		end
+		local cx, cy = ax + t * vx, ay + t * vy
+		local dx, dy = px - cx, py - cy
+		return dx * dx + dy * dy
+	end
+	local bestA, bestB, bestD = nil, nil, math.huge
+	for _, e in ipairs(edges) do
+		local d = distPointToSeg2(targetPos, e[1], e[2])
+		if d < bestD then
+			bestD = d
+			bestA, bestB = e[1], e[2]
+		end
+	end
+	return bestA, bestB
+end
+
+local function getFacingEdgeCorners(area, dirX, dirY, otherPos)
+	-- Returns leftCorner, rightCorner on the facing edge (world positions)
+	if not (area and area.nw and area.ne and area.se and area.sw) then
+		return nil, nil
+	end
+	-- Deterministic left/right per cardinal direction (axis-aligned):
+	-- North: left=nw, right=ne
+	-- South: left=se, right=sw
+	-- East:  left=ne, right=se
+	-- West:  left=sw, right=nw
+	if dirX == 1 then
+		return area.ne, area.se
+	elseif dirX == -1 then
+		return area.sw, area.nw
+	elseif dirY == 1 then
+		return area.nw, area.ne
+	elseif dirY == -1 then
+		return area.se, area.sw
+	else
+		-- Ambiguous: fall back to nearest edge without reordering
+		local a, b = getNearestEdgeCorners(area, otherPos)
+		return a, b
+	end
+end
+
+local function lerpVec(a, b, t)
+	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+end
+
+local function absZDiff(a, b)
+	return math.abs(a.z - b.z)
+end
+
+local function distance3D(p, q)
+	local dx, dy, dz = p.x - q.x, p.y - q.y, p.z - q.z
+	return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+-- Spec-compliant side selection:
+-- Compare A_left<->B_left vs A_right<->B_right and keep the orientation with the shorter distance.
+-- If distances are equal, keep as-is (stable – do nothing).
+local function chooseMappingPreferShorterSide(aLeft, aRight, bLeft, bRight)
+	local dLL = distance3D(aLeft, bLeft)
+	local dRR = distance3D(aRight, bRight)
+	if dRR < dLL then
+		-- Flip B so that B_left/B_right align with the shorter side
+		return bRight, bLeft
+	end
+	return bLeft, bRight
+end
+
+local function binarySearchCutoff(aReach, aUnreach, bReach, bUnreach)
+	local low, high = 0.0, 1.0
+	for _ = 1, 4 do -- ~4 iterations sufficient
+		local mid = (low + high) * 0.5
+		local pA = lerpVec(aReach, aUnreach, mid)
+		local pB = lerpVec(bReach, bUnreach, mid)
+		local diff = absZDiff(pA, pB)
+		if diff >= MAX_JUMP then
+			high = mid -- move toward reachable side
+		else
+			low = mid -- move toward unreachable side
+		end
+	end
+	-- Back off by clearance along the edge toward reachable side
+	local edgeLen = (aUnreach - aReach):Length()
+	local backT = edgeLen > 0 and (CLEARANCE_OFFSET / edgeLen) or 0
+	local tFinal = math.max(0, low - backT)
+	local aCut = lerpVec(aReach, aUnreach, tFinal)
+	local bCut = lerpVec(bReach, bUnreach, tFinal)
+	return aCut, bCut
+end
+
+-- Compute overlapping projection of two facing edges along their dominant axis
+local function computeOverlapParams(aLeft, aRight, bLeft, bRight)
+	local dxA, dyA = aRight.x - aLeft.x, aRight.y - aLeft.y
+	local useX = math.abs(dxA) >= math.abs(dyA)
+
+	local function axisVal(p)
+		return useX and p.x or p.y
+	end
+
+	local a0, a1 = axisVal(aLeft), axisVal(aRight)
+	local b0, b1 = axisVal(bLeft), axisVal(bRight)
+	local aMin, aMax = math.min(a0, a1), math.max(a0, a1)
+	local bMin, bMax = math.min(b0, b1), math.max(b0, b1)
+	local oMin, oMax = math.max(aMin, bMin), math.min(aMax, bMax)
+	if oMax <= oMin then
+		return nil
+	end
+
+	local function paramOn(seg0, seg1, v)
+		local denom = (seg1 - seg0)
+		if denom == 0 then
+			return nil
+		end
+		return (v - seg0) / denom
+	end
+
+	local tA0 = paramOn(a0, a1, oMin)
+	local tA1 = paramOn(a0, a1, oMax)
+	local tB0 = paramOn(b0, b1, oMin)
+	local tB1 = paramOn(b0, b1, oMax)
+	if not (tA0 and tA1 and tB0 and tB1) then
+		return nil
+	end
+
+	local tAL, tAR = math.min(tA0, tA1), math.max(tA0, tA1)
+	local tBL, tBR = math.min(tB0, tB1), math.max(tB0, tB1)
+	return tAL, tAR, tBL, tBR
+end
+
+-- Returns tLeft, tRight (inclusive) on A-edge and minDiff across the reachable span; nil if none
+local function findReachableSpan(aLeft, aRight, bLeft, bRight)
+	local tAL, tAR, tBL, tBR = computeOverlapParams(aLeft, aRight, bLeft, bRight)
+	if not tAL then
+		return nil
+	end
+	-- Defensive: ensure numeric params for linters/types
+	tAL = tAL or 0.0
+	tAR = tAR or 1.0
+	tBL = tBL or 0.0
+	tBR = tBR or 1.0
+
+	local aStart, aEnd = lerpVec(aLeft, aRight, tAL), lerpVec(aLeft, aRight, tAR)
+	local bStart, bEnd = lerpVec(bLeft, bRight, tBL), lerpVec(bLeft, bRight, tBR)
+
+	local dStart = absZDiff(aStart, bStart)
+	local dEnd = absZDiff(aEnd, bEnd)
+	local startReach, endReach = dStart < MAX_JUMP, dEnd < MAX_JUMP
+
+	if (not startReach) and not endReach then
+		return nil
+	end
+
+	if startReach and endReach then
+		local edgeLen = (aRight - aLeft):Length()
+		local overlapLen = (tAR - tAL) * edgeLen
+		local clearanceDist = HITBOX_WIDTH -- 24u desired clearance when not using cutoff
+
+		local tL, tR = tAL, tAR
+		if edgeLen > 0 and overlapLen > (2 * clearanceDist) then
+			local tEdgeClear = clearanceDist / edgeLen
+			-- Ensure 24u clearance measured from the physical area side corners, not the overlap ends.
+			-- For A’s side, the physical corners are at t=0 and t=1, so we clamp within [tEdgeClear, 1-tEdgeClear]
+			tL = math.max(tAL, tEdgeClear)
+			tR = math.min(tAR, 1 - tEdgeClear)
+		end
+
+		-- Keep order and ensure non-negative length
+		tR = math.max(tL, tR)
+		local minDiff = math.min(dStart, dEnd)
+		return tL, tR, minDiff
+	end
+
+	if startReach and not endReach then
+		if dStart >= MAX_JUMP then
+			return nil
+		end
+		local aCut = binarySearchCutoff(aStart, aEnd, bStart, bEnd)
+		-- Map cut point back to param along A edge (project on XY)
+		local vx, vy = aRight.x - aLeft.x, aRight.y - aLeft.y
+		local wx, wy = aCut.x - aLeft.x, aCut.y - aLeft.y
+		local denom = vx * vx + vy * vy
+		local tRraw = denom > 0 and ((wx * vx + wy * vy) / denom) or tAR
+		local tRnum = (type(tRraw) == "number") and tRraw or 0.0
+		local tL = tAL
+		local tRval = math.max(tL, math.min(tAR, tRnum))
+		return tL, tRval, dStart
+	elseif endReach and not startReach then
+		if dEnd >= MAX_JUMP then
+			return nil
+		end
+		local aCut = binarySearchCutoff(aEnd, aStart, bEnd, bStart)
+		local vx, vy = aRight.x - aLeft.x, aRight.y - aLeft.y
+		local wx, wy = aCut.x - aLeft.x, aCut.y - aLeft.y
+		local denom = vx * vx + vy * vy
+		local tLraw = denom > 0 and ((wx * vx + wy * vy) / denom) or tAL
+		local tLnum = (type(tLraw) == "number") and tLraw or 0.0
+		local tR = tAR
+		local tLval = math.min(math.max(tAL, tLnum), tR)
+		return tLval, tR, dEnd
+	end
+
+	return nil
+end
+
+local function createDoorForAreas(areaA, areaB)
+	-- Determine axis-aligned facing sides: A faces toward B; B faces back toward A
+	local dirAX, dirAY = cardinalDirectionFromBounds(areaA, areaB)
+	local dirBX, dirBY = -dirAX, -dirAY
+	local aLeft, aRight = getFacingEdgeCorners(areaA, dirAX, dirAY, areaB.pos)
+	local bLeft, bRight = getFacingEdgeCorners(areaB, dirBX, dirBY, areaA.pos)
+	if not (aLeft and aRight and bLeft and bRight) then
+		return nil
+	end
+
+	-- Only consider the two facing sides (no cross-side mapping). Use overlap along their shared axis.
+	local tL, tR, minDiff = findReachableSpan(aLeft, aRight, bLeft, bRight)
+	if not tL then
+		return nil
+	end
+
+	local aDoorLeft = lerpVec(aLeft, aRight, tL)
+	local aDoorRight = lerpVec(aLeft, aRight, tR)
+	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
+
+	-- Need jump if any endpoint in the chosen span needs >18 and <72
+	local leftEndDiff = absZDiff(lerpVec(aLeft, aRight, tL), lerpVec(bLeft, bRight, tL))
+	local rightEndDiff = absZDiff(lerpVec(aLeft, aRight, tR), lerpVec(bLeft, bRight, tR))
+	local needJump = (leftEndDiff > STEP_HEIGHT and leftEndDiff < MAX_JUMP)
+		or (rightEndDiff > STEP_HEIGHT and rightEndDiff < MAX_JUMP)
+
+	return { left = aDoorLeft, middle = mid, right = aDoorRight, needJump = needJump }
+end
+
+function Node.BuildDoorsForConnections()
+	local nodes = Node.GetNodes()
+	if not nodes then
+		return
+	end
+
+	for _, areaA in pairs(nodes) do
+		if areaA and areaA.c then
+			for dirIndex = 1, 4 do
+				local cDir = areaA.c[dirIndex]
+				if cDir and cDir.connections then
+					local updated = {}
+					for _, connection in ipairs(cDir.connections) do
+						local entry = normalizeConnectionEntry(connection)
+						local neighbor = nodes[entry.node]
+						if neighbor and neighbor.pos then
+							local door = createDoorForAreas(areaA, neighbor)
+							if door then
+								entry.left = door.left
+								entry.middle = door.middle
+								entry.right = door.right
+								entry.needJump = door.needJump and true or false
+								updated[#updated + 1] = entry
+							else
+								-- Drop unreachable connection
+							end
+						end
+					end
+					cDir.connections = updated
+					cDir.count = #updated
 				end
 			end
 		end
@@ -619,16 +995,13 @@ local function processBatch(nodes)
 														reverseCost = math.abs(heightDiff) > 72 and 3 or 1.5
 													end
 
-													table.insert(
-														targetConnectionDir.connections,
-														{
-															node = nodeId,
-															cost = reverseCost,
-															left = nil,
-															middle = nil,
-															right = nil,
-														}
-													)
+													table.insert(targetConnectionDir.connections, {
+														node = nodeId,
+														cost = reverseCost,
+														left = nil,
+														middle = nil,
+														right = nil,
+													})
 													targetConnectionDir.count = targetConnectionDir.count + 1
 													patchedConnections = patchedConnections + 1
 													addedToDirection = true
@@ -1760,13 +2133,15 @@ function Node.AddCostToConnection(nodeA, nodeB, cost)
 	if not nodes then
 		return
 	end
-	-- Updated to handle both connection formats
+	-- Updated to handle both connection formats and preserve door fields
 	for dir, cDir in pairs(nodes[nodeA.id] and nodes[nodeA.id].c or {}) do
 		if cDir and cDir.connections then
 			for i, connection in pairs(cDir.connections) do
 				local targetNodeId = getConnectionNodeId(connection)
 				if targetNodeId == nodeB.id then
-					cDir.connections[i] = { node = targetNodeId, cost = cost }
+					local base = normalizeConnectionEntry(connection)
+					base.cost = cost
+					cDir.connections[i] = base
 					break
 				end
 			end
@@ -1815,7 +2190,9 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
 					if targetNodeId == toAreaId then
 						local currentCost = getConnectionCost(connection)
 						local newCost = currentCost + penalty
-						cDir.connections[i] = { node = targetNodeId, cost = newCost }
+						local base = normalizeConnectionEntry(connection)
+						base.cost = newCost
+						cDir.connections[i] = base
 						Log:Debug(
 							"Added failure penalty to connection %d -> %d: %.1f -> %.1f",
 							fromAreaId,
@@ -2036,6 +2413,8 @@ function Node.LoadFile(navFile)
 	Node.SetNodes(navNodes)
 	-- Ensure all connections use enriched structure { node, cost, left, middle, right }
 	Node.NormalizeConnections()
+	-- Build doors and prune unreachable connections
+	Node.BuildDoorsForConnections()
 
 	-- Fix: Count nodes properly for hash table
 	local nodeCount = 0
