@@ -322,7 +322,8 @@ function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
 	end
 	-- Switch to direct-goal only when very close and definitely walkable (tight guard to avoid false clears)
 	if path and #path > 1 then
-		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+		-- Final goal checks always use Aggressive mode
+		local walkMode = "Aggressive"
 		local horizontalManhattan = math.abs(origin.x - goalPos.x) + math.abs(origin.y - goalPos.y)
 		if horizontalManhattan <= 250 and isWalkable.Path(origin, goalPos, walkMode) then
 			local upOffset = Vector3(0, 0, 32)
@@ -527,11 +528,8 @@ function handleIdleState()
 		-- PRIORITY 1: Always try direct movement to objectives first, regardless of current path
 		if distance > 25 and distance < 250 then -- Only if close enough to justify direct
 			ProfilerBegin("direct_walk_check")
-			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-			-- Use aggressive mode for close goals (likely objectives/intel)
-			if distance < 200 then
-				walkMode = "Aggressive"
-			end
+			-- Final goal checks always use Aggressive mode to allow duck-jumps up to 72u
+			local walkMode = "Aggressive"
 
 			-- Require line-of-sight hull trace in addition to walkability
 			local up = Vector3(0, 0, 32)
@@ -609,18 +607,8 @@ function handleIdleState()
 	-- Avoid pathfinding if we're already at the goal
 	if startNode.id == goalNode.id then
 		-- Try direct movement or internal path before giving up
-		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-
-		-- Use aggressive mode for CTF intel objectives to handle intel on tables (like 2fort)
-		if currentTask == "Objective" and mapName:find("ctf_") then
-			local pLocal = G.pLocal.entity
-			local myItem = pLocal:GetPropInt("m_hItem")
-			-- If not carrying intel (trying to get enemy intel), use aggressive mode
-			if myItem <= 0 then
-				walkMode = "Aggressive"
-				Log:Info("Using Aggressive mode for CTF intel objective (intel on table)")
-			end
-		end
+		-- Final goal checks always use Aggressive mode
+		local walkMode = "Aggressive"
 
 		if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
@@ -628,41 +616,16 @@ function handleIdleState()
 			G.lastPathfindingTick = currentTick
 			Log:Info("Moving directly to goal with %s mode from goal node %d", walkMode, startNode.id)
 		else
-			-- If normal walkMode fails, try aggressive mode as fallback for any objective
-			if walkMode ~= "Aggressive" and currentTask == "Objective" then
-				Log:Info("Normal walkMode failed, trying Aggressive mode as fallback")
-				if isWalkable.Path(G.pLocal.Origin, goalPos, "Aggressive") then
-					G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-					G.currentState = G.States.MOVING
-					G.lastPathfindingTick = currentTick
-					Log:Info("Aggressive mode fallback successful")
-				else
-					-- Try internal path if aggressive also fails
-					local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
-					if internal then
-						G.Navigation.path = internal
-						G.currentState = G.States.MOVING
-						G.lastPathfindingTick = currentTick
-						Log:Info("Using internal path as final fallback")
-					else
-						Log:Debug(
-							"Already at goal node %d, staying in IDLE (all direct movement attempts failed)",
-							startNode.id
-						)
-						G.lastPathfindingTick = currentTick
-					end
-				end
+			-- Try internal path if aggressive also fails
+			local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
+			if internal then
+				G.Navigation.path = internal
+				G.currentState = G.States.MOVING
+				G.lastPathfindingTick = currentTick
+				Log:Info("Using internal path")
 			else
-				local internal = Navigation.GetInternalPath(G.pLocal.Origin, goalPos)
-				if internal then
-					G.Navigation.path = internal
-					G.currentState = G.States.MOVING
-					G.lastPathfindingTick = currentTick
-					Log:Info("Using internal path")
-				else
-					Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
-					G.lastPathfindingTick = currentTick
-				end
+				Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+				G.lastPathfindingTick = currentTick
 			end
 		end
 		ProfilerEnd()
@@ -801,6 +764,7 @@ function handleStuckState(userCmd)
 		local fromNode = path[1]
 		local toNode = path[2]
 		if fromNode and toNode and fromNode.id and toNode.id and fromNode.id ~= toNode.id then
+			-- Use Smooth/Aggressive from menu; Smooth implies 18u step height inside isWalkable
 			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
 			if not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode) then
 				-- Penalize the door transfer by applying cost to its parent areas
@@ -1369,7 +1333,8 @@ local function OnCreateMove(userCmd)
 					G.walkabilityCache = {}
 				end
 
-				local walkMode = distance < 200 and "Aggressive" or G.Menu.Main.WalkableMode or "Smooth"
+				-- Final objective reachability check uses Aggressive regardless of option
+				local walkMode = "Aggressive"
 				local cacheEntry = G.walkabilityCache[cacheKey]
 				local isWalkableResult = false
 
@@ -1481,7 +1446,8 @@ local function OnCreateMove(userCmd)
 			-- Check if we're close to goal and should switch to direct movement
 			local distanceToGoal = (G.pLocal.Origin - G.Navigation.goalPos):Length()
 			if distanceToGoal < 200 then
-				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+				-- Use Aggressive when very close to final goal
+				local walkMode = "Aggressive"
 				if isWalkable.Path(G.pLocal.Origin, G.Navigation.goalPos, walkMode) then
 					-- Only force re-evaluation occasionally when close and path is complex
 					if G.Navigation.path and #G.Navigation.path > 3 then
