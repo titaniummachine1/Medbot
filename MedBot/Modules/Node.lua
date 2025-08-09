@@ -701,6 +701,11 @@ local function createDoorForAreas(areaA, areaB)
 
 	local aDoorLeft = lerpVec(aLeft, aRight, tL)
 	local aDoorRight = lerpVec(aLeft, aRight, tR)
+	-- Enforce minimum span width: require at least 2× player half-width (≈48u)
+	local spanWidth = (aDoorRight - aDoorLeft):Length2D()
+	if spanWidth < (HITBOX_WIDTH * 2) then
+		return nil
+	end
 	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
 
 	-- Need jump if any endpoint in the chosen span needs >18 and <72

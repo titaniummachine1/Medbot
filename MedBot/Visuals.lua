@@ -367,26 +367,28 @@ local function OnDraw()
                 local cDir = node.c[dir]
                 if cDir and cDir.connections then
                     for _, conn in ipairs(cDir.connections) do
-                        local doorLeft = conn.left
-                        local doorMid = conn.middle
-                        local doorRight = conn.right
+                        local up = Vector3(0, 0, 1)
+                        local zLift = up * 1.0
+                        local doorLeft = conn.left and (conn.left + zLift)
+                        local doorMid = conn.middle and (conn.middle + zLift)
+                        local doorRight = conn.right and (conn.right + zLift)
                         if doorLeft and doorMid and doorRight then
                             local sL = client.WorldToScreen(doorLeft)
                             local sM = client.WorldToScreen(doorMid)
                             local sR = client.WorldToScreen(doorRight)
                             if sL and sM and sR then
-                                -- Door line
-                                draw.Color(0, 200, 255, 180)
-                                draw.Line(sL[1], sL[2], sR[1], sR[2])
-                                -- Left and right ticks
+                                -- Door line (cyan)
                                 draw.Color(0, 200, 255, 220)
+                                draw.Line(sL[1], sL[2], sR[1], sR[2])
+                                -- Distinct end markers (magenta)
+                                draw.Color(220, 0, 220, 230)
                                 draw.FilledRect(sL[1] - 2, sL[2] - 2, sL[1] + 2, sL[2] + 2)
                                 draw.FilledRect(sR[1] - 2, sR[2] - 2, sR[1] + 2, sR[2] + 2)
-                                -- Middle marker color based on needJump
+                                -- Middle marker color based on needJump (green/orange)
                                 if conn.needJump then
-                                    draw.Color(255, 140, 0, 220) -- orange means jump required
+                                    draw.Color(255, 140, 0, 255) -- orange means jump required
                                 else
-                                    draw.Color(0, 255, 0, 220) -- green means walkable
+                                    draw.Color(0, 255, 0, 255) -- green means walkable
                                 end
                                 draw.FilledRect(sM[1] - 2, sM[2] - 2, sM[1] + 2, sM[2] + 2)
                             else
@@ -394,9 +396,9 @@ local function OnDraw()
                                 local sL2 = doorLeft and client.WorldToScreen(doorLeft)
                                 local sR2 = doorRight and client.WorldToScreen(doorRight)
                                 if sL2 and sR2 then
-                                    draw.Color(0, 200, 255, 180)
-                                    draw.Line(sL2[1], sL2[2], sR2[1], sR2[2])
                                     draw.Color(0, 200, 255, 220)
+                                    draw.Line(sL2[1], sL2[2], sR2[1], sR2[2])
+                                    draw.Color(220, 0, 220, 230)
                                     draw.FilledRect(sL2[1] - 2, sL2[2] - 2, sL2[1] + 2, sL2[2] + 2)
                                     draw.FilledRect(sR2[1] - 2, sR2[2] - 2, sR2[1] + 2, sR2[2] + 2)
                                 end
