@@ -601,11 +601,45 @@ local function OnDraw()
         end
         local wps = G.Navigation.waypoints
         if wps and #wps > 0 then
+            -- Lines between resolved waypoint positions
             for i = 1, #wps - 1 do
-                local w1, w2 = wps[i], wps[i + 1]
-                if w1.pos and w2.pos then
-                    draw.Color(0, 255, 0, 220) -- green overlay for actual movement
-                    ArrowLine(w1.pos, w2.pos, 18, 12, false)
+                local a, b = wps[i], wps[i + 1]
+                local aPos = a.pos
+                local bPos = b.pos
+                if not aPos and a.kind == "door" and a.points and #a.points > 0 then
+                    -- For a door waypoint, use median of its points as representative
+                    local mid = a.points[math.ceil(#a.points / 2)]
+                    aPos = mid
+                end
+                if not bPos and b.kind == "door" and b.points and #b.points > 0 then
+                    local midb = b.points[math.ceil(#b.points / 2)]
+                    bPos = midb
+                end
+                if aPos and bPos then
+                    draw.Color(0, 255, 0, 220)
+                    ArrowLine(aPos, bPos, 18, 12, false)
+                end
+            end
+            -- Markers for door points (half size) and centers (full size)
+            for i = 1, #wps do
+                local w = wps[i]
+                if w.kind == "door" and w.points then
+                    draw.Color(0, 200, 255, 255) -- cyan door points
+                    for _, p in ipairs(w.points) do
+                        local s = client.WorldToScreen(p)
+                        if s then
+                            draw.FilledRect(s[1] - 2, s[2] - 2, s[1] + 2, s[2] + 2) -- half size marker
+                        end
+                    end
+                else
+                    local p = w.pos
+                    if p then
+                        local s = client.WorldToScreen(p)
+                        if s then
+                            draw.Color(0, 255, 0, 255) -- green center
+                            draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
+                        end
+                    end
                 end
             end
         end
