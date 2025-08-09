@@ -1129,11 +1129,13 @@ function moveTowardsNode(userCmd, node)
 	end
 	ProfilerEnd()
 
-	-- Only rotate camera if LookingAhead is enabled
+	-- Only rotate camera if LookingAhead is enabled (toward actual movement target, not last area)
 	ProfilerBegin("camera_rotation")
 	if G.Menu.Main.LookingAhead then
 		local pLocalWrapped = WPlayer.GetLocal()
-		local angles = Lib.Utils.Math.PositionAngles(pLocalWrapped:GetEyePos(), node.pos)
+		local eyePos = pLocalWrapped:GetEyePos()
+		local lookTarget = G.Navigation.currentTargetPos or node.pos
+		local angles = Lib.Utils.Math.PositionAngles(eyePos, lookTarget)
 		angles.x = 0
 
 		local currentAngles = userCmd.viewangles

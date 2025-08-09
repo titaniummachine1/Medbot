@@ -218,6 +218,8 @@ function Navigation.SetCurrentPath(path)
 		return
 	end
 	G.Navigation.path = path
+	-- Use weak values to avoid strong retention of node objects (nodes table holds strong refs)
+	pcall(setmetatable, G.Navigation.path, { __mode = "v" })
 	G.Navigation.currentNodeIndex = 1 -- Start from the first node (start) and work towards goal
 	-- Build door-aware waypoint list for precise movement and visuals
 	Navigation.BuildDoorWaypointsFromPath()
@@ -499,6 +501,7 @@ function Navigation.FindPath(startNode, goalNode)
 		Log:Info("Simple A* path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
 		Navigation.pathFound = true
 		Navigation.pathFailed = false
+		pcall(setmetatable, G.Navigation.path, { __mode = "v" })
 		-- Refresh waypoints to reflect current door usage
 		Navigation.BuildDoorWaypointsFromPath()
 	end
