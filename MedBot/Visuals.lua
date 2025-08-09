@@ -280,7 +280,9 @@ local function OnDraw()
     local p = me:GetAbsOrigin()
     local manhattanRadius = (G.Menu.Visuals.renderRadius or 2000)
     local function withinRadius(pos)
-        return (math.abs(pos.x - p.x) + math.abs(pos.y - p.y) + math.abs(pos.z - p.z)) <= manhattanRadius
+        -- use cheaper 2D where viable
+        local d2 = math.abs(pos.x - p.x) + math.abs(pos.y - p.y)
+        return d2 <= manhattanRadius
     end
         local visibleNodes = {}
         for i = 1, visCount do
@@ -614,7 +616,7 @@ local function OnDraw()
                     ArrowLine(aPos, bPos, 18, 12, false)
                 end
             end
-            -- Current target indicator
+            -- Current target indicator + box at the target
             local tgt = G.Navigation.currentTargetPos
             if tgt and withinRadius(tgt) then
                 -- Arrow color logic: white normal, red if stuck & not walkable, yellow if stuck & walkable
@@ -639,6 +641,12 @@ local function OnDraw()
                 if me then
                     local mePos = me:GetAbsOrigin()
                     ArrowLine(mePos, tgt, 22, 16, false)
+                end
+                -- Also place a square at the target with same color
+                local s = client.WorldToScreen(tgt)
+                if s then
+                    draw.Color(arrowR, arrowG, arrowB, 255)
+                    draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
                 end
             end
             -- Omit extra squares; arrows indicate route; 3D boxes already mark agents
