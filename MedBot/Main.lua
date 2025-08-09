@@ -71,6 +71,9 @@ local ConnectionCircuitBreaker = {
 	lastCleanup = 0,
 }
 
+-- Expose circuit breaker globally for pathfinding adjacency filter
+G.CircuitBreaker = ConnectionCircuitBreaker
+
 -- Add a connection failure to the circuit breaker
 local function addConnectionFailure(nodeA, nodeB)
 	if not nodeA or not nodeB then
@@ -103,8 +106,8 @@ local function addConnectionFailure(nodeA, nodeB)
 	-- Block connection if too many failures
 	if failure.count >= ConnectionCircuitBreaker.maxFailures then
 		failure.isBlocked = true
-		-- Add a big penalty to ensure A* avoids this completely
-		local blockingPenalty = 500
+		-- Add a very large penalty so A* strongly avoids this edge
+		local blockingPenalty = 5000
 		Node.AddFailurePenalty(nodeA, nodeB, blockingPenalty)
 
 		Log:Warn(
@@ -755,40 +758,35 @@ function handleMovingState(userCmd)
 	ProfilerEnd()
 
 	-- Check if this connection is blocked by circuit breaker before expensive movement
-	ProfilerBegin("circuit_breaker_check")
-	local path = G.Navigation.path
-	if path and #path > 1 then
-		local nextNode = path[2]
-		if isConnectionBlocked(currentNode, nextNode) then
-			Log:Warn(
-				"Next connection %d -> %d is BLOCKED by circuit breaker - forcing repath",
-				currentNode.id,
-				nextNode.id
-			)
-			G.currentState = G.States.STUCK
-			ProfilerEnd()
-			ProfilerEnd()
-			return
-		end
-	end
-	ProfilerEnd()
+	-- Simplified: no circuit-breaker gating here
 
 	moveTowardsNode(userCmd, currentNode)
 
-	-- Check if stuck - INCREASED THRESHOLD to prevent oscillation
-	if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to 132 ticks (2 seconds)
-		-- Immediate penalty on the active connection when entering STUCK
-		local pathForPenalty = G.Navigation.path
-		if pathForPenalty and #pathForPenalty > 1 then
-			local curEdgeA = pathForPenalty[1]
-			local curEdgeB = pathForPenalty[2]
-			if curEdgeA and curEdgeB and curEdgeA.id and curEdgeB.id and curEdgeA.id ~= curEdgeB.id then
-				-- Record failure (+100 penalty, increments failure count, may block on threshold)
-				addConnectionFailure(curEdgeA, curEdgeB)
-				Log:Info("Immediate stuck penalty: +100 to connection %d -> %d", curEdgeA.id, curEdgeB.id)
+	-- Simple stuck handling: immediate repath and optional penalty if next leg is unwalkable
+	if G.Navigation.currentNodeTicks > 66 then
+		local pathNow = G.Navigation.path
+		if pathNow and #pathNow > 1 then
+			local fromNode = pathNow[1]
+			local toNode = pathNow[2]
+			if fromNode and toNode and fromNode.id and toNode.id and fromNode.id ~= toNode.id then
+				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+				if not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode) then
+					-- Apply penalty to the area-level connection (Node.AddFailurePenalty resolves parentArea)
+					Node.AddFailurePenalty(fromNode, toNode, 100)
+					Log:Info(
+						"Unwalkable to current target - added 100 penalty to connection %d -> %d",
+						fromNode.id,
+						toNode.id
+					)
+				end
 			end
 		end
-		G.currentState = G.States.STUCK
+		G.Navigation.stuckStartTick = nil
+		Navigation.ResetTickTimer()
+		G.currentState = G.States.PATHFINDING
+		G.lastPathfindingTick = 0
+		ProfilerEnd()
+		return
 	end
 
 	ProfilerEnd()
@@ -796,188 +794,27 @@ end
 
 -- Function to handle the STUCK state
 function handleStuckState(userCmd)
-	ProfilerBegin("stuck_state")
+	ProfilerBegin("stuck_state_simple")
 
-	local currentTick = globals.TickCount()
-
-	-- Initialize stuck timer if not set
-	if not G.Navigation.stuckStartTick then
-		G.Navigation.stuckStartTick = currentTick
-	end
-
-	-- Calculate how long we've been stuck
-	local stuckDuration = currentTick - G.Navigation.stuckStartTick
-
-	-- SmartJump runs independently, just request emergency jump when needed
-	-- Request emergency jump through SmartJump system (don't apply directly)
-	if SmartJump.ShouldEmergencyJump(currentTick, G.Navigation.currentNodeTicks) then
-		-- Set flag for SmartJump to handle emergency jump
-		G.RequestEmergencyJump = true
-		Log:Info("Emergency jump requested - SmartJump will handle it")
-	end
-
-	-- CIRCUIT BREAKER LOGIC - prevent infinite loops on blocked connections
-	ProfilerBegin("stuck_analysis")
 	local path = G.Navigation.path
-	local shouldForceRepath = false
-	local connectionBlocked = false
-
 	if path and #path > 1 then
-		local currentNode, nextNode
-
-		-- Determine which path segment we are closest to
-		local closestIndex, closestDist = 1, math.huge
-		local pPos = G.pLocal.Origin
-		for i = 1, #path do
-			local node = path[i]
-			local dist = (node.pos - pPos):Length()
-			if dist < closestDist then
-				closestDist = dist
-				closestIndex = i
-			end
-		end
-
-		if closestIndex >= #path then
-			closestIndex = #path - 1
-		end
-
-		if closestIndex >= 1 then
-			currentNode = path[closestIndex]
-			nextNode = path[closestIndex + 1]
-		end
-
-		if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
-			-- Check if this connection is blocked by circuit breaker
-			if isConnectionBlocked(currentNode, nextNode) then
-				Log:Warn(
-					"Connection %d -> %d is BLOCKED by circuit breaker - forcing immediate repath",
-					currentNode.id,
-					nextNode.id
-				)
-				shouldForceRepath = true
-				connectionBlocked = true
+		local fromNode = path[1]
+		local toNode = path[2]
+		if fromNode and toNode and fromNode.id and toNode.id and fromNode.id ~= toNode.id then
+			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+			if not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode) then
+				-- Penalize the door transfer by applying cost to its parent areas
+				Node.AddFailurePenalty(fromNode, toNode, 100)
+				Log:Info("STUCK: added 100 penalty to connection %d -> %d and repathing", fromNode.id, toNode.id)
 			end
 		end
 	end
-	ProfilerEnd()
 
-	-- INCREASED THRESHOLD - only repath after being stuck for much longer OR if connection is blocked
-	if stuckDuration > 198 or shouldForceRepath then -- 198 ticks = 3 seconds of being stuck
-		if not connectionBlocked then
-			Log:Warn("Stuck for too long (%d ticks), analyzing connection and adding penalties...", stuckDuration)
-		end
-
-		ProfilerBegin("stuck_penalty_analysis")
-		if path and #path > 1 then
-			local currentNode, nextNode
-			-- Reuse closest segment logic to target the problematic edge
-			local closestIndex, closestDist = 1, math.huge
-			local pPos = G.pLocal.Origin
-			for i = 1, #path do
-				local node = path[i]
-				local dist = (node.pos - pPos):Length()
-				if dist < closestDist then
-					closestDist = dist
-					closestIndex = i
-				end
-			end
-
-			if closestIndex >= #path then
-				closestIndex = #path - 1
-			end
-
-			if closestIndex >= 1 then
-				currentNode = path[closestIndex]
-				nextNode = path[closestIndex + 1]
-			end
-			-- Better validation to prevent invalid penalties
-			if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
-				-- Only do expensive walkability check if not already blocked by circuit breaker
-				if not connectionBlocked then
-					local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-					local stuckPenalty = 75 -- Base penalty to add for being stuck
-
-					if not isWalkable.Path(G.pLocal.Origin, nextNode.pos, walkMode) then
-						if isWalkable.Path(G.pLocal.Origin, nextNode.pos, "Aggressive") then
-							stuckPenalty = 150 -- Mode-specific stuck penalty
-							Log:Debug(
-								"Stuck connection %d -> %d: fails with %s but works with Aggressive - adding %d penalty",
-								currentNode.id,
-								nextNode.id,
-								walkMode,
-								stuckPenalty
-							)
-						else
-							stuckPenalty = 250 -- Complete blockage stuck penalty
-							Log:Debug(
-								"Stuck connection %d -> %d: completely blocked - adding %d penalty",
-								currentNode.id,
-								nextNode.id,
-								stuckPenalty
-							)
-						end
-					else
-						Log:Debug(
-							"Stuck connection %d -> %d: walkable but still stuck (collision/geometry issue?) - adding %d penalty",
-							currentNode.id,
-							nextNode.id,
-							stuckPenalty
-						)
-					end
-
-					-- Add the penalty (accumulates with all previous penalties)
-					Node.AddFailurePenalty(currentNode, nextNode, stuckPenalty)
-
-					-- Add to circuit breaker - if this returns true, connection is now blocked
-					if addConnectionFailure(currentNode, nextNode) then
-						Log:Error(
-							"Connection %d -> %d has failed too many times - temporarily BLOCKED",
-							currentNode.id,
-							nextNode.id
-						)
-					end
-
-					Log:Info(
-						"Added stuck penalty %d to connection %d -> %d after %d ticks stuck (accumulating)",
-						stuckPenalty,
-						currentNode.id,
-						nextNode.id,
-						stuckDuration
-					)
-				end
-			else
-				Log:Warn(
-					"Skipping penalty for invalid stuck connection: currentNode=%s (id=%s) nextNode=%s (id=%s)",
-					currentNode and "valid" or "nil",
-					currentNode and currentNode.id or "nil",
-					nextNode and "valid" or "nil",
-					nextNode and nextNode.id or "nil"
-				)
-			end
-		end
-		ProfilerEnd()
-
-		-- Clear stuck timer and reset navigation
-		G.Navigation.stuckStartTick = nil
-		Navigation.ResetTickTimer()
-		G.currentState = G.States.PATHFINDING -- Use pathfinding state to trigger WorkManager repath
-		G.lastPathfindingTick = 0 -- Force immediate repath
-
-		-- If connection is blocked, also clear the current path to force a completely new one
-		if connectionBlocked then
-			Log:Info("Clearing current path due to blocked connection")
-			Navigation.ClearPath()
-		end
-	else
-		-- COOLDOWN: Only switch back to MOVING if we've been stuck for at least 33 ticks (0.5 seconds)
-		if stuckDuration > 33 then
-			G.Navigation.stuckStartTick = nil -- Reset stuck timer
-			-- Also reset per-node tick counter to avoid immediate re-trigger of STUCK
-			Navigation.ResetTickTimer()
-			G.currentState = G.States.MOVING
-		end
-		-- If stuckDuration <= 33, stay in STUCK state to prevent oscillation
-	end
+	-- Immediate repath and continue
+	G.Navigation.stuckStartTick = nil
+	Navigation.ResetTickTimer()
+	G.currentState = G.States.PATHFINDING
+	G.lastPathfindingTick = 0
 
 	ProfilerEnd()
 end
@@ -1175,28 +1012,7 @@ function moveTowardsNode(userCmd, node)
 	local LocalOrigin = G.pLocal.Origin
 	local goalPos = G.Navigation.goalPos -- Use the stored goal position directly
 
-	-- EARLY CIRCUIT BREAKER CHECK: Don't even try moving if the next connection is blocked
-	ProfilerBegin("early_circuit_check")
-	local path = G.Navigation.path
-	if path and #path > 1 then
-		local currentNode = path[1]
-		local nextNode = path[2]
-		if isConnectionBlocked(currentNode, nextNode) then
-			Log:Warn(
-				"Early circuit breaker detection: connection %d -> %d is BLOCKED, attempting center recovery",
-				currentNode.id,
-				nextNode.id
-			)
-			G.Navigation.recoverToCenter = true
-			G.Navigation.edgeStage = nil
-			G.Navigation.edgeKey = nil
-			Navigation.ResetTickTimer()
-			ProfilerEnd()
-			ProfilerEnd()
-			return
-		end
-	end
-	ProfilerEnd()
+	-- No early circuit-breaker gating; proceed with movement
 
 	-- Try to skip directly to the goal if we have a complex path
 	ProfilerBegin("goal_skip_check")
@@ -1355,85 +1171,7 @@ function moveTowardsNode(userCmd, node)
 	G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 	ProfilerEnd()
 
-	-- Expensive walkability verification - only when stuck for longer
-	ProfilerBegin("stuck_analysis")
-	if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to give more time
-		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if not isWalkable.Path(LocalOrigin, node.pos, walkMode) then
-			Log:Warn("Path to current node blocked with %s mode after being stuck, repathing...", walkMode)
-			local path = G.Navigation.path
-			if path and #path > 1 then
-				local currentNode = path[1]
-				local nextNode = path[2]
-				if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then -- Prevent self-loop penalties
-					-- Add penalty based on walkability - each failure makes connection more expensive
-					local additionalPenalty = 50 -- Base penalty to add
-
-					if not isWalkable.Path(LocalOrigin, nextNode.pos, walkMode) then
-						if isWalkable.Path(LocalOrigin, nextNode.pos, "Aggressive") then
-							additionalPenalty = 100 -- Mode-specific failure penalty
-							Log:Debug(
-								"Connection %d -> %d fails with %s but works with Aggressive - adding %d penalty",
-								currentNode.id,
-								nextNode.id,
-								walkMode,
-								additionalPenalty
-							)
-						else
-							additionalPenalty = 200 -- Completely blocked path penalty
-							Log:Debug(
-								"Connection %d -> %d completely blocked - adding %d penalty",
-								currentNode.id,
-								nextNode.id,
-								additionalPenalty
-							)
-						end
-					else
-						Log:Debug(
-							"Connection %d -> %d is walkable but stuck (geometry issue?) - adding %d penalty",
-							currentNode.id,
-							nextNode.id,
-							additionalPenalty
-						)
-					end
-
-					-- Add the penalty (accumulates with previous penalties)
-					Node.AddFailurePenalty(currentNode, nextNode, additionalPenalty)
-					Log:Info(
-						"Added %d penalty to connection %d -> %d (accumulating)",
-						additionalPenalty,
-						currentNode.id,
-						nextNode.id
-					)
-
-					-- CIRCUIT BREAKER: Track failures and potentially block connection
-					if addConnectionFailure(currentNode, nextNode) then
-						Log:Warn(
-							"Connection %d -> %d is now BLOCKED by circuit breaker - forcing path clear",
-							currentNode.id,
-							nextNode.id
-						)
-						Navigation.ClearPath() -- Force completely new path when connection is blocked
-					end
-				else
-					Log:Warn(
-						"Skipping penalty for invalid connection: currentNode=%s (id=%s) nextNode=%s (id=%s)",
-						currentNode and "valid" or "nil",
-						currentNode and currentNode.id or "nil",
-						nextNode and "valid" or "nil",
-						nextNode and nextNode.id or "nil"
-					)
-				end
-			end
-			Navigation.ResetTickTimer()
-			G.currentState = G.States.PATHFINDING -- Use pathfinding state to trigger WorkManager repath
-			G.lastPathfindingTick = 0
-			ProfilerEnd()
-			ProfilerEnd()
-			return
-		end
-	end
-	ProfilerEnd()
+	-- No heavy stuck analysis here; handle moving-state simple repath instead
 
 	-- Smart displacement recovery - only when actually displaced, not when normally stuck
 	ProfilerBegin("displacement_recovery")
@@ -1576,8 +1314,7 @@ local function OnCreateMove(userCmd)
 		G.lastCleanupTick = currentTick
 	end
 
-	-- Clean up circuit breaker entries
-	cleanupCircuitBreaker()
+	-- Circuit breaker is unused by simplified unstuck; skip maintenance
 	ProfilerEnd()
 
 	ProfilerBegin("user_input")
