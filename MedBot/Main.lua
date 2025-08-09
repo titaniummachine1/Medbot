@@ -1164,25 +1164,44 @@ function moveTowardsNode(userCmd, node)
 		if (now - G.lastNodeSkipTick) >= 3 then -- run every 3 ticks (~50 ms)
 			G.lastNodeSkipTick = now
 			local didSkip = false
-			-- If we are on a door waypoint, attempt to skip to the next center (consume door waypoint)
 			local curWp = Navigation.GetCurrentWaypoint()
 			if curWp and curWp.kind == "door" then
-				-- If any door point is directly walkable, skip this door waypoint
-				local canSkipDoor = false
-				if curWp.points then
-					for _, p in ipairs(curWp.points) do
-						if isWalkable.Path(LocalOrigin, p, G.Menu.Main.WalkableMode or "Smooth") then
-							canSkipDoor = true
-							break
+				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+				local wps = G.Navigation.waypoints or {}
+				local idx = G.Navigation.currentWaypointIndex or 1
+				local nextWp = wps[idx + 1]
+				-- 1) If can reach next area center directly, drop the door waypoint
+				if
+					nextWp
+					and nextWp.kind == "center"
+					and nextWp.pos
+					and isWalkable.Path(LocalOrigin, nextWp.pos, walkMode)
+				then
+					Navigation.SkipWaypoints(1)
+					didSkip = true
+				else
+					-- 2) If can reach the center of the following area directly, skip door+center for current edge
+					if G.Navigation.path and #G.Navigation.path > 2 then
+						local targetArea = G.Navigation.path[3]
+						if targetArea and targetArea.pos and isWalkable.Path(LocalOrigin, targetArea.pos, walkMode) then
+							Navigation.SkipWaypoints(2)
+							didSkip = true
+						end
+					end
+					-- 3) If any door point is reachable, drop door waypoint to avoid dithering
+					if not didSkip and curWp.points then
+						for _, p in ipairs(curWp.points) do
+							if isWalkable.Path(LocalOrigin, p, walkMode) then
+								Navigation.SkipWaypoints(1)
+								didSkip = true
+								break
+							end
 						end
 					end
 				end
-				if canSkipDoor then
-					Navigation.SkipWaypoints(1) -- drop current door waypoint
-					didSkip = true
-				end
-			else
-				-- Fallback to area-level skip rules
+			end
+			-- Fallback: area-level skipping
+			if not didSkip then
 				if
 					Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path)
 					or Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path)
