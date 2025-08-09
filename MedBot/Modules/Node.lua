@@ -279,7 +279,15 @@ function Node.NormalizeConnections()
 		return
 	end
 
-	for _, area in pairs(nodes) do
+	-- Deterministic area order
+	local ids = {}
+	for id in pairs(nodes) do
+		ids[#ids + 1] = id
+	end
+	table.sort(ids)
+
+	for _, id in ipairs(ids) do
+		local area = nodes[id]
 		if area and area.c then
 			-- Prefer numeric 1..4 order for determinism
 			for idx = 1, 4 do
@@ -352,14 +360,21 @@ local function cardinalDirectionFromBounds(areaA, areaB)
 	if overlapY and (bMaxX <= aMinX) then
 		return -1, 0 -- A -> B is West
 	end
+	-- Note: Source Y axis appears inverted in-world for our use case; swap N/S signs
 	if overlapX and (aMaxY <= bMinY) then
-		return 0, 1 -- A -> B is North
-	end
-	if overlapX and (bMaxY <= aMinY) then
 		return 0, -1 -- A -> B is South
 	end
-	-- Fallback
-	return determineDirection(areaA.pos, areaB.pos)
+	if overlapX and (bMaxY <= aMinY) then
+		return 0, 1 -- A -> B is North
+	end
+	-- Fallback: dominant axis with inverted Y sign
+	local dx = areaB.pos.x - areaA.pos.x
+	local dy = areaB.pos.y - areaA.pos.y
+	if math.abs(dx) >= math.abs(dy) then
+		return (dx >= 0) and 1 or -1, 0
+	else
+		return 0, (dy >= 0) and -1 or 1
+	end
 end
 
 local function cross2D(ax, ay, bx, by)
@@ -641,7 +656,15 @@ function Node.BuildDoorsForConnections()
 		return
 	end
 
-	for _, areaA in pairs(nodes) do
+	-- Deterministic area order
+	local ids = {}
+	for id in pairs(nodes) do
+		ids[#ids + 1] = id
+	end
+	table.sort(ids)
+
+	for _, id in ipairs(ids) do
+		local areaA = nodes[id]
 		if areaA and areaA.c then
 			for dirIndex = 1, 4 do
 				local cDir = areaA.c[dirIndex]
@@ -2031,16 +2054,12 @@ function Node.GenerateHierarchicalNetwork(maxAreas)
 
 	local function HierarchicalSetupTick()
 		ProfilerBeginSystem("hierarchical_setup")
-
-		if not processSetupTick() then
-			-- Setup complete, unregister callback
-			callbacks.Unregister("CreateMove", "HierarchicalSetup")
-		end
-
+		-- Hierarchical stitching disabled per simplified pipeline
+		callbacks.Unregister("CreateMove", "HierarchicalSetup")
 		ProfilerEndSystem()
 	end
 
-	callbacks.Register("CreateMove", "HierarchicalSetup", HierarchicalSetupTick)
+	callbacks.Unregister("CreateMove", "HierarchicalSetup")
 end
 
 --==========================================================================
