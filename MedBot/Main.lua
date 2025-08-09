@@ -1186,30 +1186,15 @@ function moveTowardsNode(userCmd, node)
 	-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
 	local originalButtons = userCmd.buttons
 
-	-- Prefer door transition points when traversing between areas, then move to next area center
+	-- Use explicit door-aware waypoints built by Navigation
 	local destPos = node.pos
-	local path = G.Navigation.path
-	if path and #path > 1 then
-		local currentArea = path[1]
-		local nextArea = path[2]
-		if currentArea and nextArea and currentArea.id and nextArea.id then
-			local doorTarget = Node.GetDoorTargetPoint(currentArea, nextArea)
-			if doorTarget then
-				-- Stage machine: go to door first, then area center
-				G.Navigation.edgeKey = tostring(currentArea.id) .. "->" .. tostring(nextArea.id)
-				if G.Navigation.edgeStage ~= "toCenter" then
-					destPos = doorTarget
-					local distToDoor = (LocalOrigin - doorTarget):Length()
-					if distToDoor < (G.Misc.NodeTouchDistance * 1.5) then
-						G.Navigation.edgeStage = "toCenter"
-						Navigation.ResetTickTimer()
-					else
-						G.Navigation.edgeStage = "toDoor"
-					end
-				else
-					destPos = nextArea.pos
-				end
-			end
+	local wp = Navigation.GetCurrentWaypoint()
+	if wp and wp.pos then
+		destPos = wp.pos
+		local distToWp = (LocalOrigin - destPos):Length()
+		if distToWp < (G.Misc.NodeTouchDistance * 1.5) then
+			Navigation.AdvanceWaypoint()
+			Navigation.ResetTickTimer()
 		end
 	end
 
@@ -1562,15 +1547,15 @@ local function OnCreateMove(userCmd)
 			handleMovingState(userCmd)
 		end
 	elseif state == G.States.PATHFINDING then
-		if WorkManager.attemptWork(1, "State.PATHFINDING") then
+		if WorkManager.attemptWork(4, "State.PATHFINDING") then
 			handlePathfindingState()
 		end
 	elseif state == G.States.IDLE then
-		if WorkManager.attemptWork(2, "State.IDLE") then -- run at most every 2 ticks
+		if WorkManager.attemptWork(4, "State.IDLE") then -- run at most every 2 ticks
 			handleIdleState()
 		end
 	elseif state == G.States.STUCK then
-		if WorkManager.attemptWork(1, "State.STUCK") then
+		if WorkManager.attemptWork(4, "State.STUCK") then
 			handleStuckState(userCmd)
 		end
 	end

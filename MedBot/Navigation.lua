@@ -219,6 +219,8 @@ function Navigation.SetCurrentPath(path)
 	end
 	G.Navigation.path = path
 	G.Navigation.currentNodeIndex = 1 -- Start from the first node (start) and work towards goal
+	-- Build door-aware waypoint list for precise movement and visuals
+	Navigation.BuildDoorWaypointsFromPath()
 end
 
 -- Remove the current node from the path (we've reached it)
@@ -240,6 +242,50 @@ end
 -- Function to increment the current node ticks
 function Navigation.ResetTickTimer()
 	G.Navigation.currentNodeTicks = 0
+end
+
+-- Build waypoints: for each edge A->B, add the door target then B center
+function Navigation.BuildDoorWaypointsFromPath()
+	G.Navigation.waypoints = {}
+	G.Navigation.currentWaypointIndex = 1
+	local path = G.Navigation.path
+	if not path or #path == 0 then
+		return
+	end
+	for i = 1, #path - 1 do
+		local a, b = path[i], path[i + 1]
+		if a and b and a.pos and b.pos then
+			local door = Node.GetDoorTargetPoint(a, b)
+			if door then
+				table.insert(G.Navigation.waypoints, { pos = door, kind = "door", fromId = a.id, toId = b.id })
+			end
+			table.insert(G.Navigation.waypoints, { pos = b.pos, kind = "center", areaId = b.id })
+		end
+	end
+end
+
+function Navigation.GetCurrentWaypoint()
+	local wpList = G.Navigation.waypoints
+	local idx = G.Navigation.currentWaypointIndex or 1
+	if wpList and idx and wpList[idx] then
+		return wpList[idx]
+	end
+	return nil
+end
+
+function Navigation.AdvanceWaypoint()
+	local wpList = G.Navigation.waypoints
+	local idx = G.Navigation.currentWaypointIndex or 1
+	if not (wpList and wpList[idx]) then
+		return
+	end
+	local current = wpList[idx]
+	-- If we reached a center of the next area, advance the area path too
+	if current.kind == "center" and G.Navigation.path and #G.Navigation.path > 0 then
+		-- path[1] is previous area; popping it moves us into the new area
+		Navigation.RemoveCurrentNode()
+	end
+	G.Navigation.currentWaypointIndex = idx + 1
 end
 
 -- Function to convert degrees to radians
@@ -394,6 +440,8 @@ function Navigation.FindPath(startNode, goalNode)
 		Log:Info("Simple A* path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
 		Navigation.pathFound = true
 		Navigation.pathFailed = false
+		-- Refresh waypoints to reflect current door usage
+		Navigation.BuildDoorWaypointsFromPath()
 	end
 
 	return Navigation

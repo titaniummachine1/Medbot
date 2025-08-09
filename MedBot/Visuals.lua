@@ -587,29 +587,29 @@ local function OnDraw()
 		end
 	end
 
-	-- Draw current path
-    if G.Menu.Visuals.drawPath and G.Navigation.path and #G.Navigation.path > 0 then
-		draw.Color(255, 255, 255, 255)
-
-		for i = 1, #G.Navigation.path - 1 do
-			local n1 = G.Navigation.path[i]
-			local n2 = G.Navigation.path[i + 1]
-			local node1Pos = n1.pos
-			local node2Pos = n2.pos
-
-			local screenPos1 = client.WorldToScreen(node1Pos)
-			local screenPos2 = client.WorldToScreen(node2Pos)
-
-			if not screenPos1 or not screenPos2 then
-				goto continue
-			end
-
-			if node1Pos and node2Pos then
-				ArrowLine(node1Pos, node2Pos, 22, 15, false) -- Adjust the size for the perpendicular segment as needed
-			end
-			::continue::
-		end
-	end
+    -- Draw current path with door-aware waypoints
+    if G.Menu.Visuals.drawPath then
+        local path = G.Navigation.path
+        if path and #path > 0 then
+            draw.Color(255, 255, 255, 255)
+            for i = 1, #path - 1 do
+                local a, b = path[i], path[i + 1]
+                if a and b and a.pos and b.pos then
+                    ArrowLine(a.pos, b.pos, 22, 15, false)
+                end
+            end
+        end
+        local wps = G.Navigation.waypoints
+        if wps and #wps > 0 then
+            for i = 1, #wps - 1 do
+                local w1, w2 = wps[i], wps[i + 1]
+                if w1.pos and w2.pos then
+                    draw.Color(0, 255, 0, 220) -- green overlay for actual movement
+                    ArrowLine(w1.pos, w2.pos, 18, 12, false)
+                end
+            end
+        end
+    end
 
 	-- Draw current node
     if G.Menu.Visuals.drawCurrentNode and G.Navigation.path then
