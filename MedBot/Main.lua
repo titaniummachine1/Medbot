@@ -775,10 +775,21 @@ function handleMovingState(userCmd)
 
 	moveTowardsNode(userCmd, currentNode)
 
-	-- Check if stuck - INCREASED THRESHOLD to prevent oscillation
-	if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to 132 ticks (2 seconds)
-		G.currentState = G.States.STUCK
-	end
+    -- Check if stuck - INCREASED THRESHOLD to prevent oscillation
+    if G.Navigation.currentNodeTicks > 132 then -- Increased from 66 to 132 ticks (2 seconds)
+        -- Immediate penalty on the active connection when entering STUCK
+        local pathForPenalty = G.Navigation.path
+        if pathForPenalty and #pathForPenalty > 1 then
+            local curEdgeA = pathForPenalty[1]
+            local curEdgeB = pathForPenalty[2]
+            if curEdgeA and curEdgeB and curEdgeA.id and curEdgeB.id and curEdgeA.id ~= curEdgeB.id then
+                -- Record failure (+100 penalty, increments failure count, may block on threshold)
+                addConnectionFailure(curEdgeA, curEdgeB)
+                Log:Info("Immediate stuck penalty: +100 to connection %d -> %d", curEdgeA.id, curEdgeB.id)
+            end
+        end
+        G.currentState = G.States.STUCK
+    end
 
 	ProfilerEnd()
 end
