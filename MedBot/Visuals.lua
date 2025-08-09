@@ -87,6 +87,8 @@ local function Draw3DBox(size, pos)
 	end
 end
 
+local UP_VECTOR = Vector3(0, 0, 1)
+
 local function ArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
 	if not (start_pos and end_pos) then
 		return
@@ -317,49 +319,48 @@ local function OnDraw()
 
     -- Show connections between nav nodes (colored by directionality)
     if G.Menu.Visuals.showConnections then
-        for id, entry in pairs(visibleNodes) do
-            local node = entry.node
-            for dir = 1, 4 do
-                local cDir = node.c[dir]
-                if cDir and cDir.connections then
+		for id, entry in pairs(visibleNodes) do
+			local node = entry.node
+			for dir = 1, 4 do
+				local cDir = node.c[dir]
+				if cDir and cDir.connections then
                     for _, conn in ipairs(cDir.connections) do
                         local nid = (type(conn) == "table") and conn.node or conn
                         local otherNode = G.Navigation.nodes and G.Navigation.nodes[nid]
                         if otherNode then
-                            local s1 = client.WorldToScreen(node.pos)
-                            local s2 = client.WorldToScreen(otherNode.pos)
+                            local pos1 = node.pos + UP_VECTOR
+                            local pos2 = otherNode.pos + UP_VECTOR
+                            local s1 = client.WorldToScreen(pos1)
+                            local s2 = client.WorldToScreen(pos2)
                             if s1 and s2 then
-                                -- determine if other->id exists in its connections
-                                local bidir = false
-                                for d2 = 1, 4 do
-                                    local otherCDir = otherNode.c[d2]
-                                    if otherCDir and otherCDir.connections then
-                                        for _, backConn in ipairs(otherCDir.connections) do
-                                            local backId = (type(backConn) == "table") and backConn.node or backConn
-                                            if backId == id then
-                                                bidir = true
-                                                break
-                                            end
-                                        end
-                                        if bidir then
-                                            break
-                                        end
-                                    end
-                                end
-                                -- yellow for two-way, red for one-way
-                                if bidir then
-                                    draw.Color(255, 255, 0, 100)
-                                else
-                                    draw.Color(255, 0, 0, 70)
-                                end
+							-- determine if other->id exists in its connections
+							local bidir = false
+                            
+							for d2 = 1, 4 do
+								local otherCDir = otherNode.c[d2]
+								if otherCDir and otherCDir.connections then
+                                    for _, backConn in ipairs(otherCDir.connections) do
+                                        local backId = (type(backConn) == "table") and backConn.node or backConn
+                                        if backId == id then
+											bidir = true
+											break
+										end
+									end
+									if bidir then
+										break
+									end
+								end
+							end
+							-- yellow for two-way, red for one-way
+                                if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
                                 draw.Line(s1[1], s1[2], s2[1], s2[2])
                             end
                         end
-                    end
-                end
-            end
-        end
-    end
+					end
+				end
+			end
+		end
+	end
 
     -- Draw Doors (left, middle, right) if enabled
     if G.Menu.Visuals.showDoors then
@@ -369,24 +370,22 @@ local function OnDraw()
                 local cDir = node.c[dir]
                 if cDir and cDir.connections then
                     for _, conn in ipairs(cDir.connections) do
-                        local up = Vector3(0, 0, 1)
-                        local zLift = up * 1.0
-                        local doorLeft = conn.left and (conn.left + zLift)
-                        local doorMid = conn.middle and (conn.middle + zLift)
-                        local doorRight = conn.right and (conn.right + zLift)
+                        local doorLeft = conn.left and (conn.left + UP_VECTOR)
+                        local doorMid = conn.middle and (conn.middle + UP_VECTOR)
+                        local doorRight = conn.right and (conn.right + UP_VECTOR)
                         if doorLeft and doorMid and doorRight then
                             local sL = client.WorldToScreen(doorLeft)
                             local sM = client.WorldToScreen(doorMid)
                             local sR = client.WorldToScreen(doorRight)
                             if sL and sM and sR then
-                                -- Door line (cyan)
-                                draw.Color(0, 200, 255, 220)
+                                -- Door line
+                                draw.Color(0, 180, 255, 220)
                                 draw.Line(sL[1], sL[2], sR[1], sR[2])
-                                -- Distinct end markers (magenta)
-                                draw.Color(220, 0, 220, 230)
+                                -- Left and right ticks
+                                draw.Color(0, 120, 255, 255)
                                 draw.FilledRect(sL[1] - 2, sL[2] - 2, sL[1] + 2, sL[2] + 2)
                                 draw.FilledRect(sR[1] - 2, sR[2] - 2, sR[1] + 2, sR[2] + 2)
-                                -- Middle marker color based on needJump (green/orange)
+                                -- Middle marker color based on needJump
                                 if conn.needJump then
                                     draw.Color(255, 140, 0, 255) -- orange means jump required
                                 else
@@ -398,9 +397,9 @@ local function OnDraw()
                                 local sL2 = doorLeft and client.WorldToScreen(doorLeft)
                                 local sR2 = doorRight and client.WorldToScreen(doorRight)
                                 if sL2 and sR2 then
-                                    draw.Color(0, 200, 255, 220)
+                                    draw.Color(0, 180, 255, 220)
                                     draw.Line(sL2[1], sL2[2], sR2[1], sR2[2])
-                                    draw.Color(220, 0, 220, 230)
+                                    draw.Color(0, 120, 255, 255)
                                     draw.FilledRect(sL2[1] - 2, sL2[2] - 2, sL2[1] + 2, sL2[2] + 2)
                                     draw.FilledRect(sR2[1] - 2, sR2[2] - 2, sR2[1] + 2, sR2[2] + 2)
                                 end

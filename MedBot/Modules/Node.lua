@@ -659,9 +659,9 @@ local function createDoorForAreas(areaA, areaB)
 
 	-- Only consider the two facing sides (no cross-side mapping). Use overlap along their shared axis.
 	local tL, tR, minDiff = findReachableSpan(aLeft, aRight, bLeft, bRight)
-	local isDownwardOneWay = false
 
 	-- If normal reachable-span fails, allow one-way DOWNWARD connections (falling).
+	local isDownwardOneWay = false
 	if not tL then
 		-- Compare average heights of areas to detect downward transition
 		local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
@@ -675,8 +675,19 @@ local function createDoorForAreas(areaA, areaB)
 			end
 			local tAL = p.tAL or 0.0
 			local tAR = p.tAR or 1.0
-			-- Start with full overlap domain (no corner clearance). We'll optionally clamp later if wide enough.
+			-- Apply a small clearance similar to findReachableSpan
 			local domainMin, domainMax = p.oMin, p.oMax
+			local widthA = p.aMax - p.aMin
+			local widthB = p.bMax - p.bMin
+			local clearance = HITBOX_WIDTH
+			if widthA > (2 * clearance) then
+				domainMin = math.max(domainMin, p.aMin + clearance)
+				domainMax = math.min(domainMax, p.aMax - clearance)
+			end
+			if widthB > (2 * clearance) then
+				domainMin = math.max(domainMin, p.bMin + clearance)
+				domainMax = math.min(domainMax, p.bMax - clearance)
+			end
 			local denomA = (p.a1 - p.a0)
 			local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tAL
 			local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tAR
@@ -684,20 +695,6 @@ local function createDoorForAreas(areaA, areaB)
 			tLval = math.max(tAL, math.max(0, math.min(1, tLval)))
 			tRval = math.min(tAR, math.max(0, math.min(1, tRval)))
 			tRval = math.max(tLval, tRval)
-			-- If span is comfortably wide (>= 48u), apply corner clearance; otherwise keep raw span
-			local rawLeft = lerpVec(aLeft, aRight, tLval)
-			local rawRight = lerpVec(aLeft, aRight, tRval)
-			local rawWidth = (rawRight - rawLeft):Length2D()
-			if rawWidth >= (HITBOX_WIDTH * 2) then
-				local clearance = HITBOX_WIDTH
-				-- convert clearance in axis space and shrink
-				local denom = (p.a1 - p.a0)
-				local adjL = denom ~= 0 and (clearance / math.max(1e-6, denom)) or 0
-				local adjR = denom ~= 0 and (clearance / math.max(1e-6, denom)) or 0
-				tLval = math.min(1, math.max(0, tLval + adjL))
-				tRval = math.min(1, math.max(0, tRval - adjR))
-				tRval = math.max(tLval, tRval)
-			end
 			tL, tR = tLval, tRval
 		else
 			return nil
@@ -706,10 +703,12 @@ local function createDoorForAreas(areaA, areaB)
 
 	local aDoorLeft = lerpVec(aLeft, aRight, tL)
 	local aDoorRight = lerpVec(aLeft, aRight, tR)
-	-- Enforce minimum span width only for regular (bidirectional-capable) doors.
-	local spanWidth = (aDoorRight - aDoorLeft):Length2D()
-	if (not isDownwardOneWay) and spanWidth < (HITBOX_WIDTH * 2) then
-		return nil
+	-- If this is a one-way downward door and the usable span is too tiny (< 48u), drop it to avoid single-dot doors
+	if isDownwardOneWay then
+		local spanWidth = (aDoorRight - aDoorLeft):Length2D()
+		if spanWidth < (HITBOX_WIDTH * 2) then
+			return nil
+		end
 	end
 	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
 
