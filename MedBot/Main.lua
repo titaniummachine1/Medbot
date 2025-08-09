@@ -258,15 +258,17 @@ function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
 		G.lastPathfindingTick = 0
 		return true
 	end
-	-- Only skip if we have a multi-node path AND goal is directly reachable with current walk mode
+	-- Switch to direct-goal whenever it's reachable and we still have multiple areas to traverse
 	if path and #path > 1 then
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
 		if isWalkable.Path(origin, goalPos, walkMode) then
 			Navigation.ClearPath()
-			-- Set a direct path with just the goal as the node
+			-- Set a direct path and a single goal waypoint for clarity in movement/visuals
 			G.Navigation.path = { { pos = goalPos } }
+			G.Navigation.waypoints = { { pos = goalPos, kind = "goal" } }
+			G.Navigation.currentWaypointIndex = 1
 			G.lastPathfindingTick = 0
-			Log:Info("Cleared complex path, moving directly to goal with %s mode (distance: %.1f)", walkMode, dist)
+			Log:Info("Direct-goal shortcut – moving straight with %s mode (distance: %.1f)", walkMode, dist)
 			return true
 		end
 	end
@@ -1192,6 +1194,15 @@ function moveTowardsNode(userCmd, node)
 		if (now - G.lastNodeSkipTick) >= 3 then -- run every 3 ticks (~50 ms)
 			G.lastNodeSkipTick = now
 			local didSkip = false
+			-- Simple skip: if we can walk directly to the next area's center, drop current node
+			if G.Navigation.path and #G.Navigation.path > 1 then
+				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+				local nextArea = G.Navigation.path[2]
+				if nextArea and nextArea.pos and isWalkable.Path(LocalOrigin, nextArea.pos, walkMode) then
+					Navigation.RemoveCurrentNode()
+					didSkip = true
+				end
+			end
 			local curWp = Navigation.GetCurrentWaypoint()
 			if curWp and curWp.kind == "door" then
 				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
@@ -1225,6 +1236,25 @@ function moveTowardsNode(userCmd, node)
 								break
 							end
 						end
+					end
+				end
+			elseif curWp and curWp.kind == "center" then
+				-- Center-to-center (or goal) skipping: if we can walk directly to the next center/goal, skip ahead
+				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+				local wps = G.Navigation.waypoints or {}
+				local idx = G.Navigation.currentWaypointIndex or 1
+				-- Look ahead a few waypoints to find the next with a position (center or goal)
+				for look = 1, 3 do
+					local nxt = wps[idx + look]
+					if not nxt then
+						break
+					end
+					if (nxt.kind == "center" or nxt.kind == "goal") and nxt.pos then
+						if isWalkable.Path(LocalOrigin, nxt.pos, walkMode) then
+							Navigation.SkipWaypoints(look)
+							didSkip = true
+						end
+						break
 					end
 				end
 			end
