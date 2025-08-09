@@ -237,8 +237,67 @@ function Optimiser.skipIfWalkable(origin, path)
 	if #path == 3 then
 		walkMode = "Aggressive"
 	end
-	if candidate and candidate.pos and isWalkable.Path(origin, candidate.pos, walkMode) then
-		-- Drop the current node and keep moving toward the now-next node
+	if candidate and candidate.pos then
+		-- Conservative guardrails to prevent over-skipping
+		local horizontalManhattan = math.abs(origin.x - candidate.pos.x) + math.abs(origin.y - candidate.pos.y)
+		if horizontalManhattan <= 600 and isWalkable.Path(origin, candidate.pos, walkMode) then
+			-- Optional straight LOS check to avoid corner cases
+			local upOffset = Vector3(0, 0, 32)
+			local los = engine.TraceLine(origin + upOffset, candidate.pos + upOffset, MASK_PLAYERSOLID_BRUSHONLY)
+			if los and los.fraction == 1 then
+				-- Drop the current node and keep moving toward the now-next node
+				Navigation.RemoveCurrentNode()
+				Navigation.ResetTickTimer()
+				return true
+			end
+		end
+	end
+	return false
+end
+
+function Optimiser.skipToNextIfWalkable(origin, path)
+	if not path or #path < 2 then
+		return false
+	end
+	local currentNode = path[1]
+	local nextNode = path[2]
+	local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+	if not (currentNode and nextNode and nextNode.pos) then
+		return false
+	end
+
+	-- Prefer door-aware skip: ensure at least one door point for the edge is reachable
+	local entry = Node.GetConnectionEntry(currentNode, nextNode)
+	local candidateDoorPoints = {}
+	if entry then
+		-- Prefer middle, then side points
+		if entry.middle then
+			table.insert(candidateDoorPoints, entry.middle)
+		end
+		if entry.left then
+			table.insert(candidateDoorPoints, entry.left)
+		end
+		if entry.right then
+			table.insert(candidateDoorPoints, entry.right)
+		end
+	else
+		-- Fallback single door target if no enriched entry is available
+		local single = Node.GetDoorTargetPoint(currentNode, nextNode)
+		if single then
+			table.insert(candidateDoorPoints, single)
+		end
+	end
+
+	local doorReachable = false
+	for _, p in ipairs(candidateDoorPoints) do
+		if isWalkable.Path(origin, p, walkMode) then
+			doorReachable = true
+			break
+		end
+	end
+
+	-- Only skip to the next area if the door transition is actually reachable
+	if doorReachable and isWalkable.Path(origin, nextNode.pos, walkMode) then
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 		return true
@@ -258,18 +317,23 @@ function Optimiser.skipToGoalIfWalkable(origin, goalPos, path)
 		G.lastPathfindingTick = 0
 		return true
 	end
-	-- Switch to direct-goal whenever it's reachable and we still have multiple areas to traverse
+	-- Switch to direct-goal only when very close and definitely walkable (tight guard to avoid false clears)
 	if path and #path > 1 then
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if isWalkable.Path(origin, goalPos, walkMode) then
-			Navigation.ClearPath()
-			-- Set a direct path and a single goal waypoint for clarity in movement/visuals
-			G.Navigation.path = { { pos = goalPos } }
-			G.Navigation.waypoints = { { pos = goalPos, kind = "goal" } }
-			G.Navigation.currentWaypointIndex = 1
-			G.lastPathfindingTick = 0
-			Log:Info("Direct-goal shortcut – moving straight with %s mode (distance: %.1f)", walkMode, dist)
-			return true
+		local horizontalManhattan = math.abs(origin.x - goalPos.x) + math.abs(origin.y - goalPos.y)
+		if horizontalManhattan <= 250 and isWalkable.Path(origin, goalPos, walkMode) then
+			local upOffset = Vector3(0, 0, 32)
+			local los = engine.TraceLine(origin + upOffset, goalPos + upOffset, MASK_PLAYERSOLID_BRUSHONLY)
+			if los and los.fraction == 1 then
+				Navigation.ClearPath()
+				-- Set a direct path and a single goal waypoint for clarity in movement/visuals
+				G.Navigation.path = { { pos = goalPos } }
+				G.Navigation.waypoints = { { pos = goalPos, kind = "goal" } }
+				G.Navigation.currentWaypointIndex = 1
+				G.lastPathfindingTick = 0
+				Log:Debug("Direct-goal shortcut engaged (<=250u, %s mode)", walkMode)
+				return true
+			end
 		end
 	end
 	return false
@@ -458,15 +522,18 @@ function handleIdleState()
 		local distance = (G.pLocal.Origin - goalPos):Length()
 
 		-- PRIORITY 1: Always try direct movement to objectives first, regardless of current path
-		if distance > 25 then -- Only if we're not already at the goal
+		if distance > 25 and distance < 250 then -- Only if close enough to justify direct
 			ProfilerBegin("direct_walk_check")
 			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
 			-- Use aggressive mode for close goals (likely objectives/intel)
-			if distance < 300 then
+			if distance < 200 then
 				walkMode = "Aggressive"
 			end
 
-			if isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
+			-- Require line-of-sight hull trace in addition to walkability
+			local up = Vector3(0, 0, 32)
+			local los = engine.TraceLine(G.pLocal.Origin + up, goalPos + up, MASK_PLAYERSOLID_BRUSHONLY)
+			if (los and los.fraction == 1) and isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
 				Log:Info(
 					"Goal directly reachable with %s mode, moving immediately (distance: %.1f)",
 					walkMode,
@@ -1182,92 +1249,17 @@ function moveTowardsNode(userCmd, node)
 	ProfilerEnd()
 
 	------------------------------------------------------------
-	--  Hybrid Skip - Robust walkability check for node skipping
+	--  Node Skipping - Simple and deterministic: next center only
 	------------------------------------------------------------
 	ProfilerBegin("node_skipping")
-	-- Only run the heavier skip checks every few ticks to reduce CPU
 	if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
 		local now = globals.TickCount()
 		if not G.lastNodeSkipTick then
 			G.lastNodeSkipTick = 0
 		end
-		if (now - G.lastNodeSkipTick) >= 3 then -- run every 3 ticks (~50 ms)
+		if (now - G.lastNodeSkipTick) >= 3 then -- ~50 ms cadence
 			G.lastNodeSkipTick = now
-			local didSkip = false
-			-- Simple skip: if we can walk directly to the next area's center, drop current node
-			if G.Navigation.path and #G.Navigation.path > 1 then
-				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-				local nextArea = G.Navigation.path[2]
-				if nextArea and nextArea.pos and isWalkable.Path(LocalOrigin, nextArea.pos, walkMode) then
-					Navigation.RemoveCurrentNode()
-					didSkip = true
-				end
-			end
-			local curWp = Navigation.GetCurrentWaypoint()
-			if curWp and curWp.kind == "door" then
-				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-				local wps = G.Navigation.waypoints or {}
-				local idx = G.Navigation.currentWaypointIndex or 1
-				local nextWp = wps[idx + 1]
-				-- 1) If can reach next area center directly, drop the door waypoint
-				if
-					nextWp
-					and nextWp.kind == "center"
-					and nextWp.pos
-					and isWalkable.Path(LocalOrigin, nextWp.pos, walkMode)
-				then
-					Navigation.SkipWaypoints(1)
-					didSkip = true
-				else
-					-- 2) If can reach the center of the following area directly, skip door+center for current edge
-					if G.Navigation.path and #G.Navigation.path > 2 then
-						local targetArea = G.Navigation.path[3]
-						if targetArea and targetArea.pos and isWalkable.Path(LocalOrigin, targetArea.pos, walkMode) then
-							Navigation.SkipWaypoints(2)
-							didSkip = true
-						end
-					end
-					-- 3) If any door point is reachable, drop door waypoint to avoid dithering
-					if not didSkip and curWp.points then
-						for _, p in ipairs(curWp.points) do
-							if isWalkable.Path(LocalOrigin, p, walkMode) then
-								Navigation.SkipWaypoints(1)
-								didSkip = true
-								break
-							end
-						end
-					end
-				end
-			elseif curWp and curWp.kind == "center" then
-				-- Center-to-center (or goal) skipping: if we can walk directly to the next center/goal, skip ahead
-				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-				local wps = G.Navigation.waypoints or {}
-				local idx = G.Navigation.currentWaypointIndex or 1
-				-- Look ahead a few waypoints to find the next with a position (center or goal)
-				for look = 1, 3 do
-					local nxt = wps[idx + look]
-					if not nxt then
-						break
-					end
-					if (nxt.kind == "center" or nxt.kind == "goal") and nxt.pos then
-						if isWalkable.Path(LocalOrigin, nxt.pos, walkMode) then
-							Navigation.SkipWaypoints(look)
-							didSkip = true
-						end
-						break
-					end
-				end
-			end
-			-- Fallback: area-level skipping
-			if not didSkip then
-				if
-					Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path)
-					or Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path)
-				then
-					didSkip = true
-				end
-			end
-			if didSkip then
+			if Optimiser.skipToNextIfWalkable(LocalOrigin, G.Navigation.path) then
 				node = G.Navigation.path[1] or node
 				Navigation.ResetTickTimer()
 			end
