@@ -273,19 +273,25 @@ local function OnDraw()
 		draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
 		currentY = currentY + 20
 	end
-        -- Collect visible nodes using chunk grid
-        Visuals.MaybeRebuildGrid()
-        collectVisible(me)
+    -- Collect visible nodes using chunk grid and Manhattan render radius
+    Visuals.MaybeRebuildGrid()
+    collectVisible(me)
+    local p = me:GetAbsOrigin()
+    local manhattanRadius = (G.Menu.Visuals.renderRadius or 2000)
         local visibleNodes = {}
         for i = 1, visCount do
-                local id = visBuf[i]
-                local node = G.Navigation.nodes and G.Navigation.nodes[id]
-                if node then
-                        local scr = client.WorldToScreen(node.pos)
-                        if scr then
-                                visibleNodes[id] = { node = node, screen = scr }
-                        end
+            local id = visBuf[i]
+            local node = G.Navigation.nodes and G.Navigation.nodes[id]
+            if node then
+                -- Manhattan distance cull
+                local d = math.abs(node.pos.x - p.x) + math.abs(node.pos.y - p.y)
+                if d <= manhattanRadius then
+                    local scr = client.WorldToScreen(node.pos)
+                    if scr then
+                        visibleNodes[id] = { node = node, screen = scr }
+                    end
                 end
+            end
         end
     G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
     if G.Navigation.currentNodeIndex == nil then

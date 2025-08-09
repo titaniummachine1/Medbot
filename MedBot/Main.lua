@@ -1201,15 +1201,13 @@ function moveTowardsNode(userCmd, node)
 					local distToDoor = (LocalOrigin - doorTarget):Length()
 					if distToDoor < (G.Misc.NodeTouchDistance * 1.5) then
 						G.Navigation.edgeStage = "toCenter"
+						Navigation.ResetTickTimer()
 					else
 						G.Navigation.edgeStage = "toDoor"
 					end
 				else
 					destPos = nextArea.pos
 				end
-				-- Reset door stage when the edge changes due to a skip
-				G.Navigation.edgeStage = nil
-				G.Navigation.edgeKey = nil
 			end
 		end
 	end
@@ -1452,24 +1450,18 @@ local function OnCreateMove(userCmd)
 	end
 	ProfilerEnd()
 
-	-- PRIORITY CHECK: Throttled check for direct objectives (only every 30 ticks to prevent lag)
+	-- PRIORITY CHECK: Use WorkManager for cooldown instead of inline tick math
 	ProfilerBegin("priority_check")
 	local currentTask = Common.GetHighestPriorityTask()
 
-	-- Initialize priority check timer
-	if not G.lastPriorityCheckTick then
-		G.lastPriorityCheckTick = 0
-	end
-
-	-- Only run expensive priority checks every 30 ticks (0.5 seconds) unless we have no current goal
+	-- Only run expensive priority checks every 30 ticks, and never while traversing a door
 	local shouldRunPriorityCheck = false
 	if not G.Navigation.goalPos then
-		-- No current goal - run priority check immediately
 		shouldRunPriorityCheck = true
-	elseif (currentTick - G.lastPriorityCheckTick) > 30 then
-		-- Regular throttled check
-		shouldRunPriorityCheck = true
-		G.lastPriorityCheckTick = currentTick
+	else
+		if not (G.Navigation.edgeStage == "toDoor") and WorkManager.attemptWork(30, "PriorityCheck") then
+			shouldRunPriorityCheck = true
+		end
 	end
 
 	if currentTask and G.currentState ~= G.States.PATHFINDING and shouldRunPriorityCheck then -- Don't interrupt pathfinding
