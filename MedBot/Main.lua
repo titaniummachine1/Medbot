@@ -610,7 +610,11 @@ function handlePathfindingState()
 						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 						G.lastRepathTick = currentTick
 					else
-						Log:Debug("Repath cooldown active, waiting...")
+						-- Throttle noisy log to avoid console spam and overhead
+						if not G._lastRepathWaitLog or (currentTick - G._lastRepathWaitLog) > 30 then
+							Log:Debug("Repath cooldown active, waiting...")
+							G._lastRepathWaitLog = currentTick
+						end
 					end
 				else
 					Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
@@ -859,6 +863,8 @@ function handleStuckState(userCmd)
 		-- COOLDOWN: Only switch back to MOVING if we've been stuck for at least 33 ticks (0.5 seconds)
 		if stuckDuration > 33 then
 			G.Navigation.stuckStartTick = nil -- Reset stuck timer
+			-- Also reset per-node tick counter to avoid immediate re-trigger of STUCK
+			Navigation.ResetTickTimer()
 			G.currentState = G.States.MOVING
 		end
 		-- If stuckDuration <= 33, stay in STUCK state to prevent oscillation
@@ -1138,20 +1144,27 @@ function moveTowardsNode(userCmd, node)
 	--  Hybrid Skip - Robust walkability check for node skipping
 	------------------------------------------------------------
 	ProfilerBegin("node_skipping")
-	-- Only skip one node per tick, first if closer, then if walkable
+	-- Only run the heavier skip checks every few ticks to reduce CPU
 	if G.Menu.Main.Skip_Nodes and #G.Navigation.path > 1 then
-		local skipped = false
-		if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
-			skipped = true
-		elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
-			skipped = true
+		local now = globals.TickCount()
+		if not G.lastNodeSkipTick then
+			G.lastNodeSkipTick = 0
 		end
-		if skipped then
-			node = G.Navigation.path[1]
-			if not node then
-				ProfilerEnd()
-				ProfilerEnd()
-				return
+		if (now - G.lastNodeSkipTick) >= 3 then -- run every 3 ticks (~50 ms)
+			G.lastNodeSkipTick = now
+			local skipped = false
+			if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
+				skipped = true
+			elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
+				skipped = true
+			end
+			if skipped then
+				node = G.Navigation.path[1]
+				if not node then
+					ProfilerEnd()
+					ProfilerEnd()
+					return
+				end
 			end
 		end
 	end
@@ -1500,10 +1513,7 @@ local function OnCreateMove(userCmd)
 						G.currentState = G.States.MOVING
 						G.lastPathfindingTick = globals.TickCount()
 						Navigation.ResetTickTimer()
-						-- Skip the normal state handling for this tick
-						ProfilerEnd()
-						ProfilerEndSystem()
-						return
+						-- Do not return early: allow movement handling this tick to avoid stutter
 					end
 				end
 			end
