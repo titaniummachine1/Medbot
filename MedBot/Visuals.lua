@@ -279,6 +279,9 @@ local function OnDraw()
     collectVisible(me)
     local p = me:GetAbsOrigin()
     local manhattanRadius = (G.Menu.Visuals.renderRadius or 2000)
+    local function withinRadius(pos)
+        return (math.abs(pos.x - p.x) + math.abs(pos.y - p.y) + math.abs(pos.z - p.z)) <= manhattanRadius
+    end
         local visibleNodes = {}
         for i = 1, visCount do
             local id = visBuf[i]
@@ -328,6 +331,7 @@ local function OnDraw()
     if G.Menu.Visuals.showConnections then
 		for id, entry in pairs(visibleNodes) do
 			local node = entry.node
+            if not withinRadius(node.pos) then goto continue_node end
 			for dir = 1, 4 do
 				local cDir = node.c[dir]
 				if cDir and cDir.connections then
@@ -337,6 +341,7 @@ local function OnDraw()
                         if otherNode then
                             local pos1 = node.pos + UP_VECTOR
                             local pos2 = otherNode.pos + UP_VECTOR
+                            if not (withinRadius(pos1) and withinRadius(pos2)) then goto continue_conn end
                             local s1 = client.WorldToScreen(pos1)
                             local s2 = client.WorldToScreen(pos2)
                             if s1 and s2 then
@@ -362,10 +367,12 @@ local function OnDraw()
                                 if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
                                 draw.Line(s1[1], s1[2], s2[1], s2[2])
                             end
+                            ::continue_conn::
                         end
 					end
 				end
 			end
+            ::continue_node::
 		end
 	end
 
@@ -602,14 +609,14 @@ local function OnDraw()
                 if not bPos and b.kind == "door" and b.points and #b.points > 0 then
                     bPos = b.points[math.ceil(#b.points / 2)]
                 end
-                if aPos and bPos then
+                if aPos and bPos and withinRadius(aPos) and withinRadius(bPos) then
                     draw.Color(255, 255, 255, 220) -- white route
                     ArrowLine(aPos, bPos, 18, 12, false)
                 end
             end
             -- Current target indicator
             local tgt = G.Navigation.currentTargetPos
-            if tgt then
+            if tgt and withinRadius(tgt) then
                 -- Arrow color logic: white normal, red if stuck & not walkable, yellow if stuck & walkable
                 local arrowR, arrowG, arrowB = 255, 255, 255
                 if G.currentState == G.States.STUCK then
@@ -634,25 +641,7 @@ local function OnDraw()
                     ArrowLine(mePos, tgt, 22, 16, false)
                 end
             end
-            -- Door points markers half size
-            for i = 1, #wps do
-                local w = wps[i]
-                if w.kind == "door" and w.points then
-                    draw.Color(0, 200, 255, 255)
-                    for _, p in ipairs(w.points) do
-                        local s = client.WorldToScreen(p)
-                        if s then
-                            draw.FilledRect(s[1] - 2, s[2] - 2, s[1] + 2, s[2] + 2)
-                        end
-                    end
-                elseif w.pos then
-                    local s = client.WorldToScreen(w.pos)
-                    if s then
-                        draw.Color(255, 255, 255, 255) -- centers as white squares
-                        draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
-                    end
-                end
-            end
+            -- Omit extra squares; arrows indicate route; 3D boxes already mark agents
         end
     end
 
