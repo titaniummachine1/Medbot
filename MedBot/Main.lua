@@ -1163,20 +1163,36 @@ function moveTowardsNode(userCmd, node)
 		end
 		if (now - G.lastNodeSkipTick) >= 3 then -- run every 3 ticks (~50 ms)
 			G.lastNodeSkipTick = now
-			local skipped = false
-			-- Skip only when safe with door semantics
-			if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
-				skipped = true
-			elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
-				skipped = true
-			end
-			if skipped then
-				node = G.Navigation.path[1]
-				if not node then
-					ProfilerEnd()
-					ProfilerEnd()
-					return
+			local didSkip = false
+			-- If we are on a door waypoint, attempt to skip to the next center (consume door waypoint)
+			local curWp = Navigation.GetCurrentWaypoint()
+			if curWp and curWp.kind == "door" then
+				-- If any door point is directly walkable, skip this door waypoint
+				local canSkipDoor = false
+				if curWp.points then
+					for _, p in ipairs(curWp.points) do
+						if isWalkable.Path(LocalOrigin, p, G.Menu.Main.WalkableMode or "Smooth") then
+							canSkipDoor = true
+							break
+						end
+					end
 				end
+				if canSkipDoor then
+					Navigation.SkipWaypoints(1) -- drop current door waypoint
+					didSkip = true
+				end
+			else
+				-- Fallback to area-level skip rules
+				if
+					Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path)
+					or Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path)
+				then
+					didSkip = true
+				end
+			end
+			if didSkip then
+				node = G.Navigation.path[1] or node
+				Navigation.ResetTickTimer()
 			end
 		end
 	end
@@ -1189,12 +1205,30 @@ function moveTowardsNode(userCmd, node)
 	-- Use explicit door-aware waypoints built by Navigation
 	local destPos = node.pos
 	local wp = Navigation.GetCurrentWaypoint()
-	if wp and wp.pos then
-		destPos = wp.pos
-		local distToWp = (LocalOrigin - destPos):Length()
-		if distToWp < (G.Misc.NodeTouchDistance * 1.5) then
-			Navigation.AdvanceWaypoint()
-			Navigation.ResetTickTimer()
+	if wp then
+		if wp.kind == "door" and wp.points and #wp.points > 0 then
+			-- Use the closest of available door points as current target
+			local best, bestD = nil, math.huge
+			for _, p in ipairs(wp.points) do
+				local d = (LocalOrigin - p):Length()
+				if d < bestD then
+					best, bestD = p, d
+				end
+			end
+			if best then
+				destPos = best
+			end
+			if bestD < (G.Misc.NodeTouchDistance * 1.5) then
+				Navigation.AdvanceWaypoint()
+				Navigation.ResetTickTimer()
+			end
+		elseif wp.pos then
+			destPos = wp.pos
+			local distToWp = (LocalOrigin - destPos):Length()
+			if distToWp < (G.Misc.NodeTouchDistance * 1.5) then
+				Navigation.AdvanceWaypoint()
+				Navigation.ResetTickTimer()
+			end
 		end
 	end
 

@@ -231,6 +231,8 @@ function Navigation.RemoveCurrentNode()
 		table.remove(G.Navigation.path, 1)
 		-- currentNodeIndex stays at 1 since we always target the first node in the remaining path
 		G.Navigation.currentNodeIndex = 1
+		-- Rebuild door waypoints to reflect new leading edge
+		Navigation.BuildDoorWaypointsFromPath()
 	end
 end
 
@@ -255,9 +257,35 @@ function Navigation.BuildDoorWaypointsFromPath()
 	for i = 1, #path - 1 do
 		local a, b = path[i], path[i + 1]
 		if a and b and a.pos and b.pos then
-			local door = Node.GetDoorTargetPoint(a, b)
-			if door then
-				table.insert(G.Navigation.waypoints, { pos = door, kind = "door", fromId = a.id, toId = b.id })
+			-- Collect all available door points for this edge
+			local entry = Node.GetConnectionEntry(a, b)
+			if entry and (entry.left or entry.middle or entry.right) then
+				local points = {}
+				if entry.left then
+					table.insert(points, entry.left)
+				end
+				if entry.middle then
+					table.insert(points, entry.middle)
+				end
+				if entry.right then
+					table.insert(points, entry.right)
+				end
+				table.insert(G.Navigation.waypoints, {
+					kind = "door",
+					fromId = a.id,
+					toId = b.id,
+					points = points,
+					dir = entry.dir,
+				})
+			else
+				-- Fallback: use Node helper for a single door target
+				local single = Node.GetDoorTargetPoint(a, b)
+				if single then
+					table.insert(
+						G.Navigation.waypoints,
+						{ kind = "door", fromId = a.id, toId = b.id, points = { single } }
+					)
+				end
 			end
 			table.insert(G.Navigation.waypoints, { pos = b.pos, kind = "center", areaId = b.id })
 		end
@@ -286,6 +314,30 @@ function Navigation.AdvanceWaypoint()
 		Navigation.RemoveCurrentNode()
 	end
 	G.Navigation.currentWaypointIndex = idx + 1
+end
+
+function Navigation.SkipWaypoints(count)
+	local wpList = G.Navigation.waypoints
+	if not wpList then
+		return
+	end
+	local idx = (G.Navigation.currentWaypointIndex or 1) + (count or 1)
+	if idx < 1 then
+		idx = 1
+	end
+	if idx > #wpList + 1 then
+		idx = #wpList + 1
+	end
+	-- If we skip over a center, reflect area progression
+	local current = G.Navigation.waypoints[G.Navigation.currentWaypointIndex or 1]
+	if current and current.kind ~= "center" then
+		for j = (G.Navigation.currentWaypointIndex or 1), math.min(idx - 1, #wpList) do
+			if wpList[j].kind == "center" and G.Navigation.path and #G.Navigation.path > 0 then
+				Navigation.RemoveCurrentNode()
+			end
+		end
+	end
+	G.Navigation.currentWaypointIndex = idx
 end
 
 -- Function to convert degrees to radians
