@@ -659,48 +659,48 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	-- Only consider the two facing sides (no cross-side mapping). Use overlap along their shared axis.
-	local tL, tR, minDiff = findReachableSpan(aLeft, aRight, bLeft, bRight)
+	-- Detect downward one-way first to bypass any bidirectional clamping logic
+	local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
+	local bZ = (areaB.nw.z + areaB.ne.z + areaB.se.z + areaB.sw.z) * 0.25
+	local isDownwardOneWay = (bZ < aZ - 0.5)
 
-	-- If normal reachable-span fails, allow one-way DOWNWARD connections (falling).
-	local isDownwardOneWay = false
-	if not tL then
-		-- Compare average heights of areas to detect downward transition
-		local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
-		local bZ = (areaB.nw.z + areaB.ne.z + areaB.se.z + areaB.sw.z) * 0.25
-		if bZ < aZ - 0.5 then
-			isDownwardOneWay = true
-			-- Build overlap domain directly and accept it regardless of height delta
-			local p = computeOverlapParams(aLeft, aRight, bLeft, bRight)
-			if not p then
-				return nil
-			end
-			local tAL = p.tAL or 0.0
-			local tAR = p.tAR or 1.0
-			-- Apply a small clearance similar to findReachableSpan
-			local domainMin, domainMax = p.oMin, p.oMax
-			local widthA = p.aMax - p.aMin
-			local widthB = p.bMax - p.bMin
-			local clearance = HITBOX_WIDTH
-			if widthA > (2 * clearance) then
-				domainMin = math.max(domainMin, p.aMin + clearance)
-				domainMax = math.min(domainMax, p.aMax - clearance)
-			end
-			if widthB > (2 * clearance) then
-				domainMin = math.max(domainMin, p.bMin + clearance)
-				domainMax = math.min(domainMax, p.bMax - clearance)
-			end
-			local denomA = (p.a1 - p.a0)
-			local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tAL
-			local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tAR
-			-- Clamp
-			tLval = math.max(tAL, math.max(0, math.min(1, tLval)))
-			tRval = math.min(tAR, math.max(0, math.min(1, tRval)))
-			tRval = math.max(tLval, tRval)
-			tL, tR = tLval, tRval
-		else
+	local tL, tR
+	if isDownwardOneWay then
+		-- Build overlap domain directly and accept it regardless of height delta
+		local p = computeOverlapParams(aLeft, aRight, bLeft, bRight)
+		if not p then
 			return nil
 		end
+		local tAL = p.tAL or 0.0
+		local tAR = p.tAR or 1.0
+		-- Apply clearance only when there is ample width; otherwise keep raw domain (no corner clamping)
+		local domainMin, domainMax = p.oMin, p.oMax
+		local widthA = p.aMax - p.aMin
+		local widthB = p.bMax - p.bMin
+		local clearance = HITBOX_WIDTH
+		if widthA > (2 * clearance) then
+			domainMin = math.max(domainMin, p.aMin + clearance)
+			domainMax = math.min(domainMax, p.aMax - clearance)
+		end
+		if widthB > (2 * clearance) then
+			domainMin = math.max(domainMin, p.bMin + clearance)
+			domainMax = math.min(domainMax, p.bMax - clearance)
+		end
+		local denomA = (p.a1 - p.a0)
+		local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tAL
+		local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tAR
+		-- Clamp
+		tLval = math.max(tAL, math.max(0, math.min(1, tLval)))
+		tRval = math.min(tAR, math.max(0, math.min(1, tRval)))
+		tRval = math.max(tLval, tRval)
+		tL, tR = tLval, tRval
+	else
+		-- Only consider the two facing sides (no cross-side mapping). Use overlap along their shared axis.
+		local tL2, tR2 = findReachableSpan(aLeft, aRight, bLeft, bRight)
+		if not tL2 then
+			return nil
+		end
+		tL, tR = tL2, tR2
 	end
 
 	local aDoorLeft = lerpVec(aLeft, aRight, tL)
