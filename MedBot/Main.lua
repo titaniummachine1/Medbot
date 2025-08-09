@@ -1077,13 +1077,14 @@ function moveTowardsNode(userCmd, node)
 		local nextNode = path[2]
 		if isConnectionBlocked(currentNode, nextNode) then
 			Log:Warn(
-				"Early circuit breaker detection: connection %d -> %d is BLOCKED, forcing immediate repath",
+				"Early circuit breaker detection: connection %d -> %d is BLOCKED, attempting center recovery",
 				currentNode.id,
 				nextNode.id
 			)
-			G.currentState = G.States.PATHFINDING
-			G.lastPathfindingTick = 0
-			Navigation.ClearPath() -- Force new path when blocked connection detected early
+			G.Navigation.recoverToCenter = true
+			G.Navigation.edgeStage = nil
+			G.Navigation.edgeKey = nil
+			Navigation.ResetTickTimer()
 			ProfilerEnd()
 			ProfilerEnd()
 			return
@@ -1553,16 +1554,25 @@ local function OnCreateMove(userCmd)
 	end
 	ProfilerEnd()
 
-	-- STATE HANDLING: Rearrange the conditions for better performance
+	-- STATE HANDLING: Schedule via WorkManager to smooth CPU spikes
 	ProfilerBegin("state_handling")
-	if G.currentState == G.States.MOVING then
-		handleMovingState(userCmd)
-	elseif G.currentState == G.States.PATHFINDING then
-		handlePathfindingState()
-	elseif G.currentState == G.States.IDLE then
-		handleIdleState()
-	elseif G.currentState == G.States.STUCK then
-		handleStuckState(userCmd)
+	local state = G.currentState
+	if state == G.States.MOVING then
+		if WorkManager.attemptWork(1, "State.MOVING") then
+			handleMovingState(userCmd)
+		end
+	elseif state == G.States.PATHFINDING then
+		if WorkManager.attemptWork(1, "State.PATHFINDING") then
+			handlePathfindingState()
+		end
+	elseif state == G.States.IDLE then
+		if WorkManager.attemptWork(2, "State.IDLE") then -- run at most every 2 ticks
+			handleIdleState()
+		end
+	elseif state == G.States.STUCK then
+		if WorkManager.attemptWork(1, "State.STUCK") then
+			handleStuckState(userCmd)
+		end
 	end
 	ProfilerEnd()
 
