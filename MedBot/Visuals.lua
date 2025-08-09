@@ -317,47 +317,49 @@ local function OnDraw()
 
     -- Show connections between nav nodes (colored by directionality)
     if G.Menu.Visuals.showConnections then
-		for id, entry in pairs(visibleNodes) do
-			local node = entry.node
-			for dir = 1, 4 do
-				local cDir = node.c[dir]
-				if cDir and cDir.connections then
+        for id, entry in pairs(visibleNodes) do
+            local node = entry.node
+            for dir = 1, 4 do
+                local cDir = node.c[dir]
+                if cDir and cDir.connections then
                     for _, conn in ipairs(cDir.connections) do
                         local nid = (type(conn) == "table") and conn.node or conn
-                        local otherEntry = visibleNodes[nid]
-						if otherEntry then
-							local s1, s2 = entry.screen, otherEntry.screen
-							-- determine if other->id exists in its connections
-							local bidir = false
-							local otherNode = otherEntry.node
-							for d2 = 1, 4 do
-								local otherCDir = otherNode.c[d2]
-								if otherCDir and otherCDir.connections then
-                                    for _, backConn in ipairs(otherCDir.connections) do
-                                        local backId = (type(backConn) == "table") and backConn.node or backConn
-                                        if backId == id then
-											bidir = true
-											break
-										end
-									end
-									if bidir then
-										break
-									end
-								end
-							end
-							-- yellow for two-way, red for one-way
-							if bidir then
-								draw.Color(255, 255, 0, 100)
-							else
-								draw.Color(255, 0, 0, 70)
-							end
-                            draw.Line(s1[1], s1[2], s2[1], s2[2])
-						end
-					end
-				end
-			end
-		end
-	end
+                        local otherNode = G.Navigation.nodes and G.Navigation.nodes[nid]
+                        if otherNode then
+                            local s1 = client.WorldToScreen(node.pos)
+                            local s2 = client.WorldToScreen(otherNode.pos)
+                            if s1 and s2 then
+                                -- determine if other->id exists in its connections
+                                local bidir = false
+                                for d2 = 1, 4 do
+                                    local otherCDir = otherNode.c[d2]
+                                    if otherCDir and otherCDir.connections then
+                                        for _, backConn in ipairs(otherCDir.connections) do
+                                            local backId = (type(backConn) == "table") and backConn.node or backConn
+                                            if backId == id then
+                                                bidir = true
+                                                break
+                                            end
+                                        end
+                                        if bidir then
+                                            break
+                                        end
+                                    end
+                                end
+                                -- yellow for two-way, red for one-way
+                                if bidir then
+                                    draw.Color(255, 255, 0, 100)
+                                else
+                                    draw.Color(255, 0, 0, 70)
+                                end
+                                draw.Line(s1[1], s1[2], s2[1], s2[2])
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     -- Draw Doors (left, middle, right) if enabled
     if G.Menu.Visuals.showDoors then
