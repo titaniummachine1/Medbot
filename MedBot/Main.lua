@@ -172,6 +172,32 @@ local function cleanupCircuitBreaker()
 	if cleaned > 0 then
 		Log:Debug("Circuit breaker cleaned up %d old entries", cleaned)
 	end
+
+	-- Hard cap: prune oldest non-blocked entries when table grows too large
+	local limit = 1000
+	local count = 0
+	for _ in pairs(ConnectionCircuitBreaker.failures) do
+		count = count + 1
+	end
+	if count > limit then
+		-- Collect candidates (non-blocked) sorted by oldest lastFailTime
+		local cand = {}
+		for key, f in pairs(ConnectionCircuitBreaker.failures) do
+			if not f.isBlocked then
+				table.insert(cand, { key = key, t = f.lastFailTime or 0 })
+			end
+		end
+		table.sort(cand, function(a, b)
+			return a.t < b.t
+		end)
+		local toRemove = math.min(#cand, count - limit)
+		for i = 1, toRemove do
+			ConnectionCircuitBreaker.failures[cand[i].key] = nil
+		end
+		if toRemove > 0 then
+			Log:Debug("Circuit breaker pruned %d oldest entries (cap=%d)", toRemove, limit)
+		end
+	end
 end
 
 --[[ Path Optimiser ]]
@@ -1466,6 +1492,22 @@ local function OnCreateMove(userCmd)
 			end
 			if cleaned > 0 then
 				Log:Debug("Cleaned up %d old walkability cache entries", cleaned)
+			end
+			-- Cap cache size aggressively to avoid unbounded growth
+			local count = 0
+			for _ in pairs(G.walkabilityCache) do
+				count = count + 1
+			end
+			if count > 2000 then
+				local removed = 0
+				for k, _ in pairs(G.walkabilityCache) do
+					G.walkabilityCache[k] = nil
+					removed = removed + 1
+					if removed >= (count - 2000) then
+						break
+					end
+				end
+				Log:Debug("Pruned walkability cache by %d entries (cap=2000)", removed)
 			end
 		end
 

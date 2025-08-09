@@ -248,7 +248,14 @@ end
 
 -- Build waypoints: for each edge A->B, add the door target then B center
 function Navigation.BuildDoorWaypointsFromPath()
-	G.Navigation.waypoints = {}
+	-- reuse existing table to avoid churn
+	if not G.Navigation.waypoints then
+		G.Navigation.waypoints = {}
+	else
+		for i = #G.Navigation.waypoints, 1, -1 do
+			G.Navigation.waypoints[i] = nil
+		end
+	end
 	G.Navigation.currentWaypointIndex = 1
 	local path = G.Navigation.path
 	if not path or #path == 0 then
