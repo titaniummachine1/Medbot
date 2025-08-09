@@ -1268,6 +1268,11 @@ function moveTowardsNode(userCmd, node)
 			if bestD < (G.Misc.NodeTouchDistance * 1.5) then
 				Navigation.AdvanceWaypoint()
 				Navigation.ResetTickTimer()
+				-- Refresh waypoint to avoid drawing stale door residue
+				wp = Navigation.GetCurrentWaypoint()
+				if wp and wp.pos then
+					destPos = wp.pos
+				end
 			end
 		elseif wp.pos then
 			destPos = wp.pos
@@ -1275,6 +1280,15 @@ function moveTowardsNode(userCmd, node)
 			if distToWp < (G.Misc.NodeTouchDistance * 1.5) then
 				Navigation.AdvanceWaypoint()
 				Navigation.ResetTickTimer()
+				-- After advancing center, publish next target if any
+				local nextWp = Navigation.GetCurrentWaypoint()
+				if nextWp then
+					if nextWp.pos then
+						destPos = nextWp.pos
+					elseif nextWp.points and #nextWp.points > 0 then
+						destPos = nextWp.points[1]
+					end
+				end
 			end
 		end
 	end

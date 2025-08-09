@@ -222,6 +222,7 @@ function Navigation.SetCurrentPath(path)
 	pcall(setmetatable, G.Navigation.path, { __mode = "v" })
 	G.Navigation.currentNodeIndex = 1 -- Start from the first node (start) and work towards goal
 	-- Build door-aware waypoint list for precise movement and visuals
+	--ProfilerBegin and ProfilerEnd are not available here, so rely on caller's profiling
 	Navigation.BuildDoorWaypointsFromPath()
 end
 

@@ -31,6 +31,7 @@ local Lib = Common.Lib
 local Notify = Lib.UI.Notify
 local Fonts = Lib.UI.Fonts
 local tahoma_bold = draw.CreateFont("Tahoma", 12, 800, FONTFLAG_OUTLINE)
+local Log = Common.Log.new("Visuals")
 
 -- Grid-based rendering helpers
 local gridIndex = {}
@@ -42,50 +43,49 @@ Visuals.lastRenderChunks = nil
 
 --[[ Functions ]]
 local function Draw3DBox(size, pos)
-	local halfSize = size / 2
-	if not corners then
-		corners1 = {
-			Vector3(-halfSize, -halfSize, -halfSize),
-			Vector3(halfSize, -halfSize, -halfSize),
-			Vector3(halfSize, halfSize, -halfSize),
-			Vector3(-halfSize, halfSize, -halfSize),
-			Vector3(-halfSize, -halfSize, halfSize),
-			Vector3(halfSize, -halfSize, halfSize),
-			Vector3(halfSize, halfSize, halfSize),
-			Vector3(-halfSize, halfSize, halfSize),
-		}
-	end
+    local halfSize = size / 2
+    -- Recompute corners every call to ensure correct size; caching caused wrong sizes
+    local corners = {
+        Vector3(-halfSize, -halfSize, -halfSize),
+        Vector3(halfSize, -halfSize, -halfSize),
+        Vector3(halfSize, halfSize, -halfSize),
+        Vector3(-halfSize, halfSize, -halfSize),
+        Vector3(-halfSize, -halfSize, halfSize),
+        Vector3(halfSize, -halfSize, halfSize),
+        Vector3(halfSize, halfSize, halfSize),
+        Vector3(-halfSize, halfSize, halfSize),
+    }
 
-	local linesToDraw = {
-		{ 1, 2 },
-		{ 2, 3 },
-		{ 3, 4 },
-		{ 4, 1 },
-		{ 5, 6 },
-		{ 6, 7 },
-		{ 7, 8 },
-		{ 8, 5 },
-		{ 1, 5 },
-		{ 2, 6 },
-		{ 3, 7 },
-		{ 4, 8 },
-	}
+    local linesToDraw = {
+        { 1, 2 },
+        { 2, 3 },
+        { 3, 4 },
+        { 4, 1 },
+        { 5, 6 },
+        { 6, 7 },
+        { 7, 8 },
+        { 8, 5 },
+        { 1, 5 },
+        { 2, 6 },
+        { 3, 7 },
+        { 4, 8 },
+    }
 
-	local screenPositions = {}
-	for _, cornerPos in ipairs(corners1) do
-		local worldPos = pos + cornerPos
-		local screenPos = client.WorldToScreen(worldPos)
-		if screenPos then
-			table.insert(screenPositions, { x = screenPos[1], y = screenPos[2] })
-		end
-	end
+    local screenPositions = {}
+    for _, cornerPos in ipairs(corners) do
+        local worldPos = pos + cornerPos
+        local screenPos = client.WorldToScreen(worldPos)
+        if screenPos then
+            table.insert(screenPositions, { x = screenPos[1], y = screenPos[2] })
+        end
+    end
 
-	for _, line in ipairs(linesToDraw) do
-		local p1, p2 = screenPositions[line[1]], screenPositions[line[2]]
-		if p1 and p2 then
-			draw.Line(p1.x, p1.y, p2.x, p2.y)
-		end
-	end
+    for _, line in ipairs(linesToDraw) do
+        local p1, p2 = screenPositions[line[1]], screenPositions[line[2]]
+        if p1 and p2 then
+            draw.Line(p1.x, p1.y, p2.x, p2.y)
+        end
+    end
 end
 
 local UP_VECTOR = Vector3(0, 0, 1)
@@ -305,29 +305,28 @@ local function OnDraw()
         return
     end
 
-        if G.Navigation.path then
-		-- Visualizing agents
-		local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
-			and G.Navigation.path[G.Navigation.FirstAgentNode].pos
-		local agent2Pos = G.Navigation.path[G.Navigation.SecondAgentNode]
-			and G.Navigation.path[G.Navigation.SecondAgentNode].pos
+    if G.Menu.Visuals.showAgentBoxes and G.Navigation.path then
+        -- Visualizing agents (optional)
+        local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
+            and G.Navigation.path[G.Navigation.FirstAgentNode].pos
+        local agent2Pos = G.Navigation.path[G.Navigation.SecondAgentNode]
+            and G.Navigation.path[G.Navigation.SecondAgentNode].pos
 
-		if agent1Pos then
-			local screenPos1 = client.WorldToScreen(agent1Pos)
-			if screenPos1 then
-				draw.Color(255, 255, 255, 255) -- White color for the first agent
-				Draw3DBox(10, agent1Pos) -- Smaller size for the first agent
-			end
-		end
-	end
-
-    if agent2Pos then
-		local screenPos2 = client.WorldToScreen(agent2Pos)
-		if screenPos2 then
-			draw.Color(0, 255, 0, 255) -- Green color for the second agent
-			Draw3DBox(20, agent2Pos) -- Larger size for the second agent
-		end
-	end
+        if agent1Pos then
+            local screenPos1 = client.WorldToScreen(agent1Pos)
+            if screenPos1 then
+                draw.Color(255, 255, 255, 255)
+                Draw3DBox(10, agent1Pos)
+            end
+        end
+        if agent2Pos then
+            local screenPos2 = client.WorldToScreen(agent2Pos)
+            if screenPos2 then
+                draw.Color(0, 255, 0, 255)
+                Draw3DBox(20, agent2Pos)
+            end
+        end
+    end
 
     -- Show connections between nav nodes (colored by directionality)
     if G.Menu.Visuals.showConnections then
@@ -601,7 +600,10 @@ local function OnDraw()
     if G.Menu.Visuals.drawPath then
         local wps = G.Navigation.waypoints
         if wps and #wps > 0 then
-            for i = 1, #wps - 1 do
+            -- Draw remaining route only from current waypoint onward to avoid residue arrows
+            local startIdx = G.Navigation.currentWaypointIndex or 1
+            if startIdx < 1 then startIdx = 1 end
+            for i = startIdx, #wps - 1 do
                 local a, b = wps[i], wps[i + 1]
                 local aPos = a.pos
                 local bPos = b.pos

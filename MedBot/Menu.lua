@@ -183,9 +183,9 @@ local function OnDrawMenu()
 			G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 			TimMenu.NextLine()
 
-			G.Menu.Visuals.renderDistance = G.Menu.Visuals.renderDistance or 800
-			G.Menu.Visuals.renderDistance =
-				TimMenu.Slider("Render Distance", G.Menu.Visuals.renderDistance, 100, 3000, 100)
+			-- Align naming with visuals: renderRadius is what Visuals.lua reads
+			G.Menu.Visuals.renderRadius = G.Menu.Visuals.renderRadius or G.Menu.Visuals.renderDistance or 800
+			G.Menu.Visuals.renderRadius = TimMenu.Slider("Render Radius", G.Menu.Visuals.renderRadius, 100, 3000, 100)
 			TimMenu.NextLine()
 
 			G.Menu.Visuals.chunkSize = G.Menu.Visuals.chunkSize or 256
