@@ -611,14 +611,15 @@ local function OnDraw()
                 if not bPos and b.kind == "door" and b.points and #b.points > 0 then
                     bPos = b.points[math.ceil(#b.points / 2)]
                 end
-                if aPos and bPos and withinRadius(aPos) and withinRadius(bPos) then
+                local inRad = withinRadius(aPos or p) and withinRadius(bPos or p)
+                if aPos and bPos and (G.Menu.Visuals.ignorePathRadius or inRad) then
                     draw.Color(255, 255, 255, 220) -- white route
                     ArrowLine(aPos, bPos, 18, 12, false)
                 end
             end
             -- Current target indicator + box at the target
             local tgt = G.Navigation.currentTargetPos
-            if tgt and withinRadius(tgt) then
+            if tgt and (G.Menu.Visuals.ignorePathRadius or withinRadius(tgt)) then
                 -- Arrow color logic: white normal, red if stuck & not walkable, yellow if stuck & walkable
                 local arrowR, arrowG, arrowB = 255, 255, 255
                 if G.currentState == G.States.STUCK then

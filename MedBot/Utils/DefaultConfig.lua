@@ -26,6 +26,8 @@ defaultconfig = {
 		renderChunks = 3,
 		EnableVisuals = true,
 		memoryUsage = true,
+		ignorePathRadius = true, -- When true, path lines ignore render radius and draw full route
+		showAgentBoxes = false, -- Optional legacy agent 3D boxes
 		-- Combo-based display options
 		basicDisplay = { false, false, false, true, true }, -- Show Nodes, Node IDs, Nav Connections, Areas, Doors
 		-- Individual settings (automatically set by combo selections)
