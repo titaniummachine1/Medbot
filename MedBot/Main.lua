@@ -1122,11 +1122,18 @@ function moveTowardsNode(userCmd, node)
 	ProfilerEnd()
 
 	ProfilerBegin("distance_check")
-	local horizontalDist = math.abs(LocalOrigin.x - node.pos.x) + math.abs(LocalOrigin.y - node.pos.y)
-	local verticalDist = math.abs(LocalOrigin.z - node.pos.z)
+	local targetCenter = node.pos
+	if G.Navigation.path and #G.Navigation.path > 1 then
+		targetCenter = G.Navigation.path[2].pos
+	end
+	local horizontalDist = math.abs(LocalOrigin.x - targetCenter.x) + math.abs(LocalOrigin.y - targetCenter.y)
+	local verticalDist = math.abs(LocalOrigin.z - targetCenter.z)
 
 	-- Check if we've reached the current node
 	if (horizontalDist < G.Misc.NodeTouchDistance) and verticalDist <= G.Misc.NodeTouchHeight then
+		-- Entered next area center: reset edge stage and advance path
+		G.Navigation.edgeStage = nil
+		G.Navigation.edgeKey = nil
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 
@@ -1156,6 +1163,7 @@ function moveTowardsNode(userCmd, node)
 		if (now - G.lastNodeSkipTick) >= 3 then -- run every 3 ticks (~50 ms)
 			G.lastNodeSkipTick = now
 			local skipped = false
+			-- Skip only when safe with door semantics
 			if Optimiser.skipIfCloser(LocalOrigin, G.Navigation.path) then
 				skipped = true
 			elseif Optimiser.skipIfWalkable(LocalOrigin, G.Navigation.path) then
@@ -1177,7 +1185,7 @@ function moveTowardsNode(userCmd, node)
 	-- Store current button state before WalkTo (SmartJump may have set jump/duck buttons)
 	local originalButtons = userCmd.buttons
 
-	-- Prefer door transition points when traversing between areas
+	-- Prefer door transition points when traversing between areas, then move to next area center
 	local destPos = node.pos
 	local path = G.Navigation.path
 	if path and #path > 1 then
@@ -1186,7 +1194,22 @@ function moveTowardsNode(userCmd, node)
 		if currentArea and nextArea and currentArea.id and nextArea.id then
 			local doorTarget = Node.GetDoorTargetPoint(currentArea, nextArea)
 			if doorTarget then
-				destPos = doorTarget
+				-- Stage machine: go to door first, then area center
+				G.Navigation.edgeKey = tostring(currentArea.id) .. "->" .. tostring(nextArea.id)
+				if G.Navigation.edgeStage ~= "toCenter" then
+					destPos = doorTarget
+					local distToDoor = (LocalOrigin - doorTarget):Length()
+					if distToDoor < (G.Misc.NodeTouchDistance * 1.5) then
+						G.Navigation.edgeStage = "toCenter"
+					else
+						G.Navigation.edgeStage = "toDoor"
+					end
+				else
+					destPos = nextArea.pos
+				end
+				-- Reset door stage when the edge changes due to a skip
+				G.Navigation.edgeStage = nil
+				G.Navigation.edgeKey = nil
 			end
 		end
 	end

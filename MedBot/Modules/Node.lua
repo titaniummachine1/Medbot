@@ -258,6 +258,7 @@ local function normalizeConnectionEntry(entry)
 		entry.left = entry.left or (entry.door and entry.door.left) or nil
 		entry.middle = entry.middle or (entry.door and (entry.door.middle or entry.door.mid)) or nil
 		entry.right = entry.right or (entry.door and entry.door.right) or nil
+		entry.dir = entry.dir or (entry.door and entry.door.dir) or nil
 		entry.door = nil -- flatten to keep structure simple per project philosophy
 		return entry
 	else
@@ -268,6 +269,7 @@ local function normalizeConnectionEntry(entry)
 			left = nil,
 			middle = nil,
 			right = nil,
+			dir = nil,
 		}
 	end
 end
@@ -703,13 +705,8 @@ local function createDoorForAreas(areaA, areaB)
 
 	local aDoorLeft = lerpVec(aLeft, aRight, tL)
 	local aDoorRight = lerpVec(aLeft, aRight, tR)
-	-- If this is a one-way downward door and the usable span is too tiny (< 48u), drop it to avoid single-dot doors
-	if isDownwardOneWay then
-		local spanWidth = (aDoorRight - aDoorLeft):Length2D()
-		if spanWidth < (HITBOX_WIDTH * 2) then
-			return nil
-		end
-	end
+	-- Do not clamp away from corners for one-way downward doors when width < 48u (keep them),
+	-- but still report the direction so movement can choose the best point.
 	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
 
 	-- Need jump if any endpoint in the chosen span needs >18 and <72
@@ -718,7 +715,18 @@ local function createDoorForAreas(areaA, areaB)
 	local needJump = (leftEndDiff > STEP_HEIGHT and leftEndDiff < MAX_JUMP)
 		or (rightEndDiff > STEP_HEIGHT and rightEndDiff < MAX_JUMP)
 
-	return { left = aDoorLeft, middle = mid, right = aDoorRight, needJump = needJump }
+	-- Compute cardinal direction string from A to B
+	local dx, dy = cardinalDirectionFromBounds(areaA, areaB)
+	local dirStr = (dx == 1 and "E") or (dx == -1 and "W") or (dy == 1 and "N") or (dy == -1 and "S") or "N"
+
+	return {
+		left = aDoorLeft,
+		middle = mid,
+		right = aDoorRight,
+		needJump = needJump,
+		dir = dirStr,
+		oneWayDown = isDownwardOneWay,
+	}
 end
 
 function Node.BuildDoorsForConnections()
@@ -751,6 +759,8 @@ function Node.BuildDoorsForConnections()
 								entry.middle = door.middle
 								entry.right = door.right
 								entry.needJump = door.needJump and true or false
+								entry.dir = door.dir
+								entry.oneWayDown = door.oneWayDown and true or false
 								updated[#updated + 1] = entry
 							else
 								-- Drop unreachable connection
@@ -828,8 +838,10 @@ function Node.GetDoorTargetPoint(areaA, areaB)
 	-- Prefer precomputed door points on the connection
 	local entry = Node.GetConnectionEntry(areaA, areaB)
 	local doorLeft, doorMid, doorRight = nil, nil, nil
+	local dirOverride = nil
 	if entry then
 		doorLeft, doorMid, doorRight = entry.left, entry.middle, entry.right
+		dirOverride = entry.dir
 	end
 
 	-- If we lack door points, try constructing them on the fly
@@ -853,6 +865,17 @@ function Node.GetDoorTargetPoint(areaA, areaB)
 
 	-- Choose side by cardinal direction: E=right, W=left, N/S=middle
 	local dirX, dirY = cardinalDirectionFromBounds(areaA, areaB)
+	if dirOverride then
+		if dirOverride == "E" then
+			dirX, dirY = 1, 0
+		elseif dirOverride == "W" then
+			dirX, dirY = -1, 0
+		elseif dirOverride == "N" then
+			dirX, dirY = 0, 1
+		elseif dirOverride == "S" then
+			dirX, dirY = 0, -1
+		end
+	end
 	local target = nil
 	if dirX == 1 then
 		target = doorRight or doorMid or doorLeft
