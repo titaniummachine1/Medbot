@@ -1251,6 +1251,9 @@ function moveTowardsNode(userCmd, node)
 		end
 	end
 
+	-- Publish the current movement target for visuals
+	G.Navigation.currentTargetPos = destPos
+
 	-- Use superior physics-accurate movement from standstill dummy
 	WalkTo(userCmd, G.pLocal.entity, destPos)
 

@@ -2,6 +2,7 @@
 local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
+local isWalkable = require("MedBot.Modules.ISWalkable")
 
 -- Optional profiler support
 local Profiler = nil
@@ -587,58 +588,68 @@ local function OnDraw()
 		end
 	end
 
-    -- Draw current path with door-aware waypoints
+    -- Draw only the actual-followed path using door-aware waypoints, with a live target arrow
     if G.Menu.Visuals.drawPath then
-        local path = G.Navigation.path
-        if path and #path > 0 then
-            draw.Color(255, 255, 255, 255)
-            for i = 1, #path - 1 do
-                local a, b = path[i], path[i + 1]
-                if a and b and a.pos and b.pos then
-                    ArrowLine(a.pos, b.pos, 22, 15, false)
-                end
-            end
-        end
         local wps = G.Navigation.waypoints
         if wps and #wps > 0 then
-            -- Lines between resolved waypoint positions
             for i = 1, #wps - 1 do
                 local a, b = wps[i], wps[i + 1]
                 local aPos = a.pos
                 local bPos = b.pos
                 if not aPos and a.kind == "door" and a.points and #a.points > 0 then
-                    -- For a door waypoint, use median of its points as representative
-                    local mid = a.points[math.ceil(#a.points / 2)]
-                    aPos = mid
+                    aPos = a.points[math.ceil(#a.points / 2)]
                 end
                 if not bPos and b.kind == "door" and b.points and #b.points > 0 then
-                    local midb = b.points[math.ceil(#b.points / 2)]
-                    bPos = midb
+                    bPos = b.points[math.ceil(#b.points / 2)]
                 end
                 if aPos and bPos then
-                    draw.Color(0, 255, 0, 220)
+                    draw.Color(255, 255, 255, 220) -- white route
                     ArrowLine(aPos, bPos, 18, 12, false)
                 end
             end
-            -- Markers for door points (half size) and centers (full size)
+            -- Current target indicator
+            local tgt = G.Navigation.currentTargetPos
+            if tgt then
+                -- Arrow color logic: white normal, red if stuck & not walkable, yellow if stuck & walkable
+                local arrowR, arrowG, arrowB = 255, 255, 255
+                if G.currentState == G.States.STUCK then
+                    local now = globals.TickCount()
+                    if not G._lastStuckWalkableTick or (now - G._lastStuckWalkableTick) > 15 then
+                        local me = entities.GetLocalPlayer()
+                        local mePos = me and me:GetAbsOrigin()
+                        local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+                        G._lastStuckWalkableResult = (mePos and isWalkable.Path(mePos, tgt, walkMode)) or false
+                        G._lastStuckWalkableTick = now
+                    end
+                    if G._lastStuckWalkableResult then
+                        arrowR, arrowG, arrowB = 255, 255, 0 -- yellow: stuck but walkable
+                    else
+                        arrowR, arrowG, arrowB = 255, 0, 0 -- red: stuck and blocked
+                    end
+                end
+                draw.Color(arrowR, arrowG, arrowB, 255)
+                local me = entities.GetLocalPlayer()
+                if me then
+                    local mePos = me:GetAbsOrigin()
+                    ArrowLine(mePos, tgt, 22, 16, false)
+                end
+            end
+            -- Door points markers half size
             for i = 1, #wps do
                 local w = wps[i]
                 if w.kind == "door" and w.points then
-                    draw.Color(0, 200, 255, 255) -- cyan door points
+                    draw.Color(0, 200, 255, 255)
                     for _, p in ipairs(w.points) do
                         local s = client.WorldToScreen(p)
                         if s then
-                            draw.FilledRect(s[1] - 2, s[2] - 2, s[1] + 2, s[2] + 2) -- half size marker
+                            draw.FilledRect(s[1] - 2, s[2] - 2, s[1] + 2, s[2] + 2)
                         end
                     end
-                else
-                    local p = w.pos
-                    if p then
-                        local s = client.WorldToScreen(p)
-                        if s then
-                            draw.Color(0, 255, 0, 255) -- green center
-                            draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
-                        end
+                elseif w.pos then
+                    local s = client.WorldToScreen(w.pos)
+                    if s then
+                        draw.Color(255, 255, 255, 255) -- centers as white squares
+                        draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
                     end
                 end
             end
