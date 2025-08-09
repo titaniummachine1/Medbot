@@ -200,16 +200,19 @@ function Optimiser.skipIfCloser(origin, path)
 end
 
 function Optimiser.skipIfWalkable(origin, path)
-	if not path or #path < 2 then
+	-- We assume the immediate next node (path[2]) is already walkable.
+	-- Skip ONLY if we can walk directly to the node after next (path[3]).
+	if not path or #path < 3 then
 		return false
 	end
-	local nextNode = path[2]
+	local candidate = path[3]
 	local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-	-- For final nodes, use aggressive mode to avoid stopping short of goals
-	if #path == 2 then
+	-- If the candidate is the last node (goal), be more aggressive
+	if #path == 3 then
 		walkMode = "Aggressive"
 	end
-	if nextNode and isWalkable.Path(origin, nextNode.pos, walkMode) then
+	if candidate and candidate.pos and isWalkable.Path(origin, candidate.pos, walkMode) then
+		-- Drop the current node and keep moving toward the now-next node
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 		return true
