@@ -725,29 +725,9 @@ function handleMovingState(userCmd)
 
 	moveTowardsNode(userCmd, currentNode)
 
-	-- Simple stuck handling: immediate repath and optional penalty if next leg is unwalkable
+	-- Only detect stuck; actual penalties applied in STUCK state every ~1s
 	if G.Navigation.currentNodeTicks > 66 then
-		local pathNow = G.Navigation.path
-		if pathNow and #pathNow > 1 then
-			local fromNode = pathNow[1]
-			local toNode = pathNow[2]
-			if fromNode and toNode and fromNode.id and toNode.id and fromNode.id ~= toNode.id then
-				local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-				if not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode) then
-					-- Apply penalty to the area-level connection (Node.AddFailurePenalty resolves parentArea)
-					Node.AddFailurePenalty(fromNode, toNode, 100)
-					Log:Info(
-						"Unwalkable to current target - added 100 penalty to connection %d -> %d",
-						fromNode.id,
-						toNode.id
-					)
-				end
-			end
-		end
-		G.Navigation.stuckStartTick = nil
-		Navigation.ResetTickTimer()
-		G.currentState = G.States.PATHFINDING
-		G.lastPathfindingTick = 0
+		G.currentState = G.States.STUCK
 		ProfilerEnd()
 		return
 	end
@@ -757,29 +737,74 @@ end
 
 -- Function to handle the STUCK state
 function handleStuckState(userCmd)
-	ProfilerBegin("stuck_state_simple")
+	ProfilerBegin("stuck_state_penalise_backtrace")
+
+	local currentTick = globals.TickCount()
+	if not G.Navigation._lastStuckEval then
+		G.Navigation._lastStuckEval = 0
+	end
+
+	-- Evaluate roughly every second (~66 ticks)
+	if (currentTick - G.Navigation._lastStuckEval) < 66 then
+		ProfilerEnd()
+		return
+	end
+	G.Navigation._lastStuckEval = currentTick
 
 	local path = G.Navigation.path
 	if path and #path > 1 then
 		local fromNode = path[1]
 		local toNode = path[2]
 		if fromNode and toNode and fromNode.id and toNode.id and fromNode.id ~= toNode.id then
-			-- Use Smooth/Aggressive from menu; Smooth implies 18u step height inside isWalkable
 			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-			if not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode) then
-				-- Penalize the door transfer by applying cost to its parent areas
-				Node.AddFailurePenalty(fromNode, toNode, 100)
-				Log:Info("STUCK: added 100 penalty to connection %d -> %d and repathing", fromNode.id, toNode.id)
+			local blocked = not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode)
+
+			if blocked then
+				-- Build up to three edges: prev2->prev1, prev1->fromNode, fromNode->toNode
+				local edges = {}
+				local hist = G.Navigation.pathHistory or {}
+				-- Edge 1: prev2 -> prev1
+				if hist[2] and hist[1] then
+					edges[#edges + 1] = { a = hist[2], b = hist[1] }
+				end
+				-- Edge 2: prev1 -> fromNode
+				if hist[1] then
+					edges[#edges + 1] = { a = hist[1], b = fromNode }
+				end
+				-- Edge 3: fromNode -> toNode
+				edges[#edges + 1] = { a = fromNode, b = toNode }
+
+				for _, e in ipairs(edges) do
+					if e.a and e.b and e.a.id and e.b.id and e.a.id ~= e.b.id then
+						Node.AddFailurePenalty(e.a, e.b, 100)
+					end
+				end
+
+				Log:Info("STUCK: penalised up to 3 recent edges near %d -> %d and repathing", fromNode.id, toNode.id)
+
+				-- Clear traversal history for the new attempt
+				G.Navigation.pathHistory = {}
+
+				-- Trigger repath and continue
+				Navigation.ResetTickTimer()
+				G.currentState = G.States.PATHFINDING
+				G.lastPathfindingTick = 0
+				ProfilerEnd()
+				return
+			else
+				-- Not blocked anymore: resume moving
+				Navigation.ResetTickTimer()
+				G.currentState = G.States.MOVING
+				ProfilerEnd()
+				return
 			end
 		end
 	end
 
-	-- Immediate repath and continue
-	G.Navigation.stuckStartTick = nil
+	-- Fallback: if no path or invalid, return to PATHFINDING
 	Navigation.ResetTickTimer()
 	G.currentState = G.States.PATHFINDING
 	G.lastPathfindingTick = 0
-
 	ProfilerEnd()
 end
 

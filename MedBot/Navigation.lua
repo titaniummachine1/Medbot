@@ -20,6 +20,7 @@ local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
 local Visuals = require("MedBot.Visuals")
 local AStar = require("MedBot.Utils.A-Star")
+local DStar = require("MedBot.Utils.DStar")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -211,6 +212,8 @@ function Navigation.ClearPath()
 	-- Also clear door/center/goal waypoints to avoid stale movement/visuals
 	G.Navigation.waypoints = {}
 	G.Navigation.currentWaypointIndex = 1
+	-- Clear path traversal history used by stuck analysis
+	G.Navigation.pathHistory = {}
 end
 
 -- Set the current path
@@ -227,6 +230,8 @@ function Navigation.SetCurrentPath(path)
 	-- Build door-aware waypoint list for precise movement and visuals
 	--ProfilerBegin and ProfilerEnd are not available here, so rely on caller's profiling
 	Navigation.BuildDoorWaypointsFromPath()
+	-- Reset traversal history on new path
+	G.Navigation.pathHistory = {}
 end
 
 -- Remove the current node from the path (we've reached it)
@@ -234,7 +239,16 @@ function Navigation.RemoveCurrentNode()
 	G.Navigation.currentNodeTicks = 0
 	if G.Navigation.path and #G.Navigation.path > 0 then
 		-- Remove the first node (current node we just reached)
-		table.remove(G.Navigation.path, 1)
+		local reached = table.remove(G.Navigation.path, 1)
+		-- Track reached nodes from last to first
+		if reached then
+			G.Navigation.pathHistory = G.Navigation.pathHistory or {}
+			table.insert(G.Navigation.pathHistory, 1, reached)
+			-- Bound history size
+			if #G.Navigation.pathHistory > 32 then
+				table.remove(G.Navigation.pathHistory)
+			end
+		end
 		-- currentNodeIndex stays at 1 since we always target the first node in the remaining path
 		G.Navigation.currentNodeIndex = 1
 		-- Rebuild door waypoints to reflect new leading edge
@@ -498,8 +512,9 @@ function Navigation.FindPath(startNode, goalNode)
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
-	-- Simple A* pathfinding on main areas only (subnodes removed)
-	G.Navigation.path = AStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+	-- Prefer D* for dynamic costs; fallback to A* if needed
+	-- Use D* exclusively for pathfinding
+	G.Navigation.path = DStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 
 	if not G.Navigation.path or #G.Navigation.path == 0 then
 		Log:Error("Failed to find path from %d to %d!", startNode.id, goalNode.id)
@@ -507,12 +522,14 @@ function Navigation.FindPath(startNode, goalNode)
 		Navigation.pathFailed = true
 		Navigation.pathFound = false
 	else
-		Log:Info("Simple A* path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
+		Log:Info("D* path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
 		Navigation.pathFound = true
 		Navigation.pathFailed = false
 		pcall(setmetatable, G.Navigation.path, { __mode = "v" })
 		-- Refresh waypoints to reflect current door usage
 		Navigation.BuildDoorWaypointsFromPath()
+		-- Reset traversed-node history for new path
+		G.Navigation.pathHistory = {}
 	end
 
 	return Navigation
