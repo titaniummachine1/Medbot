@@ -185,8 +185,15 @@ local function OnDrawMenu()
 			-- Node Display Section
 			TimMenu.BeginSector("Display Options")
 			-- Basic display options
-			local basicOptions = { "Show Nodes", "Show Node IDs", "Show Nav Connections", "Show Areas", "Show Doors" }
-			G.Menu.Visuals.basicDisplay = G.Menu.Visuals.basicDisplay or { true, true, true, true, true }
+			local basicOptions = {
+				"Show Nodes",
+				"Show Node IDs",
+				"Show Nav Connections",
+				"Show Areas",
+				"Show Doors",
+				"Show Corner Connections",
+			}
+			G.Menu.Visuals.basicDisplay = G.Menu.Visuals.basicDisplay or { true, true, true, true, true, false }
 			G.Menu.Visuals.basicDisplay = TimMenu.Combo("Basic Display", G.Menu.Visuals.basicDisplay, basicOptions)
 			TimMenu.NextLine()
 
@@ -196,6 +203,7 @@ local function OnDrawMenu()
 			G.Menu.Visuals.showConnections = G.Menu.Visuals.basicDisplay[3]
 			G.Menu.Visuals.showAreas = G.Menu.Visuals.basicDisplay[4]
 			G.Menu.Visuals.showDoors = G.Menu.Visuals.basicDisplay[5]
+			G.Menu.Visuals.showCornerConnections = G.Menu.Visuals.basicDisplay[6]
 			TimMenu.EndSector()
 		end
 

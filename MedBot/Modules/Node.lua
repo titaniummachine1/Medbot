@@ -704,7 +704,124 @@ local function hasConnectionInDirection(area, checkDirX, checkDirY)
 	return #foundConnections > 0
 end
 
--- STEP 2: Detect wall constraints (REPLACEABLE - proper connection detection)
+-- STEP 2: Calculate shared area alignment between two areas
+local function calculateSharedAreaAlignment(areaA, areaB, geometry)
+	-- Get the edges of both areas that face each other
+	local aLeft, aRight = geometry.aLeft, geometry.aRight
+	local bLeft, bRight = geometry.bLeft, geometry.bRight
+
+	-- Calculate overlap on X axis
+	local minX_A, maxX_A = math.min(aLeft.x, aRight.x), math.max(aLeft.x, aRight.x)
+	local minX_B, maxX_B = math.min(bLeft.x, bRight.x), math.max(bLeft.x, bRight.x)
+	local overlapStartX = math.max(minX_A, minX_B)
+	local overlapEndX = math.min(maxX_A, maxX_B)
+
+	-- Calculate overlap on Y axis
+	local minY_A, maxY_A = math.min(aLeft.y, aRight.y), math.max(aLeft.y, aRight.y)
+	local minY_B, maxY_B = math.min(bLeft.y, bRight.y), math.max(bLeft.y, bRight.y)
+	local overlapStartY = math.max(minY_A, minY_B)
+	local overlapEndY = math.min(maxY_A, maxY_B)
+
+	-- Use the axis with valid overlap
+	local overlapStart, overlapEnd, edgeStart, edgeEnd
+	if overlapEndX > overlapStartX then
+		-- Use X axis overlap
+		overlapStart, overlapEnd = overlapStartX, overlapEndX
+		edgeStart, edgeEnd = minX_A, maxX_A
+	elseif overlapEndY > overlapStartY then
+		-- Use Y axis overlap
+		overlapStart, overlapEnd = overlapStartY, overlapEndY
+		edgeStart, edgeEnd = minY_A, maxY_A
+	else
+		-- No overlap
+		return nil
+	end
+
+	-- Check if overlap is wide enough for passage
+	local overlapLength = overlapEnd - overlapStart
+	if overlapLength < HITBOX_WIDTH then
+		return nil
+	end
+
+	-- Convert to normalized coordinates (0.0 to 1.0)
+	local edgeLength = edgeEnd - edgeStart
+	if edgeLength < 0.1 then
+		return nil
+	end
+
+	local tStart = math.max(0.0, (overlapStart - edgeStart) / edgeLength)
+	local tEnd = math.min(1.0, (overlapEnd - edgeStart) / edgeLength)
+
+	return { tL = tStart, tR = tEnd }
+end
+
+-- STEP 3: Check jump height compatibility
+local function checkJumpHeightCompatibility(areaA, areaB)
+	-- Calculate average Z heights of both areas
+	local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
+	local bZ = (areaB.nw.z + areaB.ne.z + areaB.se.z + areaB.sw.z) * 0.25
+
+	-- Check if height difference is within jumpable range
+	local heightDiff = math.abs(bZ - aZ)
+	local maxJumpHeight = 64 -- Maximum jumpable height difference
+
+	return heightDiff <= maxJumpHeight
+end
+
+-- STEP 4: Apply outer corner clamping (24 units from outer corners)
+local function applyOuterCornerClamping(geometry, span, areaA)
+	local tL, tR = span.tL, span.tR
+	local doorWidth = (tR - tL) * geometry.edgeLength
+
+	-- Don't clamp if door is already 24 units or less
+	if doorWidth <= 24 then
+		return tL, tR
+	end
+
+	-- Calculate actual door positions
+	local doorLeft = geometry.aLeft + (geometry.aRight - geometry.aLeft) * tL
+	local doorRight = geometry.aLeft + (geometry.aRight - geometry.aLeft) * tR
+
+	-- Check distance to outer corners and clamp if needed
+	local clampDistance = 24
+	local clampLeft, clampRight = false, false
+
+	-- Check all corners of current area
+	local areaCorners = { areaA.nw, areaA.ne, areaA.se, areaA.sw }
+	for _, corner in ipairs(areaCorners) do
+		if G.OuterCorners and G.OuterCorners[corner] then
+			-- This is an outer corner, check distances
+			local distToLeft = (doorLeft - corner):Length()
+			local distToRight = (doorRight - corner):Length()
+
+			if distToLeft < clampDistance then
+				clampLeft = true
+			end
+			if distToRight < clampDistance then
+				clampRight = true
+			end
+		end
+	end
+
+	-- Apply clamping by moving door points away from outer corners
+	if clampLeft then
+		tL = tL + (clampDistance / geometry.edgeLength)
+	end
+	if clampRight then
+		tR = tR - (clampDistance / geometry.edgeLength)
+	end
+
+	-- Ensure door doesn't become too narrow after clamping
+	local newDoorWidth = (tR - tL) * geometry.edgeLength
+	if newDoorWidth < HITBOX_WIDTH then
+		-- Revert to original if clamping made it too narrow
+		return span.tL, span.tR
+	end
+
+	return tL, tR
+end
+
+-- OLD FUNCTION: Detect wall constraints (REPLACEABLE - proper connection detection)
 local function detectWallConstraints(areaA, areaB, geometry)
 	-- If edge is too narrow for any clamping, skip all limits
 	if geometry.edgeLength < 48 then -- Less than 2 * 24 units
@@ -877,7 +994,7 @@ local function generateDoorPoints(geometry, finalTL, finalTR)
 	}
 end
 
--- MAIN: Modular door creation function
+-- MAIN: Modular door creation function with proper 3-step process
 local function createDoorForAreas(areaA, areaB)
 	-- Step 1: Get basic geometry
 	local geometry = getDoorGeometry(areaA, areaB)
@@ -885,17 +1002,19 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	-- Step 2: Detect constraints (EASILY REPLACEABLE)
-	local constraints = detectWallConstraints(areaA, areaB, geometry)
-
-	-- Step 3: Calculate base door span
-	local span = calculateBaseDoorSpan(geometry)
+	-- Step 2: Calculate shared area alignment (ensures door is in overlapping region)
+	local span = calculateSharedAreaAlignment(areaA, areaB, geometry)
 	if not span then
-		return nil
+		return nil -- No shared area between the two regions
 	end
 
-	-- Step 4: Apply constraints (EASILY REPLACEABLE)
-	local finalTL, finalTR = applyDoorConstraints(geometry, span, constraints)
+	-- Step 3: Check jump height compatibility
+	if not checkJumpHeightCompatibility(areaA, areaB) then
+		return nil -- Height difference too large to jump
+	end
+
+	-- Step 4: Apply outer corner clamping (24 units from outer corners)
+	local finalTL, finalTR = applyOuterCornerClamping(geometry, span, areaA)
 
 	-- Step 5: Generate final door
 	return generateDoorPoints(geometry, finalTL, finalTR)
@@ -1063,19 +1182,29 @@ function Node.BuildDoorsForConnections()
 	local wallPoints = 0
 	local insidePoints = 0
 
-	-- Store both wall corners and proximity scores for display
-	G.WallCorners = {}
-	G.WallCornerScores = {} -- Clear previous scores
+	-- First: Store all corners for debugging/menu option
+	G.AllCorners = {}
+
+	-- Second: Identify outer corners and store them for door clamping logic
+	G.OuterCorners = {}
+	G.WallCorners = {} -- For visualization (offset +2 units)
+	G.WallCornerScores = {} -- For displaying proximity numbers
 
 	for point, proximity in pairs(areaCornerProximity) do
 		totalPoints = totalPoints + 1
-		-- Proper logic: 0 or 1 neighbors = wall corner, 2+ neighbors = inside
+
+		-- Store all corners (for debug menu option)
+		G.AllCorners[point] = true
+
+		-- Identify outer corners (proximity <= 1) and flag them
 		if proximity <= 1 then
 			wallPoints = wallPoints + 1
-			-- Store wall corner 2 units above the area corner
+			-- Store original corner as outer corner for door clamping logic
+			G.OuterCorners[point] = true
+
+			-- Store offset corner for visualization (2 units above)
 			local wallCorner = point + Vector3(0, 0, 2)
 			table.insert(G.WallCorners, wallCorner)
-			-- Store proximity score for display
 			G.WallCornerScores[wallCorner] = proximity
 		else
 			insidePoints = insidePoints + 1
@@ -1086,6 +1215,9 @@ function Node.BuildDoorsForConnections()
 			Log:Info("Corner proximity: (%0.1f, %0.1f, %0.1f) = %d", point.x, point.y, point.z, proximity)
 		end
 	end
+
+	-- Clean up: Remove proximity scores to save memory (we only need outer corner flags)
+	G.AllCornerScores = nil
 
 	Log:Info(
 		"Area corner analysis: %d total, %d wall corners (proximity <= 1), %d inside (proximity >= 2)",
