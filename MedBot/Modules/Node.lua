@@ -460,6 +460,106 @@ local function distance3D(p, q)
 	return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
+-- 2D helpers for robust shared-edge computation
+local function dot2D(ax, ay, bx, by)
+	return ax * bx + ay * by
+end
+
+local function length2D(ax, ay)
+	return math.sqrt(ax * ax + ay * ay)
+end
+
+local function distancePointToSegment2D(px, py, ax, ay, bx, by)
+	local vx, vy = bx - ax, by - ay
+	local wx, wy = px - ax, py - ay
+	local vv = vx * vx + vy * vy
+	local t = vv > 0 and ((wx * vx + wy * vy) / vv) or 0
+	if t < 0 then
+		t = 0
+	elseif t > 1 then
+		t = 1
+	end
+	local cx, cy = ax + t * vx, ay + t * vy
+	local dx, dy = px - cx, py - cy
+	return math.sqrt(dx * dx + dy * dy)
+end
+
+-- Compute robust shared span parameters along A-edge, with lateral tolerance to handle slight shears
+-- Returns tL, tR on [0,1] for the A edge, or nil if no valid shared span of sufficient width
+local function computeRobustSharedSpanOnA(aLeft, aRight, bLeft, bRight, minWidth)
+	local EPS_LATERAL = 2.5
+	local reqWidth = minWidth or HITBOX_WIDTH
+
+	-- Direction of A edge (2D)
+	local dax, day = aRight.x - aLeft.x, aRight.y - aLeft.y
+	local lenA = length2D(dax, day)
+	if lenA < 0.001 then
+		return nil
+	end
+	local ux, uy = dax / lenA, day / lenA
+
+	-- Project B endpoints onto A axis (measured from aLeft)
+	local sB0 = dot2D(bLeft.x - aLeft.x, bLeft.y - aLeft.y, ux, uy)
+	local sB1 = dot2D(bRight.x - aLeft.x, bRight.y - aLeft.y, ux, uy)
+	local bMin = math.min(sB0, sB1)
+	local bMax = math.max(sB0, sB1)
+
+	-- Overlap of [0,lenA] with [bMin,bMax]
+	local s0 = math.max(0, bMin)
+	local s1 = math.min(lenA, bMax)
+	if s1 <= s0 then
+		return nil
+	end
+
+	-- Shrink ends until points are within lateral tolerance of B segment
+	local function distToBSegAtS(s)
+		local px, py = aLeft.x + ux * s, aLeft.y + uy * s
+		return distancePointToSegment2D(px, py, bLeft.x, bLeft.y, bRight.x, bRight.y)
+	end
+
+	-- Left end shrink
+	for _ = 1, 10 do
+		local d = distToBSegAtS(s0)
+		if d <= EPS_LATERAL then
+			break
+		end
+		s0 = 0.5 * (s0 + s1)
+		if s1 - s0 < reqWidth then
+			break
+		end
+	end
+	-- Right end shrink
+	for _ = 1, 10 do
+		local d = distToBSegAtS(s1)
+		if d <= EPS_LATERAL then
+			break
+		end
+		s1 = 0.5 * (s0 + s1)
+		if s1 - s0 < reqWidth then
+			break
+		end
+	end
+
+	if s1 <= s0 then
+		return nil
+	end
+
+	-- Ensure minimum width
+	if (s1 - s0) < reqWidth then
+		return nil
+	end
+
+	local tL = s0 / lenA
+	local tR = s1 / lenA
+	-- Clamp to [0,1]
+	tL = math.max(0.0, math.min(1.0, tL))
+	tR = math.max(0.0, math.min(1.0, tR))
+	if tL >= tR then
+		return nil
+	end
+	return tL, tR
+end
+
 -- Spec-compliant side selection:
 -- Compare A_left<->B_left vs A_right<->B_right and keep the orientation with the shorter distance.
 -- If distances are equal, keep as-is (stable – do nothing).
@@ -1003,13 +1103,18 @@ local function generateDoorPoints(geometry, finalTL, finalTR)
 	-- Calculate center AFTER clamping (center moves based on door point positions)
 	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
 
-	-- Check if jump is needed
+	-- Check if jump is needed (sample left, mid, right)
 	local leftEndDiff =
 		absZDiff(lerpVec(geometry.aLeft, geometry.aRight, finalTL), lerpVec(geometry.bLeft, geometry.bRight, finalTL))
 	local rightEndDiff =
 		absZDiff(lerpVec(geometry.aLeft, geometry.aRight, finalTR), lerpVec(geometry.bLeft, geometry.bRight, finalTR))
-	local needJump = (leftEndDiff > STEP_HEIGHT and leftEndDiff < MAX_JUMP)
-		or (rightEndDiff > STEP_HEIGHT and rightEndDiff < MAX_JUMP)
+	local tMid = 0.5 * (finalTL + finalTR)
+	local midDiff =
+		absZDiff(lerpVec(geometry.aLeft, geometry.aRight, tMid), lerpVec(geometry.bLeft, geometry.bRight, tMid))
+	local function isJumpRange(d)
+		return d > STEP_HEIGHT and d < MAX_JUMP
+	end
+	local needJump = isJumpRange(leftEndDiff) or isJumpRange(midDiff) or isJumpRange(rightEndDiff)
 
 	-- Get direction string
 	local dirStr = (geometry.dirAX == 1 and "E")
@@ -1036,123 +1141,43 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	-- Calculate the shared line between the two areas
+	-- Use A's facing edge as the parameterization and clamp to the true shared segment with tolerance
 	local aLeft, aRight = geometry.aLeft, geometry.aRight
 	local bLeft, bRight = geometry.bLeft, geometry.bRight
 
-	-- Find the overlap on the shared axis
-	local minX_A, maxX_A = math.min(aLeft.x, aRight.x), math.max(aLeft.x, aRight.x)
-	local minX_B, maxX_B = math.min(bLeft.x, bRight.x), math.max(bLeft.x, bRight.x)
-	local minY_A, maxY_A = math.min(aLeft.y, aRight.y), math.max(aLeft.y, aRight.y)
-	local minY_B, maxY_B = math.min(bLeft.y, bRight.y), math.max(bLeft.y, bRight.y)
+	-- Align B's left/right orientation to A to minimize endpoint mismatch
+	bLeft, bRight = chooseMappingPreferShorterSide(aLeft, aRight, bLeft, bRight)
 
-	-- Use the axis with valid overlap
-	local overlapStart, overlapEnd, edgeStart, edgeEnd
-	local useAreaA = true -- Default to areaA
+	-- First, try robust 2D span with lateral tolerance (best for shears)
+	local tL, tR = computeRobustSharedSpanOnA(aLeft, aRight, bLeft, bRight, HITBOX_WIDTH)
 
-	if math.max(minX_A, minX_B) < math.min(maxX_A, maxX_B) then
-		-- X axis overlap
-		overlapStart = math.max(minX_A, minX_B)
-		overlapEnd = math.min(maxX_A, maxX_B)
-
-		-- Determine which area has the smaller X edge
-		local areaA_XLength = maxX_A - minX_A
-		local areaB_XLength = maxX_B - minX_B
-
-		if areaB_XLength < areaA_XLength then
-			-- Use areaB's edge (smaller)
-			edgeStart, edgeEnd = minX_B, maxX_B
-			useAreaA = false
-		else
-			-- Use areaA's edge (smaller or equal)
-			edgeStart, edgeEnd = minX_A, maxX_A
-			useAreaA = true
+	-- Fallback 1: if robust span fails, try reachable span (respects jump limits)
+	if not (tL and tR) then
+		local rL, rR = findReachableSpan(aLeft, aRight, bLeft, bRight)
+		if rL and rR then
+			tL, tR = rL, rR
 		end
-	elseif math.max(minY_A, minY_B) < math.min(maxY_A, maxY_B) then
-		-- Y axis overlap
-		overlapStart = math.max(minY_A, minY_B)
-		overlapEnd = math.min(maxY_A, maxY_B)
-
-		-- Determine which area has the smaller Y edge
-		local areaA_YLength = maxY_A - minY_A
-		local areaB_YLength = maxY_B - minY_B
-
-		if areaB_YLength < areaA_YLength then
-			-- Use areaB's edge (smaller)
-			edgeStart, edgeEnd = minY_B, maxY_B
-			useAreaA = false
-		else
-			-- Use areaA's edge (smaller or equal)
-			edgeStart, edgeEnd = minY_A, maxY_A
-			useAreaA = true
-		end
-	else
-		return nil -- No overlap
 	end
 
-	-- Convert to normalized coordinates (0.0 to 1.0) on the smaller area's edge
-	local edgeLength = edgeEnd - edgeStart
-	if edgeLength < 0.1 then
+	-- Fallback 2: if still no span, use axis-overlap method along A edge
+	if not (tL and tR) then
+		local span = calculateSharedAreaAlignment(areaA, areaB, geometry)
+		if span then
+			tL, tR = span.tL, span.tR
+		end
+	end
+
+	if not (tL and tR) then
 		return nil
 	end
 
-	local tL = math.max(0.0, (overlapStart - edgeStart) / edgeLength)
-	local tR = math.min(1.0, (overlapEnd - edgeStart) / edgeLength)
-
-	-- Debug logging for specific problematic areas
-	if (areaA.id == 60 and areaB.id == 373) or (areaA.id == 373 and areaB.id == 60) then
-		Log:Info("DOOR DEBUG Area %d->%d:", areaA.id, areaB.id)
-		Log:Info("  aLeft=(%.1f,%.1f) aRight=(%.1f,%.1f)", aLeft.x, aLeft.y, aRight.x, aRight.y)
-		Log:Info("  bLeft=(%.1f,%.1f) bRight=(%.1f,%.1f)", bLeft.x, bLeft.y, bRight.x, bRight.y)
-		Log:Info("  A bounds: X(%.1f,%.1f) Y(%.1f,%.1f)", minX_A, maxX_A, minY_A, maxY_A)
-		Log:Info("  B bounds: X(%.1f,%.1f) Y(%.1f,%.1f)", minX_B, maxX_B, minY_B, maxY_B)
-		Log:Info(
-			"  Overlap: (%.1f,%.1f) Edge: (%.1f,%.1f) Length: %.1f (using %s)",
-			overlapStart,
-			overlapEnd,
-			edgeStart,
-			edgeEnd,
-			edgeLength,
-			useAreaA and "AreaA" or "AreaB"
-		)
-		Log:Info("  Final tL=%.3f tR=%.3f Door width=%.1f", tL, tR, (tR - tL) * edgeLength)
-	end
-
-	-- Ensure valid door
-	if tL >= tR or (tR - tL) * edgeLength < HITBOX_WIDTH then
-		if (areaA.id == 60 and areaB.id == 373) or (areaA.id == 373 and areaB.id == 60) then
-			Log:Info(
-				"DOOR REJECTED: Area %d->%d tL=%.3f tR=%.3f width=%.1f",
-				areaA.id,
-				areaB.id,
-				tL,
-				tR,
-				(tR - tL) * edgeLength
-			)
-		end
+	-- Ensure resulting door lies strictly within A's edge and meets width
+	local doorWidth = (tR - tL) * geometry.edgeLength
+	if doorWidth < HITBOX_WIDTH then
 		return nil
 	end
 
-	-- Generate door points using the correct area's geometry
-	if useAreaA then
-		-- Use areaA's geometry (already correct)
-		return generateDoorPoints(geometry, tL, tR)
-	else
-		-- Use areaB's geometry - need to swap the geometry
-		local swappedGeometry = {
-			aLeft = geometry.bLeft,
-			aRight = geometry.bRight,
-			bLeft = geometry.aLeft,
-			bRight = geometry.aRight,
-			edgeLength = edgeLength,
-			dirAX = geometry.dirBX,
-			dirAY = geometry.dirBY,
-			dirBX = geometry.dirAX,
-			dirBY = geometry.dirAY,
-			isDownwardOneWay = geometry.isDownwardOneWay,
-		}
-		return generateDoorPoints(swappedGeometry, tL, tR)
-	end
+	return generateDoorPoints(geometry, tL, tR)
 end
 
 -- Global storage for wall corner visualization
@@ -1442,9 +1467,14 @@ function Node.BuildDoorsForConnections()
 								local keepCurrentDirection = true
 								if reverseEntry then
 									-- Calculate how much of each area's edge the door spans
-									local currentSpanRatio = doorWidthAB / geometry.edgeLength
-									local reverseSpanRatio = reverseWidth
-										/ (reverseEntry.right - reverseEntry.left):Length()
+									local geomAB = getDoorGeometry(areaA, neighbor)
+									local geomBA = getDoorGeometry(neighbor, areaA)
+									local currentSpanRatio = geomAB
+											and (doorWidthAB / math.max(geomAB.edgeLength, 0.001))
+										or 1.0
+									local reverseSpanRatio = (
+										geomBA and (reverseWidth / math.max(geomBA.edgeLength, 0.001))
+									) or 1.0
 
 									-- Debug for our problem areas
 									if (id == 60 and neighborId == 373) or (id == 373 and neighborId == 60) then
