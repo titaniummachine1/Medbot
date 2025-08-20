@@ -635,143 +635,224 @@ local function findReachableSpan(aLeft, aRight, bLeft, bRight)
 	return nil
 end
 
-local function createDoorForAreas(areaA, areaB)
-	-- Determine axis-aligned facing sides: A faces toward B; B faces back toward A
+-- STEP 1: Get basic door geometry and direction info
+local function getDoorGeometry(areaA, areaB)
 	local dirAX, dirAY = cardinalDirectionFromBounds(areaA, areaB)
 	local dirBX, dirBY = -dirAX, -dirAY
 	local aLeft, aRight = getFacingEdgeCorners(areaA, dirAX, dirAY, areaB.pos)
 	local bLeft, bRight = getFacingEdgeCorners(areaB, dirBX, dirBY, areaA.pos)
+
 	if not (aLeft and aRight and bLeft and bRight) then
 		return nil
 	end
 
-	-- Helper to check if area has connection in given direction
-	local function hasConnectionInDirection(area, checkDirX, checkDirY)
-		if not area.c then
-			return false
-		end
-		for _, cDir in pairs(area.c) do
-			if cDir and cDir.connections then
-				for _, conn in ipairs(cDir.connections) do
-					local neighborId = getConnectionNodeId(conn)
-					local neighbor = G.Navigation.nodes and G.Navigation.nodes[neighborId]
-					if neighbor then
-						local nDirX, nDirY = cardinalDirectionFromBounds(area, neighbor)
-						if nDirX == checkDirX and nDirY == checkDirY then
-							return true
-						end
+	-- Detect downward one-way connections
+	local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
+	local bZ = (areaB.nw.z + areaB.ne.z + areaB.se.z + areaB.sw.z) * 0.25
+	local isDownwardOneWay = (bZ < aZ - 0.5)
+
+	return {
+		dirAX = dirAX,
+		dirAY = dirAY,
+		aLeft = aLeft,
+		aRight = aRight,
+		bLeft = bLeft,
+		bRight = bRight,
+		isDownwardOneWay = isDownwardOneWay,
+		edgeLength = (aRight - aLeft):Length(),
+	}
+end
+
+-- Helper to check if area has connection in given direction
+local function hasConnectionInDirection(area, checkDirX, checkDirY)
+	if not area.c then
+		return false
+	end
+	for _, cDir in pairs(area.c) do
+		if cDir and cDir.connections then
+			for _, conn in ipairs(cDir.connections) do
+				local neighborId = getConnectionNodeId(conn)
+				local neighbor = G.Navigation.nodes and G.Navigation.nodes[neighborId]
+				if neighbor then
+					local nDirX, nDirY = cardinalDirectionFromBounds(area, neighbor)
+					if nDirX == checkDirX and nDirY == checkDirY then
+						return true
 					end
 				end
 			end
 		end
-		return false
+	end
+	return false
+end
+
+-- STEP 2: Detect wall constraints (REPLACEABLE - proper connection detection)
+local function detectWallConstraints(areaA, areaB, geometry)
+	-- If edge is too narrow for any clamping, skip all limits
+	if geometry.edgeLength < 48 then -- Less than 2 * 24 units
+		return {
+			leftNeedsLimit = false,
+			rightNeedsLimit = false,
+			leftLimit = HITBOX_WIDTH,
+			rightLimit = HITBOX_WIDTH,
+		}
 	end
 
-	-- Check which sides have no connections (meaning those corners are near walls)
+	-- Determine which corners are near walls by checking connections
 	local aLeftIsWall, aRightIsWall = false, false
 	local bLeftIsWall, bRightIsWall = false, false
 
-	if dirAX ~= 0 then -- Horizontal movement (E/W)
+	-- Check perpendicular directions to the door direction
+	if geometry.dirAX ~= 0 then -- Horizontal movement (E/W)
+		-- For East/West doors, check North/South connections
 		aLeftIsWall = not hasConnectionInDirection(areaA, 0, 1) -- No North connection = left wall
 		aRightIsWall = not hasConnectionInDirection(areaA, 0, -1) -- No South connection = right wall
 		bLeftIsWall = not hasConnectionInDirection(areaB, 0, 1) -- No North connection = left wall
 		bRightIsWall = not hasConnectionInDirection(areaB, 0, -1) -- No South connection = right wall
 	else -- Vertical movement (N/S)
+		-- For North/South doors, check East/West connections
 		aLeftIsWall = not hasConnectionInDirection(areaA, -1, 0) -- No West connection = left wall
 		aRightIsWall = not hasConnectionInDirection(areaA, 1, 0) -- No East connection = right wall
 		bLeftIsWall = not hasConnectionInDirection(areaB, -1, 0) -- No West connection = left wall
 		bRightIsWall = not hasConnectionInDirection(areaB, 1, 0) -- No East connection = right wall
 	end
 
-	-- Detect downward one-way first to bypass any bidirectional clamping logic
-	local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
-	local bZ = (areaB.nw.z + areaB.ne.z + areaB.se.z + areaB.sw.z) * 0.25
-	local isDownwardOneWay = (bZ < aZ - 0.5)
+	-- Apply limits only from wall corners
+	local edgeLimit = 24
+	local leftNeedsLimit = aLeftIsWall or bLeftIsWall
+	local rightNeedsLimit = aRightIsWall or bRightIsWall
 
-	local tL, tR
-	if isDownwardOneWay then
-		-- Build overlap domain directly and accept it regardless of height delta
-		local p = computeOverlapParams(aLeft, aRight, bLeft, bRight)
+	-- Calculate total limits needed
+	local totalLimit = 0
+	if leftNeedsLimit then
+		totalLimit = totalLimit + edgeLimit
+	end
+	if rightNeedsLimit then
+		totalLimit = totalLimit + edgeLimit
+	end
+
+	-- Check if there's enough space after applying wall limits
+	local availableWidth = geometry.edgeLength - totalLimit
+
+	if availableWidth >= HITBOX_WIDTH then
+		-- Enough space - apply limits only where walls exist
+		return {
+			leftNeedsLimit = leftNeedsLimit,
+			rightNeedsLimit = rightNeedsLimit,
+			leftLimit = leftNeedsLimit and edgeLimit or HITBOX_WIDTH,
+			rightLimit = rightNeedsLimit and edgeLimit or HITBOX_WIDTH,
+		}
+	else
+		-- Not enough space - skip limits to preserve door
+		return {
+			leftNeedsLimit = false,
+			rightNeedsLimit = false,
+			leftLimit = HITBOX_WIDTH,
+			rightLimit = HITBOX_WIDTH,
+		}
+	end
+end
+
+-- STEP 3: Calculate base door span (reachable area)
+local function calculateBaseDoorSpan(geometry)
+	if geometry.isDownwardOneWay then
+		-- For downward one-way, use overlap params
+		local p = computeOverlapParams(geometry.aLeft, geometry.aRight, geometry.bLeft, geometry.bRight)
 		if not p then
 			return nil
 		end
-		local tAL = p.tAL or 0.0
-		local tAR = p.tAR or 1.0
-		-- Apply clearance only when there is ample width; otherwise keep raw domain (no corner clamping)
+		return {
+			tL = p.tAL or 0.0,
+			tR = p.tAR or 1.0,
+			overlapParams = p,
+		}
+	else
+		-- For normal connections, use reachable span
+		local tL, tR = findReachableSpan(geometry.aLeft, geometry.aRight, geometry.bLeft, geometry.bRight)
+		if not tL then
+			return nil
+		end
+		return {
+			tL = tL,
+			tR = tR,
+			overlapParams = nil,
+		}
+	end
+end
+
+-- STEP 4: Apply constraints to door span (REPLACEABLE - main clamping logic)
+local function applyDoorConstraints(geometry, span, constraints)
+	local tL, tR = span.tL, span.tR
+
+	if geometry.isDownwardOneWay and span.overlapParams then
+		-- Downward one-way constraint application
+		local p = span.overlapParams
 		local domainMin, domainMax = p.oMin, p.oMax
 		local widthA = p.aMax - p.aMin
 		local widthB = p.bMax - p.bMin
-		local clearance = HITBOX_WIDTH
 
-		-- Apply 24-unit limit from walls, use clearance where connections exist
-		local edgeLimit = 24 -- 24 units from wall corners to avoid collisions
-
-		-- For area A: limit when EITHER area has a wall on that side
-		if widthA > (2 * math.max(clearance, edgeLimit)) then
-			local leftLimit = (aLeftIsWall or bLeftIsWall) and edgeLimit or clearance
-			local rightLimit = (aRightIsWall or bRightIsWall) and edgeLimit or clearance
-			domainMin = math.max(domainMin, p.aMin + leftLimit)
-			domainMax = math.min(domainMax, p.aMax - rightLimit)
+		-- Apply constraints to domain
+		if widthA > (2 * constraints.leftLimit) then
+			local leftOffset = constraints.leftNeedsLimit and constraints.leftLimit or HITBOX_WIDTH
+			local rightOffset = constraints.rightNeedsLimit and constraints.rightLimit or HITBOX_WIDTH
+			domainMin = math.max(domainMin, p.aMin + leftOffset)
+			domainMax = math.min(domainMax, p.aMax - rightOffset)
+		end
+		if widthB > (2 * constraints.leftLimit) then
+			local leftOffset = constraints.leftNeedsLimit and constraints.leftLimit or HITBOX_WIDTH
+			local rightOffset = constraints.rightNeedsLimit and constraints.rightLimit or HITBOX_WIDTH
+			domainMin = math.max(domainMin, p.bMin + leftOffset)
+			domainMax = math.min(domainMax, p.bMax - rightOffset)
 		end
 
-		-- For area B: limit when EITHER area has a wall on that side
-		if widthB > (2 * math.max(clearance, edgeLimit)) then
-			local leftLimit = (aLeftIsWall or bLeftIsWall) and edgeLimit or clearance
-			local rightLimit = (aRightIsWall or bRightIsWall) and edgeLimit or clearance
-			domainMin = math.max(domainMin, p.bMin + leftLimit)
-			domainMax = math.min(domainMax, p.bMax - rightLimit)
-		end
-
+		-- Convert back to parameters
 		local denomA = (p.a1 - p.a0)
-		local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tAL
-		local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tAR
-		-- Clamp
-		tLval = math.max(tAL, math.max(0, math.min(1, tLval)))
-		tRval = math.min(tAR, math.max(0, math.min(1, tRval)))
+		local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tL
+		local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tR
+
+		-- Clamp to valid range
+		tLval = math.max(tL, math.max(0, math.min(1, tLval)))
+		tRval = math.min(tR, math.max(0, math.min(1, tRval)))
 		tRval = math.max(tLval, tRval)
-		tL, tR = tLval, tRval
+
+		return tLval, tRval
 	else
-		-- Only consider the two facing sides (no cross-side mapping). Use overlap along their shared axis.
-		local tL2, tR2 = findReachableSpan(aLeft, aRight, bLeft, bRight)
-		if not tL2 then
-			return nil
-		end
-		tL, tR = tL2, tR2
-
-		-- Apply edge limiting logic for non-downward connections too
-		local edgeLimit = 24
-		local edgeLength = (aRight - aLeft):Length()
-
-		if edgeLength > 0 then
-			-- Apply limits when EITHER area has a wall on that side
-			if aLeftIsWall or bLeftIsWall then
-				local leftLimitRatio = edgeLimit / edgeLength
+		-- Normal connection constraint application
+		if geometry.edgeLength > 0 then
+			if constraints.leftNeedsLimit then
+				local leftLimitRatio = constraints.leftLimit / geometry.edgeLength
 				tL = math.max(tL, leftLimitRatio)
 			end
-			if aRightIsWall or bRightIsWall then
-				local rightLimitRatio = edgeLimit / edgeLength
+			if constraints.rightNeedsLimit then
+				local rightLimitRatio = constraints.rightLimit / geometry.edgeLength
 				tR = math.min(tR, 1.0 - rightLimitRatio)
 			end
 			tR = math.max(tL, tR) -- Ensure tR >= tL
 		end
-	end
 
-	local aDoorLeft = lerpVec(aLeft, aRight, tL)
-	local aDoorRight = lerpVec(aLeft, aRight, tR)
-	-- Do not clamp away from corners for one-way downward doors when width < 48u (keep them),
-	-- but still report the direction so movement can choose the best point.
-	-- Center is always the midpoint between left and right door points (can be asymmetrical)
+		return tL, tR
+	end
+end
+
+-- STEP 5: Generate final door points and metadata
+local function generateDoorPoints(geometry, finalTL, finalTR)
+	local aDoorLeft = lerpVec(geometry.aLeft, geometry.aRight, finalTL)
+	local aDoorRight = lerpVec(geometry.aLeft, geometry.aRight, finalTR)
 	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
 
-	-- Need jump if any endpoint in the chosen span needs >18 and <72
-	local leftEndDiff = absZDiff(lerpVec(aLeft, aRight, tL), lerpVec(bLeft, bRight, tL))
-	local rightEndDiff = absZDiff(lerpVec(aLeft, aRight, tR), lerpVec(bLeft, bRight, tR))
+	-- Check if jump is needed
+	local leftEndDiff =
+		absZDiff(lerpVec(geometry.aLeft, geometry.aRight, finalTL), lerpVec(geometry.bLeft, geometry.bRight, finalTL))
+	local rightEndDiff =
+		absZDiff(lerpVec(geometry.aLeft, geometry.aRight, finalTR), lerpVec(geometry.bLeft, geometry.bRight, finalTR))
 	local needJump = (leftEndDiff > STEP_HEIGHT and leftEndDiff < MAX_JUMP)
 		or (rightEndDiff > STEP_HEIGHT and rightEndDiff < MAX_JUMP)
 
-	-- Compute cardinal direction string from A to B
-	local dx, dy = cardinalDirectionFromBounds(areaA, areaB)
-	local dirStr = (dx == 1 and "E") or (dx == -1 and "W") or (dy == 1 and "N") or (dy == -1 and "S") or "N"
+	-- Get direction string
+	local dirStr = (geometry.dirAX == 1 and "E")
+		or (geometry.dirAX == -1 and "W")
+		or (geometry.dirAY == 1 and "N")
+		or (geometry.dirAY == -1 and "S")
+		or "N"
 
 	return {
 		left = aDoorLeft,
@@ -779,8 +860,32 @@ local function createDoorForAreas(areaA, areaB)
 		right = aDoorRight,
 		needJump = needJump,
 		dir = dirStr,
-		oneWayDown = isDownwardOneWay,
+		oneWayDown = geometry.isDownwardOneWay,
 	}
+end
+
+-- MAIN: Modular door creation function
+local function createDoorForAreas(areaA, areaB)
+	-- Step 1: Get basic geometry
+	local geometry = getDoorGeometry(areaA, areaB)
+	if not geometry then
+		return nil
+	end
+
+	-- Step 2: Detect constraints (EASILY REPLACEABLE)
+	local constraints = detectWallConstraints(areaA, areaB, geometry)
+
+	-- Step 3: Calculate base door span
+	local span = calculateBaseDoorSpan(geometry)
+	if not span then
+		return nil
+	end
+
+	-- Step 4: Apply constraints (EASILY REPLACEABLE)
+	local finalTL, finalTR = applyDoorConstraints(geometry, span, constraints)
+
+	-- Step 5: Generate final door
+	return generateDoorPoints(geometry, finalTL, finalTR)
 end
 
 function Node.BuildDoorsForConnections()
