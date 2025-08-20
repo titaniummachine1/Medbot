@@ -752,6 +752,30 @@ local function calculateSharedAreaAlignment(areaA, areaB, geometry)
 	local tStart = math.max(0.0, (overlapStart - edgeStart) / edgeLength)
 	local tEnd = math.min(1.0, (overlapEnd - edgeStart) / edgeLength)
 
+	-- Debug logging for misaligned doors
+	if tStart < -0.01 or tEnd > 1.01 or tStart >= tEnd then
+		Log:Info(
+			"SHARED AREA ISSUE: overlap=(%.3f,%.3f) edge=(%.3f,%.3f) t=(%.3f,%.3f) length=%.3f",
+			overlapStart,
+			overlapEnd,
+			edgeStart,
+			edgeEnd,
+			tStart,
+			tEnd,
+			overlapLength
+		)
+	end
+
+	-- Ensure proper bounds
+	tStart = math.max(0.0, math.min(1.0, tStart))
+	tEnd = math.max(0.0, math.min(1.0, tEnd))
+
+	-- Ensure left is less than right
+	if tStart >= tEnd then
+		Log:Info("SHARED AREA FAILED: tStart >= tEnd (%.3f >= %.3f)", tStart, tEnd)
+		return nil
+	end
+
 	return { tL = tStart, tR = tEnd }
 end
 
@@ -809,6 +833,16 @@ local function applyOuterCornerClamping(geometry, span, areaA)
 	end
 	if clampRight then
 		tR = tR - (clampDistance / geometry.edgeLength)
+	end
+
+	-- CRITICAL: Ensure door stays within the bounds of the source area (0.0 to 1.0)
+	tL = math.max(0.0, math.min(1.0, tL))
+	tR = math.max(0.0, math.min(1.0, tR))
+
+	-- Ensure left is always less than right
+	if tL >= tR then
+		tL = 0.0
+		tR = 1.0
 	end
 
 	-- Ensure door doesn't become too narrow after clamping
@@ -994,30 +1028,131 @@ local function generateDoorPoints(geometry, finalTL, finalTR)
 	}
 end
 
--- MAIN: Modular door creation function with proper 3-step process
+-- SIMPLE: Door creation - just use the shared line between areas
 local function createDoorForAreas(areaA, areaB)
-	-- Step 1: Get basic geometry
+	-- Get basic geometry
 	local geometry = getDoorGeometry(areaA, areaB)
 	if not geometry then
 		return nil
 	end
 
-	-- Step 2: Calculate shared area alignment (ensures door is in overlapping region)
-	local span = calculateSharedAreaAlignment(areaA, areaB, geometry)
-	if not span then
-		return nil -- No shared area between the two regions
+	-- Calculate the shared line between the two areas
+	local aLeft, aRight = geometry.aLeft, geometry.aRight
+	local bLeft, bRight = geometry.bLeft, geometry.bRight
+
+	-- Find the overlap on the shared axis
+	local minX_A, maxX_A = math.min(aLeft.x, aRight.x), math.max(aLeft.x, aRight.x)
+	local minX_B, maxX_B = math.min(bLeft.x, bRight.x), math.max(bLeft.x, bRight.x)
+	local minY_A, maxY_A = math.min(aLeft.y, aRight.y), math.max(aLeft.y, aRight.y)
+	local minY_B, maxY_B = math.min(bLeft.y, bRight.y), math.max(bLeft.y, bRight.y)
+
+	-- Use the axis with valid overlap
+	local overlapStart, overlapEnd, edgeStart, edgeEnd
+	local useAreaA = true -- Default to areaA
+
+	if math.max(minX_A, minX_B) < math.min(maxX_A, maxX_B) then
+		-- X axis overlap
+		overlapStart = math.max(minX_A, minX_B)
+		overlapEnd = math.min(maxX_A, maxX_B)
+
+		-- Determine which area has the smaller X edge
+		local areaA_XLength = maxX_A - minX_A
+		local areaB_XLength = maxX_B - minX_B
+
+		if areaB_XLength < areaA_XLength then
+			-- Use areaB's edge (smaller)
+			edgeStart, edgeEnd = minX_B, maxX_B
+			useAreaA = false
+		else
+			-- Use areaA's edge (smaller or equal)
+			edgeStart, edgeEnd = minX_A, maxX_A
+			useAreaA = true
+		end
+	elseif math.max(minY_A, minY_B) < math.min(maxY_A, maxY_B) then
+		-- Y axis overlap
+		overlapStart = math.max(minY_A, minY_B)
+		overlapEnd = math.min(maxY_A, maxY_B)
+
+		-- Determine which area has the smaller Y edge
+		local areaA_YLength = maxY_A - minY_A
+		local areaB_YLength = maxY_B - minY_B
+
+		if areaB_YLength < areaA_YLength then
+			-- Use areaB's edge (smaller)
+			edgeStart, edgeEnd = minY_B, maxY_B
+			useAreaA = false
+		else
+			-- Use areaA's edge (smaller or equal)
+			edgeStart, edgeEnd = minY_A, maxY_A
+			useAreaA = true
+		end
+	else
+		return nil -- No overlap
 	end
 
-	-- Step 3: Check jump height compatibility
-	if not checkJumpHeightCompatibility(areaA, areaB) then
-		return nil -- Height difference too large to jump
+	-- Convert to normalized coordinates (0.0 to 1.0) on the smaller area's edge
+	local edgeLength = edgeEnd - edgeStart
+	if edgeLength < 0.1 then
+		return nil
 	end
 
-	-- Step 4: Apply outer corner clamping (24 units from outer corners)
-	local finalTL, finalTR = applyOuterCornerClamping(geometry, span, areaA)
+	local tL = math.max(0.0, (overlapStart - edgeStart) / edgeLength)
+	local tR = math.min(1.0, (overlapEnd - edgeStart) / edgeLength)
 
-	-- Step 5: Generate final door
-	return generateDoorPoints(geometry, finalTL, finalTR)
+	-- Debug logging for specific problematic areas
+	if (areaA.id == 60 and areaB.id == 373) or (areaA.id == 373 and areaB.id == 60) then
+		Log:Info("DOOR DEBUG Area %d->%d:", areaA.id, areaB.id)
+		Log:Info("  aLeft=(%.1f,%.1f) aRight=(%.1f,%.1f)", aLeft.x, aLeft.y, aRight.x, aRight.y)
+		Log:Info("  bLeft=(%.1f,%.1f) bRight=(%.1f,%.1f)", bLeft.x, bLeft.y, bRight.x, bRight.y)
+		Log:Info("  A bounds: X(%.1f,%.1f) Y(%.1f,%.1f)", minX_A, maxX_A, minY_A, maxY_A)
+		Log:Info("  B bounds: X(%.1f,%.1f) Y(%.1f,%.1f)", minX_B, maxX_B, minY_B, maxY_B)
+		Log:Info(
+			"  Overlap: (%.1f,%.1f) Edge: (%.1f,%.1f) Length: %.1f (using %s)",
+			overlapStart,
+			overlapEnd,
+			edgeStart,
+			edgeEnd,
+			edgeLength,
+			useAreaA and "AreaA" or "AreaB"
+		)
+		Log:Info("  Final tL=%.3f tR=%.3f Door width=%.1f", tL, tR, (tR - tL) * edgeLength)
+	end
+
+	-- Ensure valid door
+	if tL >= tR or (tR - tL) * edgeLength < HITBOX_WIDTH then
+		if (areaA.id == 60 and areaB.id == 373) or (areaA.id == 373 and areaB.id == 60) then
+			Log:Info(
+				"DOOR REJECTED: Area %d->%d tL=%.3f tR=%.3f width=%.1f",
+				areaA.id,
+				areaB.id,
+				tL,
+				tR,
+				(tR - tL) * edgeLength
+			)
+		end
+		return nil
+	end
+
+	-- Generate door points using the correct area's geometry
+	if useAreaA then
+		-- Use areaA's geometry (already correct)
+		return generateDoorPoints(geometry, tL, tR)
+	else
+		-- Use areaB's geometry - need to swap the geometry
+		local swappedGeometry = {
+			aLeft = geometry.bLeft,
+			aRight = geometry.bRight,
+			bLeft = geometry.aLeft,
+			bRight = geometry.aRight,
+			edgeLength = edgeLength,
+			dirAX = geometry.dirBX,
+			dirAY = geometry.dirBY,
+			dirBX = geometry.dirAX,
+			dirBY = geometry.dirAY,
+			isDownwardOneWay = geometry.isDownwardOneWay,
+		}
+		return generateDoorPoints(swappedGeometry, tL, tR)
+	end
 end
 
 -- Global storage for wall corner visualization
@@ -1046,7 +1181,7 @@ function Node.BuildDoorsForConnections()
 	end
 	table.sort(ids)
 
-	-- First pass: Build doors and collect ALL area corners for proximity analysis
+	-- First pass: Collect ALL area corners for proximity analysis (no doors yet)
 	local areaCornerProximity = {}
 
 	for _, id in ipairs(ids) do
@@ -1058,34 +1193,16 @@ function Node.BuildDoorsForConnections()
 				areaCornerProximity[areaA.ne] = 0
 				areaCornerProximity[areaA.se] = 0
 				areaCornerProximity[areaA.sw] = 0
-			end
-
-			-- Still build doors for pathfinding
-			for dirIndex = 1, 4 do
-				local cDir = areaA.c[dirIndex]
-				if cDir and cDir.connections then
-					local updated = {}
-					for _, connection in ipairs(cDir.connections) do
-						local entry = normalizeConnectionEntry(connection)
-						local neighbor = nodes[entry.node]
-						if neighbor and neighbor.pos then
-							local door = createDoorForAreas(areaA, neighbor)
-							if door then
-								entry.left = door.left
-								entry.middle = door.middle
-								entry.right = door.right
-								entry.needJump = door.needJump and true or false
-								entry.dir = door.dir
-								entry.oneWayDown = door.oneWayDown and true or false
-								updated[#updated + 1] = entry
-							else
-								-- Drop unreachable connection
-							end
-						end
-					end
-					cDir.connections = updated
-					cDir.count = #updated
-				end
+			else
+				-- Debug: Log areas with missing corners
+				Log:Info(
+					"Area %d missing corners: nw=%s ne=%s se=%s sw=%s",
+					id,
+					areaA.nw and "ok" or "nil",
+					areaA.ne and "ok" or "nil",
+					areaA.se and "ok" or "nil",
+					areaA.sw and "ok" or "nil"
+				)
 			end
 		end
 	end
@@ -1229,6 +1346,227 @@ function Node.BuildDoorsForConnections()
 
 	-- Mark as calculated to prevent recalculation
 	G.WallCornersCalculated = true
+
+	-- Console command to reset corner calculation
+	client.Command(
+		"alias pf_reset_corners \"lua G.WallCornersCalculated = false; G.WallCorners = {}; G.OuterCorners = {}; G.AllCorners = {}; print('Corner calculation reset - will recalculate on next map load')\"",
+		true
+	)
+
+	-- Third pass: Build doors for pathfinding (simple shared line approach)
+	Log:Info("Building doors using shared line approach...")
+	for _, id in ipairs(ids) do
+		local areaA = nodes[id]
+		if areaA and areaA.c then
+			for dirIndex = 1, 4 do
+				local cDir = areaA.c[dirIndex]
+				if cDir and cDir.connections then
+					local updated = {}
+					for _, connection in ipairs(cDir.connections) do
+						local entry = normalizeConnectionEntry(connection)
+						local neighbor = nodes[entry.node]
+						if neighbor and neighbor.pos then
+							local door = createDoorForAreas(areaA, neighbor)
+							if door then
+								entry.left = door.left
+								entry.middle = door.middle
+								entry.right = door.right
+								entry.needJump = door.needJump and true or false
+								entry.dir = door.dir
+								entry.oneWayDown = door.oneWayDown and true or false
+								updated[#updated + 1] = entry
+							else
+								-- Drop unreachable connection
+							end
+						end
+					end
+					cDir.connections = updated
+					cDir.count = #updated
+				end
+			end
+		end
+	end
+	Log:Info("Door generation complete using shared line approach")
+
+	-- Fourth pass: Cleanup bidirectional doors - keep only the bigger door
+	Log:Info("Cleaning up bidirectional doors...")
+	local processedPairs = {}
+	local removedDoors = 0
+
+	for _, id in ipairs(ids) do
+		local areaA = nodes[id]
+		if areaA and areaA.c then
+			for dirIndex = 1, 4 do
+				local cDir = areaA.c[dirIndex]
+				if cDir and cDir.connections then
+					local updated = {}
+					for _, connection in ipairs(cDir.connections) do
+						local entry = normalizeConnectionEntry(connection)
+						local neighborId = entry.node
+						local neighbor = nodes[neighborId]
+
+						if neighbor and entry.left and entry.middle and entry.right then
+							-- Create a unique pair key (smaller ID first to avoid A->B vs B->A)
+							local pairKey = id < neighborId and (id .. "-" .. neighborId) or (neighborId .. "-" .. id)
+
+							if not processedPairs[pairKey] then
+								-- First time seeing this pair - calculate door widths for both directions
+								local doorWidthAB = (entry.right - entry.left):Length()
+
+								-- Find the reverse connection (B->A)
+								local reverseEntry = nil
+								local reverseWidth = 0
+								if neighbor.c then
+									for _, neighborCDir in pairs(neighbor.c) do
+										if neighborCDir and neighborCDir.connections then
+											for _, reverseConnection in ipairs(neighborCDir.connections) do
+												local reverseNormalized = normalizeConnectionEntry(reverseConnection)
+												if
+													reverseNormalized.node == id
+													and reverseNormalized.left
+													and reverseNormalized.right
+												then
+													reverseEntry = reverseNormalized
+													reverseWidth = (reverseNormalized.right - reverseNormalized.left):Length()
+													break
+												end
+											end
+										end
+										if reverseEntry then
+											break
+										end
+									end
+								end
+
+								-- Decide which door to keep - prefer doors that don't span full width
+								local keepCurrentDirection = true
+								if reverseEntry then
+									-- Calculate how much of each area's edge the door spans
+									local currentSpanRatio = doorWidthAB / geometry.edgeLength
+									local reverseSpanRatio = reverseWidth
+										/ (reverseEntry.right - reverseEntry.left):Length()
+
+									-- Debug for our problem areas
+									if (id == 60 and neighborId == 373) or (id == 373 and neighborId == 60) then
+										Log:Info(
+											"CLEANUP DEBUG: Area %d->%d span=%.3f vs Area %d->%d span=%.3f",
+											id,
+											neighborId,
+											currentSpanRatio,
+											neighborId,
+											id,
+											reverseSpanRatio
+										)
+									end
+
+									-- Prefer the door that doesn't span the full width (more specific positioning)
+									if reverseSpanRatio < 0.99 and currentSpanRatio >= 0.99 then
+										-- Reverse door is more specific, keep it
+										keepCurrentDirection = false
+									elseif currentSpanRatio < 0.99 and reverseSpanRatio >= 0.99 then
+										-- Current door is more specific, keep it
+										keepCurrentDirection = true
+									else
+										-- Both similar, keep the bigger one
+										if reverseWidth > doorWidthAB then
+											keepCurrentDirection = false
+										end
+									end
+								end
+
+								-- Store the decision for this pair
+								processedPairs[pairKey] = {
+									keepAB = keepCurrentDirection,
+									keepBA = not keepCurrentDirection,
+									doorAB = entry,
+									doorBA = reverseEntry,
+									-- Store which area actually owns the door (for proper alignment)
+									doorOwner = keepCurrentDirection and id or neighborId,
+								}
+
+								if keepCurrentDirection then
+									-- Current door is bigger or equal, keep it
+									updated[#updated + 1] = entry
+								else
+									-- Reverse door is bigger, remove current door
+									removedDoors = removedDoors + 1
+								end
+							else
+								-- We've already processed this pair, check our decision
+								local decision = processedPairs[pairKey]
+								local shouldKeepThis = (id < neighborId and decision.keepAB)
+									or (id > neighborId and decision.keepBA)
+
+								if shouldKeepThis then
+									updated[#updated + 1] = entry
+								else
+									removedDoors = removedDoors + 1
+									-- Skip this door
+								end
+							end
+						else
+							-- Keep doors without proper geometry (fallback)
+							updated[#updated + 1] = entry
+						end
+					end
+					cDir.connections = updated
+					cDir.count = #updated
+				end
+			end
+		end
+	end
+
+	Log:Info("Bidirectional door cleanup complete: removed %d smaller doors", removedDoors)
+
+	-- Fifth pass: Recalculate doors from correct source areas to fix alignment
+	Log:Info("Recalculating doors from correct source areas...")
+	local recalculatedDoors = 0
+
+	for _, id in ipairs(ids) do
+		local areaA = nodes[id]
+		if areaA and areaA.c then
+			for dirIndex = 1, 4 do
+				local cDir = areaA.c[dirIndex]
+				if cDir and cDir.connections then
+					local updated = {}
+					for _, connection in ipairs(cDir.connections) do
+						local entry = normalizeConnectionEntry(connection)
+						local neighborId = entry.node
+						local neighbor = nodes[neighborId]
+
+						if neighbor and entry.left and entry.middle and entry.right then
+							-- Check if this door was inherited from a different area
+							local pairKey = id < neighborId and (id .. "-" .. neighborId) or (neighborId .. "-" .. id)
+							local decision = processedPairs[pairKey]
+
+							if decision and decision.doorOwner ~= id then
+								-- This door was calculated from the other area, recalculate from this area
+								local door = createDoorForAreas(areaA, neighbor)
+								if door then
+									entry.left = door.left
+									entry.middle = door.middle
+									entry.right = door.right
+									entry.needJump = door.needJump and true or false
+									entry.dir = door.dir
+									entry.oneWayDown = door.oneWayDown and true or false
+									recalculatedDoors = recalculatedDoors + 1
+								end
+							end
+
+							updated[#updated + 1] = entry
+						else
+							-- Keep doors without proper geometry (fallback)
+							updated[#updated + 1] = entry
+						end
+					end
+					cDir.connections = updated
+					cDir.count = #updated
+				end
+			end
+		end
+	end
+
+	Log:Info("Door recalculation complete: recalculated %d doors from correct source areas", recalculatedDoors)
 end
 
 --- Public utility functions for connection handling

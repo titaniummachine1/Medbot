@@ -394,8 +394,8 @@ local function OnDraw()
         end
     end
 
-    -- Draw pre-calculated wall corners (orange squares) with same range as other visuals  
-    if G.Menu.Visuals.showDoors and G.WallCorners then
+    -- Draw pre-calculated wall corners (orange squares) - controlled by corner connections option
+    if G.Menu.Visuals.showCornerConnections and G.WallCorners then
         for _, cornerPoint in ipairs(G.WallCorners) do
             -- Use the same distance check as visibleNodes (check if in view range)
             local found = false
@@ -410,15 +410,11 @@ local function OnDraw()
             if found then
                 local cornerScreen = client.WorldToScreen(cornerPoint)
                 if cornerScreen then
-                    -- Draw orange square
+                    -- Draw orange square for outer corners only
                     draw.Color(255, 165, 0, 200) -- Orange for wall corners
                     draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3, 
                                   cornerScreen[1] + 3, cornerScreen[2] + 3)
-                    
-                    -- Draw proximity score number above the corner
-                    local score = G.WallCornerScores and G.WallCornerScores[cornerPoint] or "?"
-                    draw.Color(255, 255, 255, 255) -- White text
-                    draw.Text(cornerScreen[1], cornerScreen[2] - 15, tostring(score))
+                    -- NO NUMBERS - removed as requested
                 end
             end
         end
