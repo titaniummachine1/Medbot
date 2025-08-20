@@ -769,6 +769,11 @@ function handleMovingState(userCmd)
 
 	-- Only detect stuck; actual penalties applied in STUCK state every ~1s
 	if G.Navigation.currentNodeTicks > 66 then
+		-- Remember last node before stuck to target penalty precisely
+		local hist = G.Navigation.pathHistory or {}
+		G.Navigation.lastPreStuckNodeId = (hist[1] and hist[1].id) or nil
+		G.Navigation.currentStuckTargetNodeId = currentNode and currentNode.id or nil
+
 		G.currentState = G.States.STUCK
 		ProfilerEnd()
 		return
@@ -802,6 +807,12 @@ function handleStuckState(userCmd)
 			local blocked = not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode)
 
 			if blocked then
+				-- Penalize the exact current edge (door) from fromNode -> toNode
+				if fromNode and toNode and fromNode.id ~= toNode.id then
+					Node.AddFailurePenalty(fromNode, toNode, 100)
+					Log:Debug("STUCK: current edge penalty applied %d -> %d (+100)", fromNode.id, toNode.id)
+				end
+
 				-- Build up to two prior edges: prev2->prev1, prev1->fromNode
 				local edges = {}
 				local hist = G.Navigation.pathHistory or {}
@@ -813,18 +824,41 @@ function handleStuckState(userCmd)
 				if hist[1] then
 					edges[#edges + 1] = { a = hist[1], b = fromNode }
 				end
-				-- Note: do not add the current from->to edge; we focus on prior edges only
+
+				-- Additionally, penalize remembered last->current edge for precise targeting
+				local nodesTbl = G.Navigation.nodes
+				if nodesTbl and G.Navigation.lastPreStuckNodeId then
+					local lastNode = nodesTbl[G.Navigation.lastPreStuckNodeId]
+					if lastNode and fromNode then
+						edges[#edges + 1] = { a = lastNode, b = fromNode, remembered = true }
+					end
+				end
+				-- Note: do not add the current from->to edge; we focus on prior/remembered edges only
 
 				for _, e in ipairs(edges) do
 					if e.a and e.b and e.a.id and e.b.id and e.a.id ~= e.b.id then
 						Node.AddFailurePenalty(e.a, e.b, 100)
+						if e.remembered then
+							Log:Debug(
+								"STUCK: remembered edge penalty applied %d -> %d (+100)",
+								e.a.id,
+								e.b.id
+							)
+						end
 					end
 				end
 
-				Log:Info("STUCK: penalised up to 2 prior edges near %d -> %d and repathing", fromNode.id, toNode.id)
+				Log:Info(
+					"STUCK: destination unwalkable (%s). Penalised prior edges near %d -> %d and repathing",
+					walkMode,
+					fromNode.id,
+					toNode.id
+				)
 
-				-- Clear traversal history for the new attempt
+				-- Clear traversal history and remembered IDs for the new attempt
 				G.Navigation.pathHistory = {}
+				G.Navigation.lastPreStuckNodeId = nil
+				G.Navigation.currentStuckTargetNodeId = nil
 
 				-- Trigger repath and continue
 				Navigation.ResetTickTimer()
