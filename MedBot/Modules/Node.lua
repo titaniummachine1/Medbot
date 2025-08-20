@@ -645,6 +645,44 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
+	-- Helper to check if area has connection in given direction
+	local function hasConnectionInDirection(area, checkDirX, checkDirY)
+		if not area.c then
+			return false
+		end
+		for _, cDir in pairs(area.c) do
+			if cDir and cDir.connections then
+				for _, conn in ipairs(cDir.connections) do
+					local neighborId = getConnectionNodeId(conn)
+					local neighbor = G.Navigation.nodes and G.Navigation.nodes[neighborId]
+					if neighbor then
+						local nDirX, nDirY = cardinalDirectionFromBounds(area, neighbor)
+						if nDirX == checkDirX and nDirY == checkDirY then
+							return true
+						end
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	-- Check which sides have no connections (meaning those corners are near walls)
+	local aLeftIsWall, aRightIsWall = false, false
+	local bLeftIsWall, bRightIsWall = false, false
+
+	if dirAX ~= 0 then -- Horizontal movement (E/W)
+		aLeftIsWall = not hasConnectionInDirection(areaA, 0, 1) -- No North connection = left wall
+		aRightIsWall = not hasConnectionInDirection(areaA, 0, -1) -- No South connection = right wall
+		bLeftIsWall = not hasConnectionInDirection(areaB, 0, 1) -- No North connection = left wall
+		bRightIsWall = not hasConnectionInDirection(areaB, 0, -1) -- No South connection = right wall
+	else -- Vertical movement (N/S)
+		aLeftIsWall = not hasConnectionInDirection(areaA, -1, 0) -- No West connection = left wall
+		aRightIsWall = not hasConnectionInDirection(areaA, 1, 0) -- No East connection = right wall
+		bLeftIsWall = not hasConnectionInDirection(areaB, -1, 0) -- No West connection = left wall
+		bRightIsWall = not hasConnectionInDirection(areaB, 1, 0) -- No East connection = right wall
+	end
+
 	-- Detect downward one-way first to bypass any bidirectional clamping logic
 	local aZ = (areaA.nw.z + areaA.ne.z + areaA.se.z + areaA.sw.z) * 0.25
 	local bZ = (areaB.nw.z + areaB.ne.z + areaB.se.z + areaB.sw.z) * 0.25
@@ -664,14 +702,26 @@ local function createDoorForAreas(areaA, areaB)
 		local widthA = p.aMax - p.aMin
 		local widthB = p.bMax - p.bMin
 		local clearance = HITBOX_WIDTH
-		if widthA > (2 * clearance) then
-			domainMin = math.max(domainMin, p.aMin + clearance)
-			domainMax = math.min(domainMax, p.aMax - clearance)
+
+		-- Apply 24-unit limit from walls, use clearance where connections exist
+		local edgeLimit = 24 -- 24 units from wall corners to avoid collisions
+
+		-- For area A: limit from wall sides, use clearance from connection sides
+		if widthA > (2 * math.max(clearance, edgeLimit)) then
+			local leftLimit = aLeftIsWall and edgeLimit or clearance
+			local rightLimit = aRightIsWall and edgeLimit or clearance
+			domainMin = math.max(domainMin, p.aMin + leftLimit)
+			domainMax = math.min(domainMax, p.aMax - rightLimit)
 		end
-		if widthB > (2 * clearance) then
-			domainMin = math.max(domainMin, p.bMin + clearance)
-			domainMax = math.min(domainMax, p.bMax - clearance)
+
+		-- For area B: limit from wall sides, use clearance from connection sides
+		if widthB > (2 * math.max(clearance, edgeLimit)) then
+			local leftLimit = bLeftIsWall and edgeLimit or clearance
+			local rightLimit = bRightIsWall and edgeLimit or clearance
+			domainMin = math.max(domainMin, p.bMin + leftLimit)
+			domainMax = math.min(domainMax, p.bMax - rightLimit)
 		end
+
 		local denomA = (p.a1 - p.a0)
 		local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tAL
 		local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tAR
@@ -687,12 +737,30 @@ local function createDoorForAreas(areaA, areaB)
 			return nil
 		end
 		tL, tR = tL2, tR2
+
+		-- Apply edge limiting logic for non-downward connections too
+		local edgeLimit = 24
+		local edgeLength = (aRight - aLeft):Length()
+
+		if edgeLength > 0 then
+			-- Only apply limits from wall sides, allow full extension on connection sides
+			if aLeftIsWall then
+				local leftLimitRatio = edgeLimit / edgeLength
+				tL = math.max(tL, leftLimitRatio)
+			end
+			if aRightIsWall then
+				local rightLimitRatio = edgeLimit / edgeLength
+				tR = math.min(tR, 1.0 - rightLimitRatio)
+			end
+			tR = math.max(tL, tR) -- Ensure tR >= tL
+		end
 	end
 
 	local aDoorLeft = lerpVec(aLeft, aRight, tL)
 	local aDoorRight = lerpVec(aLeft, aRight, tR)
 	-- Do not clamp away from corners for one-way downward doors when width < 48u (keep them),
 	-- but still report the direction so movement can choose the best point.
+	-- Center is always the midpoint between left and right door points (can be asymmetrical)
 	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
 
 	-- Need jump if any endpoint in the chosen span needs >18 and <72

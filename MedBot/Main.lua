@@ -563,7 +563,7 @@ function handleIdleState()
 	end
 
 	-- Only allow pathfinding every 60 ticks (1 second) to prevent spam
-	if currentTick - G.lastPathfindingTick < 60 then
+	if not WorkManager.attemptWork(60, "PathfindingCooldown") then
 		ProfilerEnd()
 		return
 	end
@@ -636,7 +636,8 @@ function handleIdleState()
 	end
 
 	Log:Info("Generating new path from node %d to node %d", startNode.id, goalNode.id)
-	WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
+	-- Direct pathfinding call instead of scheduling work
+	Navigation.FindPath(startNode, goalNode)
 	G.currentState = G.States.PATHFINDING
 	G.lastPathfindingTick = currentTick
 	ProfilerEnd()
@@ -701,23 +702,22 @@ function handlePathfindingState()
 						G.lastRepathTick = 0
 					end
 
-					-- Increase cooldown based on failure count
+					-- Use WorkManager for cooldown with increasing delay based on failure count
 					local cooldownTicks = 30 + (G.pathfindingFailures or 0) * 15 -- 30 + 15 per failure
 
-					if currentTick - G.lastRepathTick > cooldownTicks then
+					if WorkManager.attemptWork(cooldownTicks, "RepathCooldown") then
 						Log:Info(
 							"Repathing from stuck state: node %d to node %d (failure #%d)",
 							startNode.id,
 							goalNode.id,
 							G.pathfindingFailures or 0
 						)
-						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
-						G.lastRepathTick = currentTick
+						-- Direct pathfinding call instead of scheduling work
+						Navigation.FindPath(startNode, goalNode)
 					else
 						-- Throttle noisy log to avoid console spam and overhead
-						if not G._lastRepathWaitLog or (currentTick - G._lastRepathWaitLog) > 30 then
+						if WorkManager.attemptWork(30, "RepathWaitLog") then
 							Log:Debug("Repath cooldown active, waiting... (cooldown: %d ticks)", cooldownTicks)
-							G._lastRepathWaitLog = currentTick
 						end
 					end
 				else
