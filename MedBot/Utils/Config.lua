@@ -102,18 +102,18 @@ Config.LoadCFG()
 
 -- Save configuration automatically when the script unloads
 local function ConfigAutoSaveOnUnload()
-        ProfilerBeginSystem("config_unload")
+	ProfilerBeginSystem("config_unload")
 
-        print("[CONFIG] Unloading script, saving configuration...")
+	print("[CONFIG] Unloading script, saving configuration...")
 
 	-- Save the current configuration state
 	if G.Menu then
 		Config.CreateCFG(G.Menu)
 	else
 		printc(255, 0, 0, 255, "[CONFIG] Warning: Unable to save config, G.Menu is nil")
-        end
+	end
 
-        ProfilerEndSystem()
+	ProfilerEndSystem()
 end
 
 callbacks.Register("Unload", "ConfigAutoSaveOnUnload", ConfigAutoSaveOnUnload)

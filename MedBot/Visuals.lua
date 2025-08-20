@@ -363,6 +363,36 @@ local function OnDraw()
 		end
 	end
 
+    -- Draw pre-calculated wall corners (orange squares) with same range as other visuals
+    if G.Menu.Visuals.showDoors and G.WallCorners then
+        for _, cornerPoint in ipairs(G.WallCorners) do
+            -- Use the same distance check as visibleNodes (check if in view range)
+            local found = false
+            for id, entry in pairs(visibleNodes) do
+                local nodePos = entry.node.pos
+                if nodePos and (cornerPoint - nodePos):Length() < 100 then -- Close to a visible node
+                    found = true
+                    break
+                end
+            end
+            
+            if found then
+                local cornerScreen = client.WorldToScreen(cornerPoint)
+                if cornerScreen then
+                    -- Draw orange square
+                    draw.Color(255, 165, 0, 200) -- Orange for wall corners
+                    draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3, 
+                                  cornerScreen[1] + 3, cornerScreen[2] + 3)
+                    
+                    -- Draw proximity score number above the corner
+                    local score = G.WallCornerScores and G.WallCornerScores[cornerPoint] or "?"
+                    draw.Color(255, 255, 255, 255) -- White text
+                    draw.Text(cornerScreen[1], cornerScreen[2] - 15, tostring(score))
+                end
+            end
+        end
+    end
+
     -- Draw Doors (left, middle, right) if enabled
     if G.Menu.Visuals.showDoors then
         for id, entry in pairs(visibleNodes) do
@@ -379,19 +409,15 @@ local function OnDraw()
                             local sM = client.WorldToScreen(doorMid)
                             local sR = client.WorldToScreen(doorRight)
                             if sL and sM and sR then
-                                -- Door line
+                                -- Door line - blue for whole door
                                 draw.Color(0, 180, 255, 220)
                                 draw.Line(sL[1], sL[2], sR[1], sR[2])
-                                -- Left and right ticks
-                                draw.Color(0, 120, 255, 255)
+                                -- Left and right ticks - blue
+                                draw.Color(0, 180, 255, 255)
                                 draw.FilledRect(sL[1] - 2, sL[2] - 2, sL[1] + 2, sL[2] + 2)
                                 draw.FilledRect(sR[1] - 2, sR[2] - 2, sR[1] + 2, sR[2] + 2)
-                                -- Middle marker color based on needJump
-                                if conn.needJump then
-                                    draw.Color(255, 140, 0, 255) -- orange means jump required
-                                else
-                                    draw.Color(0, 255, 0, 255) -- green means walkable
-                                end
+                                -- Middle marker - also blue (consistent color)
+                                draw.Color(0, 180, 255, 255)
                                 draw.FilledRect(sM[1] - 2, sM[2] - 2, sM[1] + 2, sM[2] + 2)
                             else
                                 -- If only two points present (left/right), compute middle as midpoint
@@ -400,7 +426,7 @@ local function OnDraw()
                                 if sL2 and sR2 then
                                     draw.Color(0, 180, 255, 220)
                                     draw.Line(sL2[1], sL2[2], sR2[1], sR2[2])
-                                    draw.Color(0, 120, 255, 255)
+                                    draw.Color(0, 180, 255, 255)
                                     draw.FilledRect(sL2[1] - 2, sL2[2] - 2, sL2[1] + 2, sL2[2] + 2)
                                     draw.FilledRect(sR2[1] - 2, sR2[2] - 2, sR2[1] + 2, sR2[2] + 2)
                                 end

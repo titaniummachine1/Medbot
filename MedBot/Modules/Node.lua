@@ -668,6 +668,8 @@ local function hasConnectionInDirection(area, checkDirX, checkDirY)
 	if not area.c then
 		return false
 	end
+
+	local foundConnections = {}
 	for _, cDir in pairs(area.c) do
 		if cDir and cDir.connections then
 			for _, conn in ipairs(cDir.connections) do
@@ -676,13 +678,30 @@ local function hasConnectionInDirection(area, checkDirX, checkDirY)
 				if neighbor then
 					local nDirX, nDirY = cardinalDirectionFromBounds(area, neighbor)
 					if nDirX == checkDirX and nDirY == checkDirY then
-						return true
+						table.insert(foundConnections, neighborId)
 					end
 				end
 			end
 		end
 	end
-	return false
+
+	-- Debug logging for specific areas
+	if area.id == 3843 or area.id == 3539 then
+		if #foundConnections > 0 then
+			Log:Info(
+				"Area %d has %d connections in direction (%d,%d): %s",
+				area.id,
+				#foundConnections,
+				checkDirX,
+				checkDirY,
+				table.concat(foundConnections, ",")
+			)
+		else
+			Log:Info("Area %d has NO connections in direction (%d,%d)", area.id, checkDirX, checkDirY)
+		end
+	end
+
+	return #foundConnections > 0
 end
 
 -- STEP 2: Detect wall constraints (REPLACEABLE - proper connection detection)
@@ -716,127 +735,121 @@ local function detectWallConstraints(areaA, areaB, geometry)
 		bRightIsWall = not hasConnectionInDirection(areaB, 1, 0) -- No East connection = right wall
 	end
 
-	-- Apply limits only from wall corners
-	local edgeLimit = 24
-	local leftNeedsLimit = aLeftIsWall or bLeftIsWall
-	local rightNeedsLimit = aRightIsWall or bRightIsWall
+	-- Debug logging for specific nodes
+	if (areaA.id == 3843 and areaB.id == 3539) or (areaA.id == 3539 and areaB.id == 3843) then
+		Log:Info(
+			"Door debug - Area %d->%d: aLeft=%s, aRight=%s, bLeft=%s, bRight=%s",
+			areaA.id,
+			areaB.id,
+			tostring(aLeftIsWall),
+			tostring(aRightIsWall),
+			tostring(bLeftIsWall),
+			tostring(bRightIsWall)
+		)
 
-	-- Calculate total limits needed
-	local totalLimit = 0
-	if leftNeedsLimit then
-		totalLimit = totalLimit + edgeLimit
-	end
-	if rightNeedsLimit then
-		totalLimit = totalLimit + edgeLimit
+		-- Additional debug: Check what connections each area actually has
+		Log:Info(
+			"Area %d connections: North=%s, South=%s, West=%s, East=%s",
+			areaA.id,
+			tostring(hasConnectionInDirection(areaA, 0, 1)),
+			tostring(hasConnectionInDirection(areaA, 0, -1)),
+			tostring(hasConnectionInDirection(areaA, -1, 0)),
+			tostring(hasConnectionInDirection(areaA, 1, 0))
+		)
+		Log:Info(
+			"Area %d connections: North=%s, South=%s, West=%s, East=%s",
+			areaB.id,
+			tostring(hasConnectionInDirection(areaB, 0, 1)),
+			tostring(hasConnectionInDirection(areaB, 0, -1)),
+			tostring(hasConnectionInDirection(areaB, -1, 0)),
+			tostring(hasConnectionInDirection(areaB, 1, 0))
+		)
 	end
 
-	-- Check if there's enough space after applying wall limits
-	local availableWidth = geometry.edgeLength - totalLimit
+	-- TEMPORARILY DISABLED: Apply limits only from wall corners
+	-- local edgeLimit = 24
+	-- local leftNeedsLimit = aLeftIsWall or bLeftIsWall
+	-- local rightNeedsLimit = aRightIsWall or bRightIsWall
 
-	if availableWidth >= HITBOX_WIDTH then
-		-- Enough space - apply limits only where walls exist
-		return {
-			leftNeedsLimit = leftNeedsLimit,
-			rightNeedsLimit = rightNeedsLimit,
-			leftLimit = leftNeedsLimit and edgeLimit or HITBOX_WIDTH,
-			rightLimit = rightNeedsLimit and edgeLimit or HITBOX_WIDTH,
-		}
-	else
-		-- Not enough space - skip limits to preserve door
-		return {
-			leftNeedsLimit = false,
-			rightNeedsLimit = false,
-			leftLimit = HITBOX_WIDTH,
-			rightLimit = HITBOX_WIDTH,
-		}
-	end
+	-- -- Calculate total limits needed
+	-- local totalLimit = 0
+	-- if leftNeedsLimit then
+	-- 	totalLimit = totalLimit + edgeLimit
+	-- end
+	-- if rightNeedsLimit then
+	-- 	totalLimit = totalLimit + edgeLimit
+	-- end
+
+	-- -- Check if there's enough space after applying wall limits
+	-- local availableWidth = geometry.edgeLength - totalLimit
+
+	-- if availableWidth >= HITBOX_WIDTH then
+	-- 	-- Enough space - apply limits only where walls exist
+	-- 	return {
+	-- 		leftNeedsLimit = leftNeedsLimit,
+	-- 		rightNeedsLimit = rightNeedsLimit,
+	-- 		leftLimit = leftNeedsLimit and edgeLimit or HITBOX_WIDTH,
+	-- 		rightLimit = rightNeedsLimit and edgeLimit or HITBOX_WIDTH,
+	-- 	}
+	-- else
+	-- 	-- Not enough space - skip limits to preserve door
+	-- 	return {
+	-- 		leftNeedsLimit = false,
+	-- 		rightNeedsLimit = false,
+	-- 		leftLimit = HITBOX_WIDTH,
+	-- 		rightLimit = HITBOX_WIDTH,
+	-- 	}
+	-- end
+
+	-- TEMPORARILY: No clamping - use full door width
+	return {
+		leftNeedsLimit = false,
+		rightNeedsLimit = false,
+		leftLimit = HITBOX_WIDTH,
+		rightLimit = HITBOX_WIDTH,
+	}
 end
 
--- STEP 3: Calculate base door span (reachable area)
+-- STEP 3: Calculate base door span (TEMPORARILY DISABLED - use full width)
 local function calculateBaseDoorSpan(geometry)
-	if geometry.isDownwardOneWay then
-		-- For downward one-way, use overlap params
-		local p = computeOverlapParams(geometry.aLeft, geometry.aRight, geometry.bLeft, geometry.bRight)
-		if not p then
-			return nil
-		end
-		return {
-			tL = p.tAL or 0.0,
-			tR = p.tAR or 1.0,
-			overlapParams = p,
-		}
-	else
-		-- For normal connections, use reachable span
-		local tL, tR = findReachableSpan(geometry.aLeft, geometry.aRight, geometry.bLeft, geometry.bRight)
-		if not tL then
-			return nil
-		end
-		return {
-			tL = tL,
-			tR = tR,
-			overlapParams = nil,
-		}
-	end
+	-- TEMPORARILY DISABLED: Use full width instead of reachable span
+	-- Doors should extend to full corners of areas
+	return {
+		tL = 0.0, -- Start at left corner
+		tR = 1.0, -- End at right corner
+		overlapParams = nil,
+	}
+
+	-- [Original logic commented out]
+	-- if geometry.isDownwardOneWay then
+	--     [downward one-way logic...]
+	-- else
+	--     [reachable span logic...]
+	-- end
 end
 
--- STEP 4: Apply constraints to door span (REPLACEABLE - main clamping logic)
+-- STEP 4: Apply constraints to door span (TEMPORARILY DISABLED)
 local function applyDoorConstraints(geometry, span, constraints)
-	local tL, tR = span.tL, span.tR
+	-- TEMPORARILY DISABLED: No constraints applied - use full door span
+	-- Doors should match the size of smallest common side
+	return span.tL, span.tR
 
-	if geometry.isDownwardOneWay and span.overlapParams then
-		-- Downward one-way constraint application
-		local p = span.overlapParams
-		local domainMin, domainMax = p.oMin, p.oMax
-		local widthA = p.aMax - p.aMin
-		local widthB = p.bMax - p.bMin
-
-		-- Apply constraints to domain
-		if widthA > (2 * constraints.leftLimit) then
-			local leftOffset = constraints.leftNeedsLimit and constraints.leftLimit or HITBOX_WIDTH
-			local rightOffset = constraints.rightNeedsLimit and constraints.rightLimit or HITBOX_WIDTH
-			domainMin = math.max(domainMin, p.aMin + leftOffset)
-			domainMax = math.min(domainMax, p.aMax - rightOffset)
-		end
-		if widthB > (2 * constraints.leftLimit) then
-			local leftOffset = constraints.leftNeedsLimit and constraints.leftLimit or HITBOX_WIDTH
-			local rightOffset = constraints.rightNeedsLimit and constraints.rightLimit or HITBOX_WIDTH
-			domainMin = math.max(domainMin, p.bMin + leftOffset)
-			domainMax = math.min(domainMax, p.bMax - rightOffset)
-		end
-
-		-- Convert back to parameters
-		local denomA = (p.a1 - p.a0)
-		local tLval = denomA ~= 0 and ((domainMin - p.a0) / denomA) or tL
-		local tRval = denomA ~= 0 and ((domainMax - p.a0) / denomA) or tR
-
-		-- Clamp to valid range
-		tLval = math.max(tL, math.max(0, math.min(1, tLval)))
-		tRval = math.min(tR, math.max(0, math.min(1, tRval)))
-		tRval = math.max(tLval, tRval)
-
-		return tLval, tRval
-	else
-		-- Normal connection constraint application
-		if geometry.edgeLength > 0 then
-			if constraints.leftNeedsLimit then
-				local leftLimitRatio = constraints.leftLimit / geometry.edgeLength
-				tL = math.max(tL, leftLimitRatio)
-			end
-			if constraints.rightNeedsLimit then
-				local rightLimitRatio = constraints.rightLimit / geometry.edgeLength
-				tR = math.min(tR, 1.0 - rightLimitRatio)
-			end
-			tR = math.max(tL, tR) -- Ensure tR >= tL
-		end
-
-		return tL, tR
-	end
+	-- [Original constraint logic commented out]
+	-- local tL, tR = span.tL, span.tR
+	-- if geometry.isDownwardOneWay and span.overlapParams then
+	--     [downward one-way logic...]
+	-- else
+	--     [normal constraint logic...]
+	-- end
 end
 
 -- STEP 5: Generate final door points and metadata
 local function generateDoorPoints(geometry, finalTL, finalTR)
+	-- Calculate initial door points
 	local aDoorLeft = lerpVec(geometry.aLeft, geometry.aRight, finalTL)
 	local aDoorRight = lerpVec(geometry.aLeft, geometry.aRight, finalTR)
+
+	-- Calculate center AFTER clamping (center moves based on door point positions)
 	local mid = lerpVec(aDoorLeft, aDoorRight, 0.5)
 
 	-- Check if jump is needed
@@ -888,9 +901,22 @@ local function createDoorForAreas(areaA, areaB)
 	return generateDoorPoints(geometry, finalTL, finalTR)
 end
 
+-- Global storage for wall corner visualization
+G.WallCorners = G.WallCorners or {}
+
 function Node.BuildDoorsForConnections()
 	local nodes = Node.GetNodes()
 	if not nodes then
+		return
+	end
+
+	-- Clear previous wall corners (only if not already calculated)
+	if not G.WallCornersCalculated then
+		G.WallCorners = {}
+		G.WallCornerScores = {}
+	else
+		-- Already calculated, skip this expensive process
+		Log:Info("Wall corners already calculated, skipping recalculation")
 		return
 	end
 
@@ -901,9 +927,21 @@ function Node.BuildDoorsForConnections()
 	end
 	table.sort(ids)
 
+	-- First pass: Build doors and collect ALL area corners for proximity analysis
+	local areaCornerProximity = {}
+
 	for _, id in ipairs(ids) do
 		local areaA = nodes[id]
 		if areaA and areaA.c then
+			-- Initialize proximity scores for ALL 4 corners of this area
+			if areaA.nw and areaA.ne and areaA.se and areaA.sw then
+				areaCornerProximity[areaA.nw] = 0
+				areaCornerProximity[areaA.ne] = 0
+				areaCornerProximity[areaA.se] = 0
+				areaCornerProximity[areaA.sw] = 0
+			end
+
+			-- Still build doors for pathfinding
 			for dirIndex = 1, 4 do
 				local cDir = areaA.c[dirIndex]
 				if cDir and cDir.connections then
@@ -932,6 +970,133 @@ function Node.BuildDoorsForConnections()
 			end
 		end
 	end
+
+	-- Second pass: Calculate proximity scores using door generation logic for corner pairs
+	local processedAreas = 0
+	local totalCornersChecked = 0
+
+	for _, id in ipairs(ids) do
+		local areaA = nodes[id]
+		if areaA and areaA.c and areaA.nw and areaA.ne and areaA.se and areaA.sw then
+			-- For all 4 directions, get neighbors and check corner pairs facing that direction
+			for dirIndex = 1, 4 do
+				local cDir = areaA.c[dirIndex]
+				if cDir and cDir.connections then
+					for _, connection in ipairs(cDir.connections) do
+						local entry = normalizeConnectionEntry(connection)
+						local neighborId = entry.node
+						local neighbor = nodes[neighborId]
+
+						if neighbor and neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw then
+							-- Use same logic as door generation to get the 2 corners facing this neighbor
+							local geometry = getDoorGeometry(areaA, neighbor)
+							if
+								geometry
+								and geometry.aLeft
+								and geometry.aRight
+								and geometry.bLeft
+								and geometry.bRight
+							then
+								local aCorner1, aCorner2 = geometry.aLeft, geometry.aRight
+								local bCorner1, bCorner2 = geometry.bLeft, geometry.bRight
+
+								-- Helper function for line check with tolerance
+								local function isPointOnLine(point, lineStart, lineEnd, tolerance)
+									tolerance = tolerance or 2.0
+
+									-- Safety check for nil values
+									if not point or not lineStart or not lineEnd then
+										return false
+									end
+
+									-- Check if point is within the bounding box of the line (with tolerance)
+									local minX = math.min(lineStart.x, lineEnd.x) - tolerance
+									local maxX = math.max(lineStart.x, lineEnd.x) + tolerance
+									local minY = math.min(lineStart.y, lineEnd.y) - tolerance
+									local maxY = math.max(lineStart.y, lineEnd.y) + tolerance
+
+									if point.x < minX or point.x > maxX or point.y < minY or point.y > maxY then
+										return false
+									end
+
+									-- Check if it's close to the line (horizontal or vertical)
+									if math.abs(lineStart.x - lineEnd.x) < 0.1 then
+										-- Vertical line
+										return math.abs(point.x - lineStart.x) <= tolerance
+									elseif math.abs(lineStart.y - lineEnd.y) < 0.1 then
+										-- Horizontal line
+										return math.abs(point.y - lineStart.y) <= tolerance
+									end
+
+									return false
+								end
+
+								-- Check if the 2 area corners facing this neighbor lie on the neighbor's line
+								if isPointOnLine(aCorner1, bCorner1, bCorner2) then
+									areaCornerProximity[aCorner1] = areaCornerProximity[aCorner1] + 1
+									totalCornersChecked = totalCornersChecked + 1
+								end
+								if isPointOnLine(aCorner2, bCorner1, bCorner2) then
+									areaCornerProximity[aCorner2] = areaCornerProximity[aCorner2] + 1
+									totalCornersChecked = totalCornersChecked + 1
+								end
+							else
+								-- Debug: Log when geometry is missing
+								Log:Info("Missing geometry for area %d -> neighbor %d", id, neighborId)
+							end
+						end
+					end
+				end
+			end
+			processedAreas = processedAreas + 1
+		end
+	end
+
+	Log:Info(
+		"Processed %d areas, checked %d corner-neighbor pairs for proximity analysis",
+		processedAreas,
+		totalCornersChecked
+	)
+
+	-- Third pass: Store wall corners (proximity <= 1) for visualization
+	local totalPoints = 0
+	local wallPoints = 0
+	local insidePoints = 0
+
+	-- Store both wall corners and proximity scores for display
+	G.WallCorners = {}
+	G.WallCornerScores = {} -- Clear previous scores
+
+	for point, proximity in pairs(areaCornerProximity) do
+		totalPoints = totalPoints + 1
+		-- Proper logic: 0 or 1 neighbors = wall corner, 2+ neighbors = inside
+		if proximity <= 1 then
+			wallPoints = wallPoints + 1
+			-- Store wall corner 2 units above the area corner
+			local wallCorner = point + Vector3(0, 0, 2)
+			table.insert(G.WallCorners, wallCorner)
+			-- Store proximity score for display
+			G.WallCornerScores[wallCorner] = proximity
+		else
+			insidePoints = insidePoints + 1
+		end
+
+		-- Debug: Log first few proximity scores
+		if totalPoints <= 10 then
+			Log:Info("Corner proximity: (%0.1f, %0.1f, %0.1f) = %d", point.x, point.y, point.z, proximity)
+		end
+	end
+
+	Log:Info(
+		"Area corner analysis: %d total, %d wall corners (proximity <= 1), %d inside (proximity >= 2)",
+		totalPoints,
+		wallPoints,
+		insidePoints
+	)
+	Log:Info("Generated %d wall corners for visualization", #G.WallCorners)
+
+	-- Mark as calculated to prevent recalculation
+	G.WallCornersCalculated = true
 end
 
 --- Public utility functions for connection handling
