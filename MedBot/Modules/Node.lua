@@ -706,18 +706,18 @@ local function createDoorForAreas(areaA, areaB)
 		-- Apply 24-unit limit from walls, use clearance where connections exist
 		local edgeLimit = 24 -- 24 units from wall corners to avoid collisions
 
-		-- For area A: limit from wall sides, use clearance from connection sides
+		-- For area A: limit when EITHER area has a wall on that side
 		if widthA > (2 * math.max(clearance, edgeLimit)) then
-			local leftLimit = aLeftIsWall and edgeLimit or clearance
-			local rightLimit = aRightIsWall and edgeLimit or clearance
+			local leftLimit = (aLeftIsWall or bLeftIsWall) and edgeLimit or clearance
+			local rightLimit = (aRightIsWall or bRightIsWall) and edgeLimit or clearance
 			domainMin = math.max(domainMin, p.aMin + leftLimit)
 			domainMax = math.min(domainMax, p.aMax - rightLimit)
 		end
 
-		-- For area B: limit from wall sides, use clearance from connection sides
+		-- For area B: limit when EITHER area has a wall on that side
 		if widthB > (2 * math.max(clearance, edgeLimit)) then
-			local leftLimit = bLeftIsWall and edgeLimit or clearance
-			local rightLimit = bRightIsWall and edgeLimit or clearance
+			local leftLimit = (aLeftIsWall or bLeftIsWall) and edgeLimit or clearance
+			local rightLimit = (aRightIsWall or bRightIsWall) and edgeLimit or clearance
 			domainMin = math.max(domainMin, p.bMin + leftLimit)
 			domainMax = math.min(domainMax, p.bMax - rightLimit)
 		end
@@ -743,12 +743,12 @@ local function createDoorForAreas(areaA, areaB)
 		local edgeLength = (aRight - aLeft):Length()
 
 		if edgeLength > 0 then
-			-- Only apply limits from wall sides, allow full extension on connection sides
-			if aLeftIsWall then
+			-- Apply limits when EITHER area has a wall on that side
+			if aLeftIsWall or bLeftIsWall then
 				local leftLimitRatio = edgeLimit / edgeLength
 				tL = math.max(tL, leftLimitRatio)
 			end
-			if aRightIsWall then
+			if aRightIsWall or bRightIsWall then
 				local rightLimitRatio = edgeLimit / edgeLength
 				tR = math.min(tR, 1.0 - rightLimitRatio)
 			end
