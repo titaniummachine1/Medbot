@@ -197,6 +197,12 @@ local function cleanupCircuitBreaker()
 	end
 end
 
+-- Expose circuit breaker API methods on the global table
+ConnectionCircuitBreaker.addConnectionFailure = addConnectionFailure
+ConnectionCircuitBreaker.isConnectionBlocked = isConnectionBlocked
+ConnectionCircuitBreaker.cleanupCircuitBreaker = cleanupCircuitBreaker
+G.CircuitBreaker = ConnectionCircuitBreaker
+
 --[[ Path Optimiser ]]
 -- ############################################################
 --  Path optimiser - prevents rubber-banding with smart windowing
@@ -811,6 +817,11 @@ function handleStuckState(userCmd)
 				if fromNode and toNode and fromNode.id ~= toNode.id then
 					Node.AddFailurePenalty(fromNode, toNode, 100)
 					Log:Debug("STUCK: current edge penalty applied %d -> %d (+100)", fromNode.id, toNode.id)
+					-- Record a circuit-breaker failure for this edge
+					if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
+						G.CircuitBreaker.addConnectionFailure(fromNode, toNode)
+						Log:Debug("STUCK: recorded connection failure %d -> %d", fromNode.id, toNode.id)
+					end
 				end
 
 				-- Build up to two prior edges: prev2->prev1, prev1->fromNode
@@ -839,11 +850,11 @@ function handleStuckState(userCmd)
 					if e.a and e.b and e.a.id and e.b.id and e.a.id ~= e.b.id then
 						Node.AddFailurePenalty(e.a, e.b, 100)
 						if e.remembered then
-							Log:Debug(
-								"STUCK: remembered edge penalty applied %d -> %d (+100)",
-								e.a.id,
-								e.b.id
-							)
+							Log:Debug("STUCK: remembered edge penalty applied %d -> %d (+100)", e.a.id, e.b.id)
+						end
+						-- Record circuit-breaker failure for prior/remembered edges as well
+						if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
+							G.CircuitBreaker.addConnectionFailure(e.a, e.b)
 						end
 					end
 				end

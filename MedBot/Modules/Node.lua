@@ -3445,11 +3445,16 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 				local connectionCost = getConnectionCost(connection)
 				local targetNode = nodes[targetNodeId]
 				if targetNode and targetNode.pos then
-					-- Return node WITH cost for direct use in pathfinding
-					table.insert(adjacent, {
-						node = targetNode,
-						cost = connectionCost,
-					})
+					-- Skip connections blocked by the circuit breaker (if available)
+					local cb = G and G.CircuitBreaker
+					local blocked = cb and cb.isConnectionBlocked and cb.isConnectionBlocked(node, targetNode)
+					if not blocked then
+						-- Return node WITH cost for direct use in pathfinding
+						table.insert(adjacent, {
+							node = targetNode,
+							cost = connectionCost,
+						})
+					end
 				end
 			end
 		end
