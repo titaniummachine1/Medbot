@@ -1083,7 +1083,9 @@ local function applyDoorConstraints(geometry, span, constraints)
 	local tL, tR = span.tL, span.tR
 	local edgeLen = geometry.edgeLength
 
-	if edgeLen <= 0 then return tL, tR end
+	if edgeLen <= 0 then
+		return tL, tR
+	end
 
 	-- Apply 24-unit limit from left wall corner, if required
 	if constraints.leftNeedsLimit then
@@ -1144,70 +1146,70 @@ end
 
 -- SIMPLE: Door creation - compute span and apply wall/outer-corner constraints
 local function createDoorForAreas(areaA, areaB)
-    -- Get basic geometry
-    local geometry = getDoorGeometry(areaA, areaB)
-    if not geometry then
-        return nil
-    end
+	-- Get basic geometry
+	local geometry = getDoorGeometry(areaA, areaB)
+	if not geometry then
+		return nil
+	end
 
-    -- Use A's facing edge as the parameterization and clamp to the true shared segment with tolerance
-    local aLeft, aRight = geometry.aLeft, geometry.aRight
-    local bLeft, bRight = geometry.bLeft, geometry.bRight
+	-- Use A's facing edge as the parameterization and clamp to the true shared segment with tolerance
+	local aLeft, aRight = geometry.aLeft, geometry.aRight
+	local bLeft, bRight = geometry.bLeft, geometry.bRight
 
-    -- Align B's left/right orientation to A to minimize endpoint mismatch
-    bLeft, bRight = chooseMappingPreferShorterSide(aLeft, aRight, bLeft, bRight)
+	-- Align B's left/right orientation to A to minimize endpoint mismatch
+	bLeft, bRight = chooseMappingPreferShorterSide(aLeft, aRight, bLeft, bRight)
 
-    -- First, try robust 2D span with lateral tolerance (best for shears)
-    local tL, tR = computeRobustSharedSpanOnA(aLeft, aRight, bLeft, bRight, HITBOX_WIDTH)
+	-- First, try robust 2D span with lateral tolerance (best for shears)
+	local tL, tR = computeRobustSharedSpanOnA(aLeft, aRight, bLeft, bRight, HITBOX_WIDTH)
 
-    -- Fallback 1: if robust span fails, try reachable span (respects jump limits)
-    if not (tL and tR) then
-        local rL, rR = findReachableSpan(aLeft, aRight, bLeft, bRight)
-        if rL and rR then
-            tL, tR = rL, rR
-        end
-    end
+	-- Fallback 1: if robust span fails, try reachable span (respects jump limits)
+	if not (tL and tR) then
+		local rL, rR = findReachableSpan(aLeft, aRight, bLeft, bRight)
+		if rL and rR then
+			tL, tR = rL, rR
+		end
+	end
 
-    -- Fallback 2: if still no span, use axis-overlap method along A edge
-    if not (tL and tR) then
-        local span = calculateSharedAreaAlignment(areaA, areaB, geometry)
-        if span then
-            tL, tR = span.tL, span.tR
-        end
-    end
+	-- Fallback 2: if still no span, use axis-overlap method along A edge
+	if not (tL and tR) then
+		local span = calculateSharedAreaAlignment(areaA, areaB, geometry)
+		if span then
+			tL, tR = span.tL, span.tR
+		end
+	end
 
-    if not (tL and tR) then
-        return nil
-    end
+	if not (tL and tR) then
+		return nil
+	end
 
-    -- Detect wall-based constraints (24u from wall corners), then apply
-    local baseSpan = { tL = tL, tR = tR }
-    local constraints = detectWallConstraints(areaA, areaB, geometry)
-    if constraints then
-        local cL, cR = applyDoorConstraints(geometry, baseSpan, constraints)
-        tL, tR = cL, cR
-    end
+	-- Detect wall-based constraints (24u from wall corners), then apply
+	local baseSpan = { tL = tL, tR = tR }
+	local constraints = detectWallConstraints(areaA, areaB, geometry)
+	if constraints then
+		local cL, cR = applyDoorConstraints(geometry, baseSpan, constraints)
+		tL, tR = cL, cR
+	end
 
-    -- Optional outer-corner clamping if such data exists (kept conservative)
-    if G.OuterCorners then
-        local ocL, ocR = applyOuterCornerClamping(geometry, { tL = tL, tR = tR }, areaA)
-        tL, tR = ocL, ocR
-    end
+	-- Optional outer-corner clamping if such data exists (kept conservative)
+	if G.OuterCorners then
+		local ocL, ocR = applyOuterCornerClamping(geometry, { tL = tL, tR = tR }, areaA)
+		tL, tR = ocL, ocR
+	end
 
-    -- Clamp to edge parameter domain and validate
-    tL = math.max(0.0, math.min(1.0, tL))
-    tR = math.max(0.0, math.min(1.0, tR))
-    if tL >= tR then
-        return nil
-    end
+	-- Clamp to edge parameter domain and validate
+	tL = math.max(0.0, math.min(1.0, tL))
+	tR = math.max(0.0, math.min(1.0, tR))
+	if tL >= tR then
+		return nil
+	end
 
-    -- Ensure resulting door lies strictly within A's edge and meets width
-    local doorWidth = (tR - tL) * geometry.edgeLength
-    if doorWidth < HITBOX_WIDTH then
-        return nil
-    end
+	-- Ensure resulting door lies strictly within A's edge and meets width
+	local doorWidth = (tR - tL) * geometry.edgeLength
+	if doorWidth < HITBOX_WIDTH then
+		return nil
+	end
 
-    return generateDoorPoints(geometry, tL, tR)
+	return generateDoorPoints(geometry, tL, tR)
 end
 
 -- Expose for bundled environments to avoid global resolution issues
@@ -3735,12 +3737,12 @@ function Node.RecalculateConnectionCosts()
 
 						if targetNode and type(connection) == "table" then
 							local baseCost = connection.cost or 1
-							local heightDiff = targetNode.pos.z - node.pos.z
+							local heightDiff = math.abs(targetNode.pos.z - node.pos.z)
 
 							-- Reset to base cost first
 							local newCost = baseCost
 
-							-- Add height penalty for smooth mode
+							-- Add height penalty for smooth mode (symmetric up/down)
 							if smoothMode and heightDiff > 18 then
 								local heightPenalty = math.floor(heightDiff / 18) * 10
 								newCost = newCost + heightPenalty

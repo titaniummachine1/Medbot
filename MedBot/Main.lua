@@ -812,7 +812,20 @@ function handleStuckState(userCmd)
 			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
 			local blocked = not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode)
 
-			if blocked then
+			-- Also treat zero-velocity / no-progress as stuck
+			local origin = G.pLocal.Origin
+			local ent = G.pLocal and G.pLocal.entity or nil
+			local vel = ent and ent.EstimateAbsVelocity and ent:EstimateAbsVelocity() or Vector3(0, 0, 0)
+			if vel then vel.z = 0 end
+			local speed = vel and vel.Length and vel:Length() or 0
+			local distNow = (toNode.pos - origin):Length()
+			local lastDist = G.Navigation._lastStuckEvalDist or distNow
+			local progress = lastDist - distNow
+			G.Navigation._lastStuckEvalDist = distNow
+			-- Thresholds: very low speed and negligible progress since last evaluation (~1s)
+			local stall = (speed < 10) and (progress < 8)
+
+			if blocked or stall then
 				-- Penalize the exact current edge (door) from fromNode -> toNode
 				if fromNode and toNode and fromNode.id ~= toNode.id then
 					Node.AddFailurePenalty(fromNode, toNode, 100)
@@ -859,12 +872,22 @@ function handleStuckState(userCmd)
 					end
 				end
 
-				Log:Info(
-					"STUCK: destination unwalkable (%s). Penalised prior edges near %d -> %d and repathing",
-					walkMode,
-					fromNode.id,
-					toNode.id
-				)
+				if blocked then
+					Log:Info(
+						"STUCK: destination unwalkable (%s). Penalised prior edges near %d -> %d and repathing",
+						walkMode,
+						fromNode.id,
+						toNode.id
+					)
+				else
+					Log:Info(
+						"STUCK: no progress (speed=%.1f, progress=%.1f). Penalised prior edges near %d -> %d and repathing",
+						speed,
+						progress,
+						fromNode.id,
+						toNode.id
+					)
+				end
 
 				-- Clear traversal history and remembered IDs for the new attempt
 				G.Navigation.pathHistory = {}
