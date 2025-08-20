@@ -28,16 +28,16 @@ FastPlayers.EnemiesUpdated = false
 
 --[[ Private: Reset per-tick caches ]]
 local function ResetCaches()
-        ProfilerBeginSystem("fastplayers_reset")
-        cachedAllPlayers = nil
-        cachedTeammates = nil
-        cachedEnemies = nil
-        cachedLocal = nil
-        FastPlayers.AllUpdated = false
-        FastPlayers.TeammatesUpdated = false
-        FastPlayers.EnemiesUpdated = false
+	ProfilerBeginSystem("fastplayers_reset")
+	cachedAllPlayers = nil
+	cachedTeammates = nil
+	cachedEnemies = nil
+	cachedLocal = nil
+	FastPlayers.AllUpdated = false
+	FastPlayers.TeammatesUpdated = false
+	FastPlayers.EnemiesUpdated = false
 
-        ProfilerEndSystem()
+	ProfilerEndSystem()
 end
 
 --[[ Simplified validity check ]]

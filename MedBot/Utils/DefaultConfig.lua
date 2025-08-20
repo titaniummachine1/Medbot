@@ -29,7 +29,7 @@ defaultconfig = {
 		ignorePathRadius = true, -- When true, path lines ignore render radius and draw full route
 		showAgentBoxes = false, -- Optional legacy agent 3D boxes
 		-- Combo-based display options
-		basicDisplay = { false, false, false, true, true }, -- Show Nodes, Node IDs, Nav Connections, Areas, Doors
+		basicDisplay = { false, false, false, true, true, false }, -- Show Nodes, Node IDs, Nav Connections, Areas, Doors, Corner Connections
 		-- Individual settings (automatically set by combo selections)
 		drawNodes = false, -- Draws all nodes on the map
 		drawNodeIDs = false, -- Show node IDs  [[ Used by: MedBot.Visuals ]]
@@ -40,6 +40,7 @@ defaultconfig = {
 		showConnections = false, -- Show connections between nodes  [[ Used by: MedBot.Visuals ]]
 		showAreas = true, -- Show area outlines  [[ Used by: MedBot.Visuals ]]
 		showDoors = true,
+		showCornerConnections = false, -- Show corner connections  [[ Used by: MedBot.Visuals ]]
 	},
 	Movement = {
 		lookatpath = true, -- Look at where we are walking

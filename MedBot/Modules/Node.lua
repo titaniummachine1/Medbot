@@ -1036,11 +1036,6 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	-- Check if this is a one-way connection (height difference creates one-way flow)
-	local heightDiff = math.abs((areaA.pos and areaA.pos.z or 0) - (areaB.pos and areaB.pos.z or 0))
-	local isOneWay = heightDiff > 64 -- More than jumpable height
-	local isDownward = areaA.pos and areaB.pos and areaA.pos.z > areaB.pos.z
-
 	-- Calculate the shared line between the two areas
 	local aLeft, aRight = geometry.aLeft, geometry.aRight
 	local bLeft, bRight = geometry.bLeft, geometry.bRight
@@ -1060,58 +1055,36 @@ local function createDoorForAreas(areaA, areaB)
 		overlapStart = math.max(minX_A, minX_B)
 		overlapEnd = math.min(maxX_A, maxX_B)
 
-		-- For one-way connections, always use the source area (higher for downward jumps)
-		if isOneWay then
-			if isDownward then
-				-- Downward jump: use areaA (higher area)
-				edgeStart, edgeEnd = minX_A, maxX_A
-				useAreaA = true
-			else
-				-- Upward connection: use areaB (higher area) - but this shouldn't exist for one-way
-				edgeStart, edgeEnd = minX_B, maxX_B
-				useAreaA = false
-			end
-		else
-			-- Regular connection: use smaller area
-			local areaA_XLength = maxX_A - minX_A
-			local areaB_XLength = maxX_B - minX_B
+		-- Determine which area has the smaller X edge
+		local areaA_XLength = maxX_A - minX_A
+		local areaB_XLength = maxX_B - minX_B
 
-			if areaB_XLength < areaA_XLength then
-				edgeStart, edgeEnd = minX_B, maxX_B
-				useAreaA = false
-			else
-				edgeStart, edgeEnd = minX_A, maxX_A
-				useAreaA = true
-			end
+		if areaB_XLength < areaA_XLength then
+			-- Use areaB's edge (smaller)
+			edgeStart, edgeEnd = minX_B, maxX_B
+			useAreaA = false
+		else
+			-- Use areaA's edge (smaller or equal)
+			edgeStart, edgeEnd = minX_A, maxX_A
+			useAreaA = true
 		end
 	elseif math.max(minY_A, minY_B) < math.min(maxY_A, maxY_B) then
 		-- Y axis overlap
 		overlapStart = math.max(minY_A, minY_B)
 		overlapEnd = math.min(maxY_A, maxY_B)
 
-		-- For one-way connections, always use the source area (higher for downward jumps)
-		if isOneWay then
-			if isDownward then
-				-- Downward jump: use areaA (higher area)
-				edgeStart, edgeEnd = minY_A, maxY_A
-				useAreaA = true
-			else
-				-- Upward connection: use areaB (higher area) - but this shouldn't exist for one-way
-				edgeStart, edgeEnd = minY_B, maxY_B
-				useAreaA = false
-			end
-		else
-			-- Regular connection: use smaller area
-			local areaA_YLength = maxY_A - minY_A
-			local areaB_YLength = maxY_B - minY_B
+		-- Determine which area has the smaller Y edge
+		local areaA_YLength = maxY_A - minY_A
+		local areaB_YLength = maxY_B - minY_B
 
-			if areaB_YLength < areaA_YLength then
-				edgeStart, edgeEnd = minY_B, maxY_B
-				useAreaA = false
-			else
-				edgeStart, edgeEnd = minY_A, maxY_A
-				useAreaA = true
-			end
+		if areaB_YLength < areaA_YLength then
+			-- Use areaB's edge (smaller)
+			edgeStart, edgeEnd = minY_B, maxY_B
+			useAreaA = false
+		else
+			-- Use areaA's edge (smaller or equal)
+			edgeStart, edgeEnd = minY_A, maxY_A
+			useAreaA = true
 		end
 	else
 		return nil -- No overlap
@@ -1145,10 +1118,17 @@ local function createDoorForAreas(areaA, areaB)
 		Log:Info("  Final tL=%.3f tR=%.3f Door width=%.1f", tL, tR, (tR - tL) * edgeLength)
 	end
 
-	-- Ensure valid door (no minimum width requirement - just valid span)
-	if tL >= tR then
+	-- Ensure valid door
+	if tL >= tR or (tR - tL) * edgeLength < HITBOX_WIDTH then
 		if (areaA.id == 60 and areaB.id == 373) or (areaA.id == 373 and areaB.id == 60) then
-			Log:Info("DOOR REJECTED: Area %d->%d tL=%.3f tR=%.3f (invalid span)", areaA.id, areaB.id, tL, tR)
+			Log:Info(
+				"DOOR REJECTED: Area %d->%d tL=%.3f tR=%.3f width=%.1f",
+				areaA.id,
+				areaB.id,
+				tL,
+				tR,
+				(tR - tL) * edgeLength
+			)
 		end
 		return nil
 	end
