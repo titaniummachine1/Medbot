@@ -1072,6 +1072,8 @@ local function calculateBaseDoorSpan(geometry)
 end
 
 -- STEP 4: Apply constraints to door span (wall corner distancing)
+local HITBOX_WIDTH = 24 -- Player hitbox width
+
 local function applyDoorConstraints(geometry, span, constraints)
 	-- If no constraints provided, keep original span
 	if not constraints then
@@ -1079,25 +1081,23 @@ local function applyDoorConstraints(geometry, span, constraints)
 	end
 
 	local tL, tR = span.tL, span.tR
-	local edgeLen = geometry.edgeLength > 0 and geometry.edgeLength or 1
+	local edgeLen = geometry.edgeLength
+
+	if edgeLen <= 0 then return tL, tR end
 
 	-- Apply 24-unit limit from left wall corner, if required
 	if constraints.leftNeedsLimit then
-		local shift = (constraints.leftLimit or 24) / edgeLen
-		tL = math.min(1.0, math.max(0.0, tL + shift))
+		tL = tL + (constraints.leftLimit or HITBOX_WIDTH) / edgeLen
 	end
 
 	-- Apply 24-unit limit from right wall corner, if required
 	if constraints.rightNeedsLimit then
-		local shift = (constraints.rightLimit or 24) / edgeLen
-		tR = math.max(0.0, math.min(1.0, tR - shift))
+		tR = tR - (constraints.rightLimit or HITBOX_WIDTH) / edgeLen
 	end
 
-	-- Ensure door doesn't become narrower than the player hitbox (32 units)
-	local minWidthParam = (HITBOX_WIDTH or 32) / edgeLen
-	if (tR - tL) < minWidthParam then
-		-- If too narrow, fall back to original span (skip clamping)
-		return span.tL, span.tR
+	-- Ensure door doesn't become narrower than the player hitbox
+	if (tR - tL) * edgeLen < HITBOX_WIDTH then
+		return span.tL, span.tR -- Revert if too narrow
 	end
 
 	return tL, tR
@@ -1142,52 +1142,76 @@ local function generateDoorPoints(geometry, finalTL, finalTR)
 	}
 end
 
--- SIMPLE: Door creation - just use the shared line between areas
+-- SIMPLE: Door creation - compute span and apply wall/outer-corner constraints
 local function createDoorForAreas(areaA, areaB)
-	-- Get basic geometry
-	local geometry = getDoorGeometry(areaA, areaB)
-	if not geometry then
-		return nil
-	end
+    -- Get basic geometry
+    local geometry = getDoorGeometry(areaA, areaB)
+    if not geometry then
+        return nil
+    end
 
-	-- Use A's facing edge as the parameterization and clamp to the true shared segment with tolerance
-	local aLeft, aRight = geometry.aLeft, geometry.aRight
-	local bLeft, bRight = geometry.bLeft, geometry.bRight
+    -- Use A's facing edge as the parameterization and clamp to the true shared segment with tolerance
+    local aLeft, aRight = geometry.aLeft, geometry.aRight
+    local bLeft, bRight = geometry.bLeft, geometry.bRight
 
-	-- Align B's left/right orientation to A to minimize endpoint mismatch
-	bLeft, bRight = chooseMappingPreferShorterSide(aLeft, aRight, bLeft, bRight)
+    -- Align B's left/right orientation to A to minimize endpoint mismatch
+    bLeft, bRight = chooseMappingPreferShorterSide(aLeft, aRight, bLeft, bRight)
 
-	-- First, try robust 2D span with lateral tolerance (best for shears)
-	local tL, tR = computeRobustSharedSpanOnA(aLeft, aRight, bLeft, bRight, HITBOX_WIDTH)
+    -- First, try robust 2D span with lateral tolerance (best for shears)
+    local tL, tR = computeRobustSharedSpanOnA(aLeft, aRight, bLeft, bRight, HITBOX_WIDTH)
 
-	-- Fallback 1: if robust span fails, try reachable span (respects jump limits)
-	if not (tL and tR) then
-		local rL, rR = findReachableSpan(aLeft, aRight, bLeft, bRight)
-		if rL and rR then
-			tL, tR = rL, rR
-		end
-	end
+    -- Fallback 1: if robust span fails, try reachable span (respects jump limits)
+    if not (tL and tR) then
+        local rL, rR = findReachableSpan(aLeft, aRight, bLeft, bRight)
+        if rL and rR then
+            tL, tR = rL, rR
+        end
+    end
 
-	-- Fallback 2: if still no span, use axis-overlap method along A edge
-	if not (tL and tR) then
-		local span = calculateSharedAreaAlignment(areaA, areaB, geometry)
-		if span then
-			tL, tR = span.tL, span.tR
-		end
-	end
+    -- Fallback 2: if still no span, use axis-overlap method along A edge
+    if not (tL and tR) then
+        local span = calculateSharedAreaAlignment(areaA, areaB, geometry)
+        if span then
+            tL, tR = span.tL, span.tR
+        end
+    end
 
-	if not (tL and tR) then
-		return nil
-	end
+    if not (tL and tR) then
+        return nil
+    end
 
-	-- Ensure resulting door lies strictly within A's edge and meets width
-	local doorWidth = (tR - tL) * geometry.edgeLength
-	if doorWidth < HITBOX_WIDTH then
-		return nil
-	end
+    -- Detect wall-based constraints (24u from wall corners), then apply
+    local baseSpan = { tL = tL, tR = tR }
+    local constraints = detectWallConstraints(areaA, areaB, geometry)
+    if constraints then
+        local cL, cR = applyDoorConstraints(geometry, baseSpan, constraints)
+        tL, tR = cL, cR
+    end
 
-	return generateDoorPoints(geometry, tL, tR)
+    -- Optional outer-corner clamping if such data exists (kept conservative)
+    if G.OuterCorners then
+        local ocL, ocR = applyOuterCornerClamping(geometry, { tL = tL, tR = tR }, areaA)
+        tL, tR = ocL, ocR
+    end
+
+    -- Clamp to edge parameter domain and validate
+    tL = math.max(0.0, math.min(1.0, tL))
+    tR = math.max(0.0, math.min(1.0, tR))
+    if tL >= tR then
+        return nil
+    end
+
+    -- Ensure resulting door lies strictly within A's edge and meets width
+    local doorWidth = (tR - tL) * geometry.edgeLength
+    if doorWidth < HITBOX_WIDTH then
+        return nil
+    end
+
+    return generateDoorPoints(geometry, tL, tR)
 end
+
+-- Expose for bundled environments to avoid global resolution issues
+Node.CreateDoorForAreas = createDoorForAreas
 
 -- Global storage for wall corner visualization
 G.WallCorners = G.WallCorners or {}
@@ -1400,7 +1424,7 @@ function Node.BuildDoorsForConnections()
 						local entry = normalizeConnectionEntry(connection)
 						local neighbor = nodes[entry.node]
 						if neighbor and neighbor.pos then
-							local door = createDoorForAreas(areaA, neighbor)
+							local door = Node.CreateDoorForAreas(areaA, neighbor)
 							if door then
 								entry.left = door.left
 								entry.middle = door.middle
@@ -1616,7 +1640,7 @@ function Node.BuildDoorsForConnections()
 								-- Keep entry as-is
 							elseif decision and decision.doorOwner ~= id then
 								-- This door was calculated from the other area, recalculate from this area
-								local door = createDoorForAreas(areaA, neighbor)
+								local door = Node.CreateDoorForAreas(areaA, neighbor)
 								if door then
 									entry.left = door.left
 									entry.middle = door.middle
