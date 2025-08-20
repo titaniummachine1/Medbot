@@ -8,26 +8,12 @@ local G = require("MedBot.Utils.Globals")
 local SourceNav = require("MedBot.Utils.SourceNav")
 local isWalkable = require("MedBot.Modules.ISWalkable")
 
--- Optional profiler support
+-- Profiler disabled to prevent crashes
 local Profiler = nil
-do
-	local loaded, mod = pcall(require, "Profiler")
-	if loaded then
-		Profiler = mod
-	end
-end
 
-local function ProfilerBeginSystem(name)
-	if Profiler then
-		Profiler.BeginSystem(name)
-	end
-end
-
-local function ProfilerEndSystem()
-	if Profiler then
-		Profiler.EndSystem()
-	end
-end
+-- Disable all profiler functions to prevent crashes
+local function ProfilerBeginSystem(name) end
+local function ProfilerEndSystem() end
 
 local Log = Common.Log.new("Node") -- default Verbose in dev-build
 Log.Level = 0
@@ -818,8 +804,13 @@ function Node.GetConnectionEntry(nodeA, nodeB)
 	return nil
 end
 
--- Cache for quick door target lookup
+-- Cache for quick door target lookup with cleanup to prevent memory leaks
 local DoorTargetCache = {}
+local DoorTargetCacheCleanup = {
+	lastCleanup = 0,
+	cleanupInterval = 600, -- Clean every 10 seconds
+	maxEntries = 200, -- Reasonable limit for door transitions
+}
 
 --- Get a door target point for transitioning from areaA to areaB.
 --- Chooses middle for N/S, right for E, left for W. Falls back to middle when uncertain.
@@ -886,6 +877,32 @@ function Node.GetDoorTargetPoint(areaA, areaB)
 	end
 
 	DoorTargetCache[key] = target
+
+	-- Periodic cleanup to prevent unbounded growth
+	local currentTick = globals.TickCount()
+	if (currentTick - DoorTargetCacheCleanup.lastCleanup) > DoorTargetCacheCleanup.cleanupInterval then
+		local count = 0
+		for _ in pairs(DoorTargetCache) do
+			count = count + 1
+		end
+
+		if count > DoorTargetCacheCleanup.maxEntries then
+			-- Simple cleanup: clear half the cache when limit exceeded
+			local cleared = 0
+			local targetClear = math.floor(count / 2)
+			for cacheKey, _ in pairs(DoorTargetCache) do
+				DoorTargetCache[cacheKey] = nil
+				cleared = cleared + 1
+				if cleared >= targetClear then
+					break
+				end
+			end
+			Log:Debug("DoorTargetCache cleaned: %d/%d entries removed", cleared, count)
+		end
+
+		DoorTargetCacheCleanup.lastCleanup = currentTick
+	end
+
 	return target
 end
 
@@ -2227,20 +2244,10 @@ end
 --  Enhanced hierarchical network generation with multi-tick support
 --==========================================================================
 function Node.GenerateHierarchicalNetwork(maxAreas)
-	-- Start multi-tick setup process
-	initializeSetup()
-
-	-- Register callback to process setup across multiple ticks
-	callbacks.Unregister("CreateMove", "HierarchicalSetup")
-
-	local function HierarchicalSetupTick()
-		ProfilerBeginSystem("hierarchical_setup")
-		-- Hierarchical stitching disabled per simplified pipeline
-		callbacks.Unregister("CreateMove", "HierarchicalSetup")
-		ProfilerEndSystem()
-	end
-
-	callbacks.Unregister("CreateMove", "HierarchicalSetup")
+	-- DISABLED: Hierarchical setup is disabled to prevent crashes
+	-- The simplified pathfinding system doesn't need hierarchical data
+	Log:Info("Hierarchical network generation disabled - using simplified pathfinding")
+	return false
 end
 
 --==========================================================================
@@ -2610,11 +2617,25 @@ function Node.LoadFile(navFile)
 	end
 
 	local navNodes = processNavData(navData)
+	if not navNodes or not next(navNodes) then
+		Log:Error("No navigation nodes found in nav file")
+		return false
+	end
+
 	Node.SetNodes(navNodes)
-	-- Ensure all connections use enriched structure { node, cost, left, middle, right }
-	Node.NormalizeConnections()
-	-- Build doors and prune unreachable connections
-	Node.BuildDoorsForConnections()
+
+	-- Safe setup with error handling
+	local success, setupErr = pcall(function()
+		-- Ensure all connections use enriched structure { node, cost, left, middle, right }
+		Node.NormalizeConnections()
+		-- Build doors and prune unreachable connections
+		Node.BuildDoorsForConnections()
+	end)
+
+	if not success then
+		Log:Error("Setup failed: %s", setupErr or "Unknown error")
+		return false
+	end
 
 	-- Fix: Count nodes properly for hash table
 	local nodeCount = 0
@@ -2644,17 +2665,30 @@ function Node.LoadNavFile()
 end
 
 function Node.Setup()
+	-- Prevent multiple setup calls
+	if G.Navigation.navMeshUpdated then
+		Log:Debug("Navigation already set up, skipping")
+		return
+	end
+
 	local mapName = engine.GetMapName()
 	if mapName and mapName ~= "" and mapName ~= "menu" then
 		Log:Info("Setting up navigation for map: %s", mapName)
 		Node.LoadNavFile()
-		-- Subnodes/hierarchical network removed for simplicity & maintainability
-		-- Pathfinding now uses only main areas and enriched connections
+		-- Simplified setup - no hierarchical network to prevent crashes
+		-- Pathfinding uses only main areas and enriched connections
+		G.Navigation.navMeshUpdated = true
 	else
 		Log:Info("No valid map loaded, initializing empty navigation nodes")
 		-- Initialize empty nodes table to prevent crashes when no map is loaded
 		Node.SetNodes({})
 	end
+end
+
+-- Reset setup state (useful for debugging or map changes)
+function Node.ResetSetup()
+	G.Navigation.navMeshUpdated = false
+	Log:Info("Navigation setup state reset")
 end
 
 --- Find the closest fine point within an area to a given position

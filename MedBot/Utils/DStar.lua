@@ -123,34 +123,32 @@ function DStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 				break
 			end
 			local u = uRec.node
-			-- Skip stale entry
-			if
-				uRec.key[1] ~= (enqueuedKey[u] and enqueuedKey[u][1])
+			
+			-- Check if entry is stale before declaring local variables
+			local isStale = uRec.key[1] ~= (enqueuedKey[u] and enqueuedKey[u][1])
 				or uRec.key[2] ~= (enqueuedKey[u] and enqueuedKey[u][2])
-			then
-				goto continue
-			end
-
-			local gU = g[u] or INF
-			local rhsU = rhs[u] or INF
-			local keyU = uRec.key
-			local calcU = calculateKey(u)
-			if isKeyGreater(keyU, calcU) then
-				pushNode(u)
-			elseif gU > rhsU then
-				g[u] = rhsU
-				for _, p in ipairs(getPredecessors(u)) do
-					updateVertex(p.node)
+			
+			if not isStale then
+				local gU = g[u] or INF
+				local rhsU = rhs[u] or INF
+				local keyU = uRec.key
+				local calcU = calculateKey(u)
+				if isKeyGreater(keyU, calcU) then
+					pushNode(u)
+				elseif gU > rhsU then
+					g[u] = rhsU
+					for _, p in ipairs(getPredecessors(u)) do
+						updateVertex(p.node)
+					end
+				else
+					g[u] = INF
+					updateVertex(u)
+					for _, p in ipairs(getPredecessors(u)) do
+						updateVertex(p.node)
+					end
 				end
-			else
-				g[u] = INF
-				updateVertex(u)
-				for _, p in ipairs(getPredecessors(u)) do
-					updateVertex(p.node)
-				end
 			end
-
-			::continue::
+			
 			iterGuard = iterGuard + 1
 			if iterGuard > 500000 then -- safety guard against infinite loops
 				break

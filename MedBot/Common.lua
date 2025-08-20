@@ -19,26 +19,12 @@ Common.Helpers = Lib.TF2.Helpers
 
 -- JSON support
 
--- Optional profiler support
+-- Profiler disabled to prevent crashes
 local Profiler = nil
-do
-        local loaded, mod = pcall(require, "Profiler")
-        if loaded then
-                Profiler = mod
-        end
-end
 
-local function ProfilerBeginSystem(name)
-        if Profiler then
-                Profiler.BeginSystem(name)
-        end
-end
-
-local function ProfilerEndSystem()
-        if Profiler then
-                Profiler.EndSystem()
-        end
-end
+-- Disable all profiler functions to prevent crashes
+local function ProfilerBeginSystem(name) end
+local function ProfilerEndSystem() end
 Common.Json = require("MedBot.Utils.Json")
 
 -- Globals
@@ -114,11 +100,7 @@ end
 -- Play UI sound on load and unload
 client.Command('play "ui/buttonclickrelease"', true)
 local function OnUnload()
-        ProfilerBeginSystem("common_unload")
-
         client.Command('play "ui/buttonclickrelease"', true)
-
-        ProfilerEndSystem()
 end
 callbacks.Unregister("Unload", "Common_OnUnload")
 callbacks.Register("Unload", "Common_OnUnload", OnUnload)

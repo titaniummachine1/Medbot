@@ -11,47 +11,14 @@ local Node = require("MedBot.Modules.Node")
 local SmartJump = require("MedBot.Modules.SmartJump")
 local isWalkable = require("MedBot.Modules.ISWalkable")
 
--- Load Profiler if available (Log not available yet, so use print)
+-- Profiler disabled to prevent crashes
 local Profiler = nil
-local profilerLoaded, profilerModule = pcall(require, "Profiler")
-if profilerLoaded then
-	Profiler = profilerModule
-	Profiler.SetVisible(true)
-	Profiler.Setup({
-		smoothingSpeed = 8.0, -- Fast spike detection for performance hunting
-		smoothingDecay = 4.0, -- Keep peaks visible longer
-		systemMemoryMode = "system",
-		compensateOverhead = true,
-	})
-	print("[MEDBOT] Profiler loaded successfully - performance monitoring enabled")
-else
-	print("[MEDBOT] Profiler not available - continuing without performance monitoring")
-end
 
--- Helper function for profiler-safe operations
-local function ProfilerBeginSystem(name)
-	if Profiler then
-		Profiler.BeginSystem(name)
-	end
-end
-
-local function ProfilerEndSystem()
-	if Profiler then
-		Profiler.EndSystem()
-	end
-end
-
-local function ProfilerBegin(name)
-	if Profiler then
-		Profiler.Begin(name)
-	end
-end
-
-local function ProfilerEnd()
-	if Profiler then
-		Profiler.End()
-	end
-end
+-- Disable all profiler functions to prevent crashes
+local function ProfilerBeginSystem(name) end
+local function ProfilerEndSystem() end
+local function ProfilerBegin(name) end
+local function ProfilerEnd() end
 
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
@@ -67,20 +34,22 @@ local ConnectionCircuitBreaker = {
 	failures = {}, -- [connectionKey] = { count, lastFailTime, isBlocked }
 	maxFailures = 2, -- Max failures before blocking connection temporarily (reduced from 3 for faster blocking)
 	blockDuration = 300, -- Ticks to block connection (5 seconds)
-	cleanupInterval = 1800, -- Clean up old entries every 30 seconds
+	cleanupInterval = 180, -- Clean up old entries every 3 seconds (was 30s - MEMORY LEAK FIX)
+	maxEntries = 500, -- Hard limit to prevent memory exhaustion (reduced from 1000)
 	lastCleanup = 0,
 }
 
 -- Expose circuit breaker globally for pathfinding adjacency filter
 G.CircuitBreaker = ConnectionCircuitBreaker
 
--- Add a connection failure to the circuit breaker
+-- Add a connection failure to the circuit breaker (using integer keys)
 local function addConnectionFailure(nodeA, nodeB)
 	if not nodeA or not nodeB then
 		return false
 	end
 
-	local connectionKey = nodeA.id .. "->" .. nodeB.id
+	-- Use integer key instead of string concatenation
+	local connectionKey = nodeA.id * 1000000 + nodeB.id -- Simple hash for unique key
 	local currentTick = globals.TickCount()
 
 	-- Initialize or update failure count
@@ -96,9 +65,10 @@ local function addConnectionFailure(nodeA, nodeB)
 	local additionalPenalty = 100 -- Add 100 units per failure
 	Node.AddFailurePenalty(nodeA, nodeB, additionalPenalty)
 
-	Log:Debug(
-		"Connection %s failure #%d - added %d penalty (total accumulating)",
-		connectionKey,
+	Log:Info(
+		"Connection %d->%d failure #%d - added %d penalty (total accumulating)",
+		nodeA.id,
+		nodeB.id,
 		failure.count,
 		additionalPenalty
 	)
@@ -111,8 +81,9 @@ local function addConnectionFailure(nodeA, nodeB)
 		Node.AddFailurePenalty(nodeA, nodeB, blockingPenalty)
 
 		Log:Warn(
-			"Connection %s BLOCKED after %d failures (added final %d penalty)",
-			connectionKey,
+			"Connection %d->%d BLOCKED after %d failures (added final %d penalty)",
+			nodeA.id,
+			nodeB.id,
 			failure.count,
 			blockingPenalty
 		)
@@ -128,7 +99,7 @@ local function isConnectionBlocked(nodeA, nodeB)
 		return false
 	end
 
-	local connectionKey = nodeA.id .. "->" .. nodeB.id
+	local connectionKey = nodeA.id * 1000000 + nodeB.id -- Use same integer key
 	local failure = ConnectionCircuitBreaker.failures[connectionKey]
 
 	if not failure or not failure.isBlocked then
@@ -142,8 +113,9 @@ local function isConnectionBlocked(nodeA, nodeB)
 		failure.count = 0 -- Reset failure count (penalties stay, giving A* a chance to reconsider)
 
 		Log:Info(
-			"Connection %s UNBLOCKED after timeout (accumulated penalties remain as lesson learned)",
-			connectionKey
+			"Connection %d->%d UNBLOCKED after timeout (accumulated penalties remain as lesson learned)",
+			nodeA.id,
+			nodeB.id
 		)
 		return false
 	end
@@ -177,7 +149,7 @@ local function cleanupCircuitBreaker()
 	end
 
 	-- Hard cap: prune oldest non-blocked entries when table grows too large
-	local limit = 1000
+	local limit = ConnectionCircuitBreaker.maxEntries
 	local count = 0
 	for _ in pairs(ConnectionCircuitBreaker.failures) do
 		count = count + 1
@@ -200,6 +172,26 @@ local function cleanupCircuitBreaker()
 		if toRemove > 0 then
 			Log:Debug("Circuit breaker pruned %d oldest entries (cap=%d)", toRemove, limit)
 		end
+	end
+
+	-- SIMPLE emergency cleanup: if still over limit, clear half the cache
+	local finalCount = 0
+	for _ in pairs(ConnectionCircuitBreaker.failures) do
+		finalCount = finalCount + 1
+	end
+	if finalCount > limit then
+		Log:Warn("Circuit breaker emergency cleanup: %d entries exceed limit %d", finalCount, limit)
+		-- Simple approach: clear half the cache to prevent crash
+		local cleared = 0
+		local targetClear = math.floor(finalCount / 2)
+		for key, _ in pairs(ConnectionCircuitBreaker.failures) do
+			ConnectionCircuitBreaker.failures[key] = nil
+			cleared = cleared + 1
+			if cleared >= targetClear then
+				break
+			end
+		end
+		Log:Debug("Emergency cleanup cleared %d entries", cleared)
 	end
 end
 
@@ -760,7 +752,7 @@ function handleStuckState(userCmd)
 			local blocked = not isWalkable.Path(G.pLocal.Origin, toNode.pos, walkMode)
 
 			if blocked then
-				-- Build up to three edges: prev2->prev1, prev1->fromNode, fromNode->toNode
+				-- Build up to two prior edges: prev2->prev1, prev1->fromNode
 				local edges = {}
 				local hist = G.Navigation.pathHistory or {}
 				-- Edge 1: prev2 -> prev1
@@ -771,8 +763,7 @@ function handleStuckState(userCmd)
 				if hist[1] then
 					edges[#edges + 1] = { a = hist[1], b = fromNode }
 				end
-				-- Edge 3: fromNode -> toNode
-				edges[#edges + 1] = { a = fromNode, b = toNode }
+				-- Note: do not add the current from->to edge; we focus on prior edges only
 
 				for _, e in ipairs(edges) do
 					if e.a and e.b and e.a.id and e.b.id and e.a.id ~= e.b.id then
@@ -780,7 +771,7 @@ function handleStuckState(userCmd)
 					end
 				end
 
-				Log:Info("STUCK: penalised up to 3 recent edges near %d -> %d and repathing", fromNode.id, toNode.id)
+				Log:Info("STUCK: penalised up to 2 prior edges near %d -> %d and repathing", fromNode.id, toNode.id)
 
 				-- Clear traversal history for the new attempt
 				G.Navigation.pathHistory = {}
@@ -1230,15 +1221,10 @@ end
 -- Main function
 ---@param userCmd UserCmd
 local function OnCreateMove(userCmd)
-	ProfilerBeginSystem("medbot_main")
-
-	ProfilerBegin("initial_checks")
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
 		G.currentState = G.States.IDLE
 		Navigation.ClearPath()
-		ProfilerEnd()
-		ProfilerEndSystem()
 		return
 	end
 
@@ -1250,18 +1236,14 @@ local function OnCreateMove(userCmd)
 	if not G.Menu.Main.Enable then
 		Navigation.ClearPath()
 		G.BotIsMoving = false -- Clear bot movement state when disabled
-		ProfilerEnd()
-		ProfilerEndSystem()
 		return
 	end
 
 	G.pLocal.entity = pLocal
 	G.pLocal.flags = pLocal:GetPropInt("m_fFlags")
 	G.pLocal.Origin = pLocal:GetAbsOrigin()
-	ProfilerEnd()
 
 	-- PERFORMANCE FIX: Only run memory cleanup every 300 ticks (5 seconds) to prevent frame drops
-	ProfilerBegin("maintenance")
 	local currentTick = globals.TickCount()
 	if not G.lastCleanupTick then
 		G.lastCleanupTick = currentTick
@@ -1282,21 +1264,26 @@ local function OnCreateMove(userCmd)
 			if cleaned > 0 then
 				Log:Debug("Cleaned up %d old walkability cache entries", cleaned)
 			end
-			-- Cap cache size aggressively to avoid unbounded growth
+			-- Cap cache size aggressively to avoid unbounded growth (reduced from 2000 to 1000)
 			local count = 0
 			for _ in pairs(G.walkabilityCache) do
 				count = count + 1
 			end
-			if count > 2000 then
-				local removed = 0
-				for k, _ in pairs(G.walkabilityCache) do
-					G.walkabilityCache[k] = nil
-					removed = removed + 1
-					if removed >= (count - 2000) then
-						break
-					end
+			if count > 1000 then
+				-- More efficient cleanup: collect entries with timestamps and sort by oldest first
+				local entries = {}
+				for key, entry in pairs(G.walkabilityCache) do
+					table.insert(entries, { key = key, timestamp = entry.timestamp })
 				end
-				Log:Debug("Pruned walkability cache by %d entries (cap=2000)", removed)
+				table.sort(entries, function(a, b)
+					return a.timestamp < b.timestamp
+				end)
+
+				local targetRemove = count - 800 -- Leave some headroom
+				for i = 1, math.min(targetRemove, #entries) do
+					G.walkabilityCache[entries[i].key] = nil
+				end
+				Log:Debug("Pruned walkability cache: %d/%d entries removed (cap=1000)", targetRemove, count)
 			end
 		end
 
@@ -1533,10 +1520,80 @@ callbacks.Register("FireGameEvent", "MedBot.FireGameEvent", OnGameEvent)
 --[[ Commands ]]
 
 Commands.Register("pf_reload", function()
+	Node.ResetSetup()
 	Navigation.Setup()
 end)
 
 Commands.Register("pf_circuit_breaker", function(args)
+	if not args or not args[1] then
+		print("Circuit Breaker Commands:")
+		print("  status - Show current circuit breaker status")
+		print("  clear - Clear all circuit breaker data")
+		print("  block <nodeA> <nodeB> - Manually block a connection")
+		print("  unblock <nodeA> <nodeB> - Manually unblock a connection")
+		print("  test_cost <nodeA> <nodeB> - Test cost assignment")
+		return
+	end
+
+	if args[1] == "test_cost" and args[2] and args[3] then
+		local nodeA_id = tonumber(args[2])
+		local nodeB_id = tonumber(args[3])
+		if nodeA_id and nodeB_id then
+			local nodes = G.Navigation.nodes
+			local nodeA = nodes[nodeA_id]
+			local nodeB = nodes[nodeB_id]
+
+			if nodeA and nodeB then
+				print(string.format("Testing cost assignment for %d->%d:", nodeA_id, nodeB_id))
+
+				-- Get current cost
+				local currentCost = nil
+				for _, cDir in pairs(nodeA.c or {}) do
+					if cDir and cDir.connections then
+						for _, connection in pairs(cDir.connections) do
+							local targetNodeId = connection.node
+							if targetNodeId == nodeB_id then
+								currentCost = connection.cost or 1
+								print(string.format("  Current cost: %.1f", currentCost))
+								break
+							end
+						end
+					end
+				end
+
+				-- Add penalty
+				Node.AddFailurePenalty(nodeA, nodeB, 500)
+				print("  Added 500 penalty")
+
+				-- Check new cost
+				local newCost = nil
+				for _, cDir in pairs(nodeA.c or {}) do
+					if cDir and cDir.connections then
+						for _, connection in pairs(cDir.connections) do
+							local targetNodeId = connection.node
+							if targetNodeId == nodeB_id then
+								newCost = connection.cost or 1
+								print(string.format("  New cost: %.1f", newCost))
+								break
+							end
+						end
+					end
+				end
+
+				if currentCost and newCost then
+					print(string.format("  Cost change: %.1f -> %.1f", currentCost, newCost))
+				else
+					print("  Could not find connection!")
+				end
+			else
+				print(string.format("Nodes %d or %d not found", nodeA_id, nodeB_id))
+			end
+		else
+			print("Usage: pf_circuit_breaker test_cost <nodeA_id> <nodeB_id>")
+		end
+		return
+	end
+
 	if args[1] == "status" then
 		local currentTick = globals.TickCount()
 		local blockedCount = 0
@@ -1556,7 +1613,10 @@ Commands.Register("pf_circuit_breaker", function(args)
 				timeLeft = string.format(" (%d ticks left)", math.max(0, ticksLeft))
 			end
 
-			print(string.format("  %s: %d failures, %s%s", connectionKey, failure.count, status, timeLeft))
+			-- Convert integer key back to readable format
+			local nodeA_id = math.floor(connectionKey / 1000000)
+			local nodeB_id = connectionKey % 1000000
+			print(string.format("  %d->%d: %d failures, %s%s", nodeA_id, nodeB_id, failure.count, status, timeLeft))
 		end
 
 		print(
@@ -1581,13 +1641,13 @@ Commands.Register("pf_circuit_breaker", function(args)
 		local nodeA = tonumber(args[2])
 		local nodeB = tonumber(args[3])
 		if nodeA and nodeB then
-			local connectionKey = nodeA .. "->" .. nodeB
+			local connectionKey = nodeA * 1000000 + nodeB
 			ConnectionCircuitBreaker.failures[connectionKey] = {
 				count = ConnectionCircuitBreaker.maxFailures,
 				lastFailTime = globals.TickCount(),
 				isBlocked = true,
 			}
-			print(string.format("Manually blocked connection %s", connectionKey))
+			print(string.format("Manually blocked connection %d->%d", nodeA, nodeB))
 		else
 			print("Usage: pf_circuit_breaker block <nodeA_id> <nodeB_id>")
 		end
@@ -1595,13 +1655,13 @@ Commands.Register("pf_circuit_breaker", function(args)
 		local nodeA = tonumber(args[2])
 		local nodeB = tonumber(args[3])
 		if nodeA and nodeB then
-			local connectionKey = nodeA .. "->" .. nodeB
+			local connectionKey = nodeA * 1000000 + nodeB
 			if ConnectionCircuitBreaker.failures[connectionKey] then
 				ConnectionCircuitBreaker.failures[connectionKey].isBlocked = false
 				ConnectionCircuitBreaker.failures[connectionKey].count = 0
-				print(string.format("Manually unblocked connection %s", connectionKey))
+				print(string.format("Manually unblocked connection %d->%d", nodeA, nodeB))
 			else
-				print(string.format("Connection %s not found in circuit breaker", connectionKey))
+				print(string.format("Connection %d->%d not found in circuit breaker", nodeA, nodeB))
 			end
 		else
 			print("Usage: pf_circuit_breaker unblock <nodeA_id> <nodeB_id>")
@@ -1720,12 +1780,7 @@ end)
 
 Commands.Register("pf_hierarchical", function(args)
 	if args[1] == "network" then
-		Node.GenerateHierarchicalNetwork()
-		Notify.Simple(
-			"Started hierarchical network generation",
-			"Will process across multiple ticks to prevent freezing",
-			5
-		)
+		Notify.Simple("Hierarchical network generation disabled", "Using simplified pathfinding system", 5)
 	elseif args[1] == "status" then
 		-- Check setup progress by accessing the SetupState
 		if G.Navigation.hierarchical then

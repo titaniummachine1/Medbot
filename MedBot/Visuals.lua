@@ -4,26 +4,12 @@ local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
 local isWalkable = require("MedBot.Modules.ISWalkable")
 
--- Optional profiler support
+-- Profiler disabled to prevent crashes
 local Profiler = nil
-do
-        local loaded, mod = pcall(require, "Profiler")
-        if loaded then
-                Profiler = mod
-        end
-end
 
-local function ProfilerBeginSystem(name)
-        if Profiler then
-                Profiler.BeginSystem(name)
-        end
-end
-
-local function ProfilerEndSystem()
-        if Profiler then
-                Profiler.EndSystem()
-        end
-end
+-- Disable all profiler functions to prevent crashes
+local function ProfilerBeginSystem(name) end
+local function ProfilerEndSystem() end
 
 local Visuals = {}
 

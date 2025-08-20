@@ -16,26 +16,12 @@ local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
 local Visuals = require("MedBot.Visuals")
 
--- Optional profiler support
+-- Profiler disabled to prevent crashes
 local Profiler = nil
-do
-	local loaded, mod = pcall(require, "Profiler")
-	if loaded then
-		Profiler = mod
-	end
-end
 
-local function ProfilerBeginSystem(name)
-	if Profiler then
-		Profiler.BeginSystem(name)
-	end
-end
-
-local function ProfilerEndSystem()
-	if Profiler then
-		Profiler.EndSystem()
-	end
-end
+-- Disable all profiler functions to prevent crashes
+local function ProfilerBeginSystem(name) end
+local function ProfilerEndSystem() end
 
 -- Try loading TimMenu
 ---@type boolean, table
@@ -44,11 +30,8 @@ assert(menuLoaded, "TimMenu not found, please install it!")
 
 -- Draw the menu
 local function OnDrawMenu()
-	ProfilerBeginSystem("draw_menu")
-
 	-- Only draw when the Lmaobox menu is open
 	if not gui.IsMenuOpen() then
-		ProfilerEndSystem()
 		return
 	end
 
@@ -218,8 +201,6 @@ local function OnDrawMenu()
 
 		TimMenu.End() -- Properly close the menu
 	end
-
-	ProfilerEndSystem()
 end
 
 -- Register callbacks
