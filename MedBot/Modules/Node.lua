@@ -1017,48 +1017,40 @@ local function detectWallConstraints(areaA, areaB, geometry)
 		)
 	end
 
-	-- TEMPORARILY DISABLED: Apply limits only from wall corners
-	-- local edgeLimit = 24
-	-- local leftNeedsLimit = aLeftIsWall or bLeftIsWall
-	-- local rightNeedsLimit = aRightIsWall or bRightIsWall
+	-- Apply limits only from wall corners
+	local edgeLimit = 24
+	local leftNeedsLimit = aLeftIsWall or bLeftIsWall
+	local rightNeedsLimit = aRightIsWall or bRightIsWall
 
-	-- -- Calculate total limits needed
-	-- local totalLimit = 0
-	-- if leftNeedsLimit then
-	-- 	totalLimit = totalLimit + edgeLimit
-	-- end
-	-- if rightNeedsLimit then
-	-- 	totalLimit = totalLimit + edgeLimit
-	-- end
+	-- Calculate total limits needed
+	local totalLimit = 0
+	if leftNeedsLimit then
+		totalLimit = totalLimit + edgeLimit
+	end
+	if rightNeedsLimit then
+		totalLimit = totalLimit + edgeLimit
+	end
 
-	-- -- Check if there's enough space after applying wall limits
-	-- local availableWidth = geometry.edgeLength - totalLimit
+	-- Check if there's enough space after applying wall limits
+	local availableWidth = geometry.edgeLength - totalLimit
 
-	-- if availableWidth >= HITBOX_WIDTH then
-	-- 	-- Enough space - apply limits only where walls exist
-	-- 	return {
-	-- 		leftNeedsLimit = leftNeedsLimit,
-	-- 		rightNeedsLimit = rightNeedsLimit,
-	-- 		leftLimit = leftNeedsLimit and edgeLimit or HITBOX_WIDTH,
-	-- 		rightLimit = rightNeedsLimit and edgeLimit or HITBOX_WIDTH,
-	-- 	}
-	-- else
-	-- 	-- Not enough space - skip limits to preserve door
-	-- 	return {
-	-- 		leftNeedsLimit = false,
-	-- 		rightNeedsLimit = false,
-	-- 		leftLimit = HITBOX_WIDTH,
-	-- 		rightLimit = HITBOX_WIDTH,
-	-- 	}
-	-- end
-
-	-- TEMPORARILY: No clamping - use full door width
-	return {
-		leftNeedsLimit = false,
-		rightNeedsLimit = false,
-		leftLimit = HITBOX_WIDTH,
-		rightLimit = HITBOX_WIDTH,
-	}
+	if availableWidth >= HITBOX_WIDTH then
+		-- Enough space - apply limits only where walls exist
+		return {
+			leftNeedsLimit = leftNeedsLimit,
+			rightNeedsLimit = rightNeedsLimit,
+			leftLimit = leftNeedsLimit and edgeLimit or HITBOX_WIDTH,
+			rightLimit = rightNeedsLimit and edgeLimit or HITBOX_WIDTH,
+		}
+	else
+		-- Not enough space - skip limits to preserve door
+		return {
+			leftNeedsLimit = false,
+			rightNeedsLimit = false,
+			leftLimit = HITBOX_WIDTH,
+			rightLimit = HITBOX_WIDTH,
+		}
+	end
 end
 
 -- STEP 3: Calculate base door span (TEMPORARILY DISABLED - use full width)
@@ -1079,19 +1071,36 @@ local function calculateBaseDoorSpan(geometry)
 	-- end
 end
 
--- STEP 4: Apply constraints to door span (TEMPORARILY DISABLED)
+-- STEP 4: Apply constraints to door span (wall corner distancing)
 local function applyDoorConstraints(geometry, span, constraints)
-	-- TEMPORARILY DISABLED: No constraints applied - use full door span
-	-- Doors should match the size of smallest common side
-	return span.tL, span.tR
+	-- If no constraints provided, keep original span
+	if not constraints then
+		return span.tL, span.tR
+	end
 
-	-- [Original constraint logic commented out]
-	-- local tL, tR = span.tL, span.tR
-	-- if geometry.isDownwardOneWay and span.overlapParams then
-	--     [downward one-way logic...]
-	-- else
-	--     [normal constraint logic...]
-	-- end
+	local tL, tR = span.tL, span.tR
+	local edgeLen = geometry.edgeLength > 0 and geometry.edgeLength or 1
+
+	-- Apply 24-unit limit from left wall corner, if required
+	if constraints.leftNeedsLimit then
+		local shift = (constraints.leftLimit or 24) / edgeLen
+		tL = math.min(1.0, math.max(0.0, tL + shift))
+	end
+
+	-- Apply 24-unit limit from right wall corner, if required
+	if constraints.rightNeedsLimit then
+		local shift = (constraints.rightLimit or 24) / edgeLen
+		tR = math.max(0.0, math.min(1.0, tR - shift))
+	end
+
+	-- Ensure door doesn't become narrower than the player hitbox (32 units)
+	local minWidthParam = (HITBOX_WIDTH or 32) / edgeLen
+	if (tR - tL) < minWidthParam then
+		-- If too narrow, fall back to original span (skip clamping)
+		return span.tL, span.tR
+	end
+
+	return tL, tR
 end
 
 -- STEP 5: Generate final door points and metadata
@@ -1399,6 +1408,8 @@ function Node.BuildDoorsForConnections()
 								entry.needJump = door.needJump and true or false
 								entry.dir = door.dir
 								entry.oneWayDown = door.oneWayDown and true or false
+								-- Door ownership belongs to the source area (directional owner)
+								entry.doorOwner = id
 								updated[#updated + 1] = entry
 							else
 								-- Drop unreachable connection
@@ -1463,7 +1474,7 @@ function Node.BuildDoorsForConnections()
 									end
 								end
 
-								-- Decide which door to keep - prefer doors that don't span full width
+								-- Decide which door to keep as canonical - prefer doors that don't span full width
 								local keepCurrentDirection = true
 								if reverseEntry then
 									-- Calculate how much of each area's edge the door spans
@@ -1476,6 +1487,7 @@ function Node.BuildDoorsForConnections()
 										geomBA and (reverseWidth / math.max(geomBA.edgeLength, 0.001))
 									) or 1.0
 
+									-- Prefer the door that doesn't span the full width (more specific positioning)
 									-- Debug for our problem areas
 									if (id == 60 and neighborId == 373) or (id == 373 and neighborId == 60) then
 										Log:Info(
@@ -1491,47 +1503,77 @@ function Node.BuildDoorsForConnections()
 
 									-- Prefer the door that doesn't span the full width (more specific positioning)
 									if reverseSpanRatio < 0.99 and currentSpanRatio >= 0.99 then
-										-- Reverse door is more specific, keep it
 										keepCurrentDirection = false
 									elseif currentSpanRatio < 0.99 and reverseSpanRatio >= 0.99 then
-										-- Current door is more specific, keep it
 										keepCurrentDirection = true
 									else
-										-- Both similar, keep the bigger one
 										if reverseWidth > doorWidthAB then
 											keepCurrentDirection = false
 										end
 									end
 								end
 
-								-- Store the decision for this pair
+								-- Unify: reuse the same door geometry for both directions
+								local chosen = keepCurrentDirection and entry or reverseEntry or entry
+								local uniLeft, uniMid, uniRight = chosen.left, chosen.middle, chosen.right
+								local uniJump = chosen.needJump and true or false
+								local uniDir = chosen.dir
+								local uniOneWay = chosen.oneWayDown and true or false
+
+								-- Propagate unified geometry to both current and reverse entries (in-place)
+								entry.left, entry.middle, entry.right = uniLeft, uniMid, uniRight
+								entry.needJump, entry.dir, entry.oneWayDown = uniJump, uniDir, uniOneWay
+								if reverseEntry then
+									reverseEntry.left, reverseEntry.middle, reverseEntry.right =
+										uniLeft, uniMid, uniRight
+									reverseEntry.needJump, reverseEntry.dir, reverseEntry.oneWayDown =
+										uniJump, uniDir, uniOneWay
+								end
+
+								-- Set per-entry door ownership to the source area of each connection
+								entry.doorOwner = id
+								if reverseEntry then
+									reverseEntry.doorOwner = neighborId
+								end
+
+								-- Store the unified decision and geometry for this pair
+								local ownerId = (chosen == entry) and id or neighborId
 								processedPairs[pairKey] = {
-									keepAB = keepCurrentDirection,
-									keepBA = not keepCurrentDirection,
-									doorAB = entry,
-									doorBA = reverseEntry,
-									-- Store which area actually owns the door (for proper alignment)
-									doorOwner = keepCurrentDirection and id or neighborId,
+									reuseBoth = true,
+									keepAB = true,
+									keepBA = true,
+									left = uniLeft,
+									middle = uniMid,
+									right = uniRight,
+									needJump = uniJump,
+									dir = uniDir,
+									oneWayDown = uniOneWay,
+									doorOwner = ownerId,
 								}
 
-								if keepCurrentDirection then
-									-- Current door is bigger or equal, keep it
-									updated[#updated + 1] = entry
-								else
-									-- Reverse door is bigger, remove current door
-									removedDoors = removedDoors + 1
-								end
+								-- Always keep current entry (we keep both directions)
+								updated[#updated + 1] = entry
 							else
 								-- We've already processed this pair, check our decision
 								local decision = processedPairs[pairKey]
-								local shouldKeepThis = (id < neighborId and decision.keepAB)
-									or (id > neighborId and decision.keepBA)
-
-								if shouldKeepThis then
+								-- If unified, force geometry and keep; otherwise obey keep flags
+								if decision.reuseBoth then
+									entry.left, entry.middle, entry.right =
+										decision.left, decision.middle, decision.right
+									entry.needJump, entry.dir, entry.oneWayDown =
+										decision.needJump, decision.dir, decision.oneWayDown
+									-- Maintain ownership per direction
+									entry.doorOwner = id
 									updated[#updated + 1] = entry
 								else
-									removedDoors = removedDoors + 1
-									-- Skip this door
+									local shouldKeepThis = (id < neighborId and decision.keepAB)
+										or (id > neighborId and decision.keepBA)
+									if shouldKeepThis then
+										updated[#updated + 1] = entry
+									else
+										removedDoors = removedDoors + 1
+										-- Skip this door
+									end
 								end
 							end
 						else
@@ -1569,7 +1611,10 @@ function Node.BuildDoorsForConnections()
 							local pairKey = id < neighborId and (id .. "-" .. neighborId) or (neighborId .. "-" .. id)
 							local decision = processedPairs[pairKey]
 
-							if decision and decision.doorOwner ~= id then
+							if decision and decision.reuseBoth then
+								-- Geometry unified for both directions; no recalculation needed
+								-- Keep entry as-is
+							elseif decision and decision.doorOwner ~= id then
 								-- This door was calculated from the other area, recalculate from this area
 								local door = createDoorForAreas(areaA, neighbor)
 								if door then
@@ -1579,6 +1624,8 @@ function Node.BuildDoorsForConnections()
 									entry.needJump = door.needJump and true or false
 									entry.dir = door.dir
 									entry.oneWayDown = door.oneWayDown and true or false
+									-- Keep ownership on recalculation: still belongs to the source area
+									entry.doorOwner = id
 									recalculatedDoors = recalculatedDoors + 1
 								end
 							end
@@ -1768,6 +1815,10 @@ local ConnectionProcessor = {
 	connectionsFound = 0,
 	expensiveChecksUsed = 0,
 	finePointConnectionsAdded = 0,
+
+	-- Phase 4 progress tracking
+	phase4Queue = nil,
+	phase4Index = 1,
 }
 
 --- Calculate current FPS and adjust batch size dynamically
@@ -1795,6 +1846,8 @@ local function initializeConnectionProcessing(nodes)
 	ConnectionProcessor.processedNodes = {}
 	ConnectionProcessor.pendingNodes = {}
 	ConnectionProcessor.nodeQueue = {}
+	ConnectionProcessor.phase4Queue = nil
+	ConnectionProcessor.phase4Index = 1
 
 	-- Build queue of all nodes to process
 	for nodeId, node in pairs(nodes) do
@@ -2100,30 +2153,44 @@ local function processBatch(nodes)
 	-- Phase 4: Fine point expensive stitching for missing inter-area connections
 	elseif ConnectionProcessor.currentPhase == 4 then
 		if G.Navigation.hierarchical and G.Navigation.hierarchical.areas then
+			-- Build queue once on first entry to Phase 4
+			if not ConnectionProcessor.phase4Queue then
+				ConnectionProcessor.phase4Queue = {}
+				for areaId, areaInfo in pairs(G.Navigation.hierarchical.areas) do
+					if areaInfo and areaInfo.edgePoints then
+						for _, edgePoint in pairs(areaInfo.edgePoints) do
+							ConnectionProcessor.phase4Queue[#ConnectionProcessor.phase4Queue + 1] = {
+								areaId = areaId,
+								edgePoint = edgePoint,
+							}
+						end
+					end
+				end
+				ConnectionProcessor.phase4Index = 1
+				Log:Info("Phase 4 initialized: %d edge points queued for stitching", #ConnectionProcessor.phase4Queue)
+			end
+
 			local processed = 0
 			local maxProcessPerFrame = ConnectionProcessor.currentBatchSize
 
-			-- Process fine point connections between adjacent areas
-			for areaId, areaInfo in pairs(G.Navigation.hierarchical.areas) do
-				if processed >= maxProcessPerFrame then
-					break
-				end
+			while
+				processed < maxProcessPerFrame
+				and ConnectionProcessor.phase4Index <= #ConnectionProcessor.phase4Queue
+			do
+				local item = ConnectionProcessor.phase4Queue[ConnectionProcessor.phase4Index]
+				ConnectionProcessor.phase4Index = ConnectionProcessor.phase4Index + 1
 
-				-- Get adjacent areas for this area
-				local area = areaInfo.area
-				if area and area.c then
-					local adjacentAreas = Node.GetAdjacentNodesOnly(area, nodes)
+				local areaInfo = G.Navigation.hierarchical.areas[item.areaId]
+				if areaInfo then
+					local area = areaInfo.area
+					if area and area.c then
+						local adjacentAreas = Node.GetAdjacentNodesOnly(area, nodes)
+						local edgePoint = item.edgePoint
 
-					-- Check each edge point against edge points in adjacent areas
-					for _, edgePoint in pairs(areaInfo.edgePoints) do
-						if processed >= maxProcessPerFrame then
-							break
-						end
-
+						-- Check this edge point against edge points in adjacent areas
 						for _, adjacentArea in pairs(adjacentAreas) do
 							local adjacentAreaInfo = G.Navigation.hierarchical.areas[adjacentArea.id]
 							if adjacentAreaInfo then
-								-- Check connections to edge points in adjacent area
 								for _, adjacentEdgePoint in pairs(adjacentAreaInfo.edgePoints) do
 									-- Check if connection already exists
 									local connectionExists = false
@@ -2141,31 +2208,24 @@ local function processBatch(nodes)
 									-- If no connection exists, try expensive check
 									if not connectionExists then
 										local distance = (edgePoint.pos - adjacentEdgePoint.pos):Length()
-
-										-- Only check reasonable distances (not too far apart)
 										if distance < 150 and distance > 5 then
-											-- Use expensive walkability check
 											if isWalkable.Path(edgePoint.pos, adjacentEdgePoint.pos) then
 												-- Add bidirectional connection
-												table.insert(edgePoint.neighbors, {
-													point = adjacentEdgePoint,
-													cost = distance,
-													isInterArea = true,
-												})
-												table.insert(adjacentEdgePoint.neighbors, {
-													point = edgePoint,
-													cost = distance,
-													isInterArea = true,
-												})
-
+												table.insert(
+													edgePoint.neighbors,
+													{ point = adjacentEdgePoint, cost = distance, isInterArea = true }
+												)
+												table.insert(
+													adjacentEdgePoint.neighbors,
+													{ point = edgePoint, cost = distance, isInterArea = true }
+												)
 												ConnectionProcessor.finePointConnectionsAdded = ConnectionProcessor.finePointConnectionsAdded
 													+ 1
 												ConnectionProcessor.expensiveChecksUsed = ConnectionProcessor.expensiveChecksUsed
 													+ 1
-
 												Log:Debug(
 													"Added fine point connection: Area %d point %d <-> Area %d point %d (dist: %.1f)",
-													areaId,
+													item.areaId,
 													edgePoint.id,
 													adjacentArea.id,
 													adjacentEdgePoint.id,
@@ -2177,22 +2237,24 @@ local function processBatch(nodes)
 								end
 							end
 						end
-						processed = processed + 1
 					end
 				end
+
+				processed = processed + 1
 			end
 
-			-- Check if Phase 3 is complete (when we've processed all areas)
-			if processed == 0 then
+			-- Finished queue
+			if ConnectionProcessor.phase4Index > #ConnectionProcessor.phase4Queue then
 				Log:Info(
 					"Fine point stitching complete: %d connections added with expensive checks",
 					ConnectionProcessor.finePointConnectionsAdded
 				)
 				ConnectionProcessor.isProcessing = false
-				return false -- Processing finished
+				ConnectionProcessor.phase4Queue = nil
+				return false
 			end
 		else
-			-- No hierarchical data, skip Phase 3
+			-- No hierarchical data, skip Phase 4
 			Log:Info("No hierarchical data available, skipping fine point stitching")
 			ConnectionProcessor.isProcessing = false
 			return false
