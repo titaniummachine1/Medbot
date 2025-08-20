@@ -512,17 +512,40 @@ function Navigation.FindPath(startNode, goalNode)
 	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
-	-- Prefer D* for dynamic costs; fallback to A* if needed
-	-- Use D* exclusively for pathfinding
-	G.Navigation.path = DStar.NormalPath(startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+	-- Try A* pathfinding as primary algorithm (more reliable than D*)
+	local success, path = pcall(AStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+
+	if not success then
+		Log:Error("A* pathfinding crashed: %s", tostring(path))
+		-- Try D* as fallback
+		Log:Info("Trying D* fallback pathfinding...")
+		success, path = pcall(DStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+
+		if not success then
+			Log:Error("D* fallback also crashed: %s", tostring(path))
+			G.Navigation.path = nil
+			Navigation.pathFailed = true
+			Navigation.pathFound = false
+			return Navigation
+		elseif path then
+			Log:Info("D* fallback succeeded with %d nodes", #path)
+		end
+	end
+
+	G.Navigation.path = path
 
 	if not G.Navigation.path or #G.Navigation.path == 0 then
 		Log:Error("Failed to find path from %d to %d!", startNode.id, goalNode.id)
 		G.Navigation.path = nil
 		Navigation.pathFailed = true
 		Navigation.pathFound = false
+
+		-- Add circuit breaker penalty for this failed connection
+		if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
+			G.CircuitBreaker.addConnectionFailure(startNode, goalNode)
+		end
 	else
-		Log:Info("D* path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
+		Log:Info("Path found from %d to %d with %d nodes", startNode.id, goalNode.id, #G.Navigation.path)
 		Navigation.pathFound = true
 		Navigation.pathFailed = false
 		pcall(setmetatable, G.Navigation.path, { __mode = "v" })
@@ -548,40 +571,7 @@ function Navigation.GetInternalPath(startPos, endPos, maxDistance)
 		return nil -- Too far, use regular pathfinding
 	end
 
-	-- Check if we're in the same area and have hierarchical data
-	if G.Navigation.hierarchical then
-		local startArea, endArea = nil, nil
-
-		-- Find which areas contain our start and end positions
-		for areaId, areaInfo in pairs(G.Navigation.hierarchical.areas) do
-			local areaNode = G.Navigation.nodes[areaId]
-			if areaNode then
-				local distToStart = (areaNode.pos - startPos):Length()
-				local distToEnd = (areaNode.pos - endPos):Length()
-
-				-- Check if positions are within reasonable distance of area center
-				if distToStart < 150 then
-					startArea = areaInfo
-				end
-				if distToEnd < 150 then
-					endArea = areaInfo
-				end
-			end
-		end
-
-		-- If both positions are in the same area, use fine points for internal navigation
-		if startArea and endArea and startArea.id == endArea.id then
-			-- Find closest fine points to start and end
-			local startPoint = Node.GetClosestAreaPoint(startArea.id, startPos)
-			local endPoint = Node.GetClosestAreaPoint(startArea.id, endPos)
-
-			if startPoint and endPoint and startPoint.id ~= endPoint.id then
-				-- Use A* on fine points for smooth internal navigation
-				-- Subnodes removed: skip fine point A* and fall back to direct move
-				return nil
-			end
-		end
-	end
+	-- Hierarchical pathfinding removed - using simplified system
 
 	return nil -- No internal path available
 end

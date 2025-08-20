@@ -75,6 +75,14 @@ function Heap:push(item)
 	sortUp(self, self._size)
 end
 
+-- Returns the root element of the heap without removing it.
+function Heap:peek()
+	if self._size == 0 then
+		return nil
+	end
+	return self._data[1]
+end
+
 -- Removes and returns the root element of the heap.
 function Heap:pop()
 	if self._size == 0 then

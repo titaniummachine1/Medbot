@@ -29,37 +29,67 @@ function DStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 		return nil
 	end
 
+	-- Safety check: ensure nodes have valid IDs for table keys
+	if not startNode.id or not goalNode.id then
+		return nil
+	end
+
 	-- Build forward successors and reverse predecessors with edge costs
 	local successors = {}
 	local predecessors = {}
 
 	local function getSuccessors(node)
-		local succ = successors[node]
+		-- Use node ID as key instead of node object to avoid metatable issues
+		local nodeId = node.id
+		if not nodeId then
+			return {}
+		end
+
+		local succ = successors[nodeId]
 		if succ then
 			return succ
 		end
+
 		local list = {}
-		for _, neighbor in ipairs(adjacentFun(node, nodes)) do
-			list[#list + 1] = { node = neighbor.node, cost = neighbor.cost or 1 }
-			if not predecessors[neighbor.node] then
-				predecessors[neighbor.node] = {}
-			end
-			predecessors[neighbor.node][#predecessors[neighbor.node] + 1] = { node = node, cost = neighbor.cost or 1 }
+		local success, neighbors = pcall(adjacentFun, node, nodes)
+		if not success then
+			-- If adjacentFun fails, return empty list
+			successors[nodeId] = list
+			return list
 		end
-		successors[node] = list
+
+		for _, neighbor in ipairs(neighbors) do
+			if neighbor and neighbor.node and neighbor.node.id then
+				list[#list + 1] = { node = neighbor.node, cost = neighbor.cost or 1 }
+				local neighborId = neighbor.node.id
+				if not predecessors[neighborId] then
+					predecessors[neighborId] = {}
+				end
+				predecessors[neighborId][#predecessors[neighborId] + 1] = { node = node, cost = neighbor.cost or 1 }
+			end
+		end
+		successors[nodeId] = list
 		return list
 	end
 
 	local function getPredecessors(node)
-		return predecessors[node] or {}
+		local nodeId = node.id
+		if not nodeId then
+			return {}
+		end
+		return predecessors[nodeId] or {}
 	end
 
-	-- State: g and rhs values
+	-- State: g and rhs values (use node IDs as keys)
 	local g, rhs = {}, {}
 	local km = 0 -- No incremental movement handling in this simple version
 
 	local function calculateKey(node)
-		local minGRhs = math.min(g[node] or INF, rhs[node] or INF)
+		local nodeId = node.id
+		if not nodeId then
+			return { math.huge, math.huge }
+		end
+		local minGRhs = math.min(g[nodeId] or INF, rhs[nodeId] or INF)
 		return { minGRhs + manhattan(startNode, node) + km, minGRhs }
 	end
 
@@ -68,35 +98,48 @@ function DStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 		return isKeyLess(a.key, b.key)
 	end)
 
-	-- Track last enqueued key to detect stale entries on pop
+	-- Track last enqueued key to detect stale entries on pop (use node IDs)
 	local enqueuedKey = {}
 
 	local function pushNode(node)
+		local nodeId = node.id
+		if not nodeId then
+			return
+		end
 		local key = calculateKey(node)
-		enqueuedKey[node] = key
+		enqueuedKey[nodeId] = key
 		open:push({ node = node, key = key })
 	end
 
 	local function updateVertex(u)
+		local nodeId = u.id
+		if not nodeId then
+			return
+		end
+
 		if u ~= goalNode then
 			local best = INF
 			for _, s in ipairs(getSuccessors(u)) do
-				local cand = (g[s.node] or INF) + (s.cost or 1)
-				if cand < best then
-					best = cand
+				local neighborId = s.node.id
+				if neighborId then
+					local cand = (g[neighborId] or INF) + (s.cost or 1)
+					if cand < best then
+						best = cand
+					end
 				end
 			end
-			rhs[u] = best
+			rhs[nodeId] = best
 		end
 
-		if (g[u] or INF) ~= (rhs[u] or INF) then
+		if (g[nodeId] or INF) ~= (rhs[nodeId] or INF) then
 			pushNode(u)
 		end
 	end
 
 	-- Initialize
-	g[goalNode] = INF
-	rhs[goalNode] = 0
+	local goalId = goalNode.id
+	g[goalId] = INF
+	rhs[goalId] = 0
 	pushNode(goalNode)
 
 	-- Compute shortest path
@@ -114,43 +157,54 @@ function DStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 
 	local function computeShortestPath()
 		local iterGuard = 0
-		while isKeyGreater(topKey(), calculateKey(startNode)) or (rhs[startNode] or INF) ~= (g[startNode] or INF) do
+		local maxIterations = 100000 -- Reduced from 500000 for faster failure detection
+
+		while
+			isKeyGreater(topKey(), calculateKey(startNode))
+			or (rhs[startNode.id] or INF) ~= (g[startNode.id] or INF)
+		do
 			if open:empty() then
 				break
 			end
+
 			local uRec = open:pop()
 			if not uRec or not uRec.node or not uRec.key then
 				break
 			end
+
 			local u = uRec.node
-			
+			local uId = u.id
+			if not uId then
+				break
+			end
+
 			-- Check if entry is stale before declaring local variables
-			local isStale = uRec.key[1] ~= (enqueuedKey[u] and enqueuedKey[u][1])
-				or uRec.key[2] ~= (enqueuedKey[u] and enqueuedKey[u][2])
-			
+			local isStale = uRec.key[1] ~= (enqueuedKey[uId] and enqueuedKey[uId][1])
+				or uRec.key[2] ~= (enqueuedKey[uId] and enqueuedKey[uId][2])
+
 			if not isStale then
-				local gU = g[u] or INF
-				local rhsU = rhs[u] or INF
+				local gU = g[uId] or INF
+				local rhsU = rhs[uId] or INF
 				local keyU = uRec.key
 				local calcU = calculateKey(u)
 				if isKeyGreater(keyU, calcU) then
 					pushNode(u)
 				elseif gU > rhsU then
-					g[u] = rhsU
+					g[uId] = rhsU
 					for _, p in ipairs(getPredecessors(u)) do
 						updateVertex(p.node)
 					end
 				else
-					g[u] = INF
+					g[uId] = INF
 					updateVertex(u)
 					for _, p in ipairs(getPredecessors(u)) do
 						updateVertex(p.node)
 					end
 				end
 			end
-			
+
 			iterGuard = iterGuard + 1
-			if iterGuard > 500000 then -- safety guard against infinite loops
+			if iterGuard > maxIterations then -- safety guard against infinite loops
 				break
 			end
 		end
@@ -160,22 +214,27 @@ function DStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 	computeShortestPath()
 
 	-- Extract path from start to goal using greedy next-step rule
-	if (g[startNode] or INF) == INF then
+	local startId = startNode.id
+	if (g[startId] or INF) == INF then
 		return nil
 	end
 
 	local path = { startNode }
 	local current = startNode
 	local hopGuard = 0
+	local maxHops = 5000 -- Reduced from 10000 for faster failure detection
 
 	while current ~= goalNode do
 		local bestNeighbor = nil
 		local bestScore = INF
 		for _, s in ipairs(getSuccessors(current)) do
-			local score = (g[s.node] or INF) + (s.cost or 1)
-			if score < bestScore then
-				bestScore = score
-				bestNeighbor = s.node
+			local neighborId = s.node.id
+			if neighborId then
+				local score = (g[neighborId] or INF) + (s.cost or 1)
+				if score < bestScore then
+					bestScore = score
+					bestNeighbor = s.node
+				end
 			end
 		end
 		if not bestNeighbor or bestScore == INF then
@@ -185,7 +244,7 @@ function DStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 		current = bestNeighbor
 
 		hopGuard = hopGuard + 1
-		if hopGuard > 10000 then
+		if hopGuard > maxHops then
 			break
 		end
 	end

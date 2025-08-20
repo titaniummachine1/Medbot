@@ -10,6 +10,8 @@ local WorkManager = require("MedBot.WorkManager")
 local Node = require("MedBot.Modules.Node")
 local SmartJump = require("MedBot.Modules.SmartJump")
 local isWalkable = require("MedBot.Modules.ISWalkable")
+local DStar = require("MedBot.Utils.DStar")
+local AStar = require("MedBot.Utils.A-Star")
 
 -- Profiler disabled to prevent crashes
 local Profiler = nil
@@ -596,6 +598,14 @@ function handleIdleState()
 	G.Navigation.goalPos = goalPos
 	G.Navigation.goalNodeId = goalNode and goalNode.id or nil
 
+	-- Track when we change to a new goal
+	local previousGoalId = G._previousGoalId
+	if previousGoalId ~= goalNode.id then
+		G.lastGoalChangeTick = globals.TickCount()
+		G._previousGoalId = goalNode.id
+		Log:Debug("Goal changed from %s to %d", tostring(previousGoalId), goalNode.id)
+	end
+
 	-- Avoid pathfinding if we're already at the goal
 	if startNode.id == goalNode.id then
 		-- Try direct movement or internal path before giving up
@@ -638,14 +648,44 @@ function handlePathfindingState()
 	if Navigation.pathFound then
 		G.currentState = G.States.MOVING
 		Navigation.pathFound = false
+		-- Reset failure counter on success
+		G.pathfindingFailures = 0
 	elseif Navigation.pathFailed then
 		Log:Warn("Pathfinding failed")
+
+		-- Increment failure counter
+		G.pathfindingFailures = (G.pathfindingFailures or 0) + 1
+
+		-- If we've failed too many times in a row, take a longer break
+		if G.pathfindingFailures >= 5 then
+			Log:Warn("Pathfinding failed %d times in a row - taking extended break", G.pathfindingFailures)
+
+			-- Clear the current goal to force finding a new one
+			G.Navigation.goalPos = nil
+			G.Navigation.goalNodeId = nil
+			G.pathfindingFailures = 0 -- Reset failure counter
+
+			-- Set a much longer cooldown to prevent immediate repathing
+			G.lastRepathTick = globals.TickCount()
+			G.extendedBreakUntil = globals.TickCount() + 300 -- 5 second break
+
+			G.currentState = G.States.IDLE
+			Navigation.pathFailed = false
+			return
+		end
+
 		G.currentState = G.States.IDLE
 		Navigation.pathFailed = false
 	else
 		-- If we're in pathfinding state but no work is in progress, start pathfinding
 		local pathfindingWork = WorkManager.works["Pathfinding"]
 		if not pathfindingWork or pathfindingWork.wasExecuted then
+			-- Check if we're in an extended break
+			if G.extendedBreakUntil and globals.TickCount() < G.extendedBreakUntil then
+				-- Still in extended break, stay in IDLE
+				return
+			end
+
 			-- Use existing goal if available, otherwise find new goal
 			local goalPos = G.Navigation.goalPos
 			local goalNodeId = G.Navigation.goalNodeId
@@ -661,24 +701,34 @@ function handlePathfindingState()
 						G.lastRepathTick = 0
 					end
 
-					if currentTick - G.lastRepathTick > 30 then -- Wait 30 ticks between repaths
-						Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
+					-- Increase cooldown based on failure count
+					local cooldownTicks = 30 + (G.pathfindingFailures or 0) * 15 -- 30 + 15 per failure
+
+					if currentTick - G.lastRepathTick > cooldownTicks then
+						Log:Info(
+							"Repathing from stuck state: node %d to node %d (failure #%d)",
+							startNode.id,
+							goalNode.id,
+							G.pathfindingFailures or 0
+						)
 						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 						G.lastRepathTick = currentTick
 					else
 						-- Throttle noisy log to avoid console spam and overhead
 						if not G._lastRepathWaitLog or (currentTick - G._lastRepathWaitLog) > 30 then
-							Log:Debug("Repath cooldown active, waiting...")
+							Log:Debug("Repath cooldown active, waiting... (cooldown: %d ticks)", cooldownTicks)
 							G._lastRepathWaitLog = currentTick
 						end
 					end
 				else
 					Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
 					G.currentState = G.States.IDLE
+					G.pathfindingFailures = 0 -- Reset on invalid nodes
 				end
 			else
 				Log:Debug("No existing goal for repath, returning to IDLE")
 				G.currentState = G.States.IDLE
+				G.pathfindingFailures = 0 -- Reset on no goal
 			end
 		end
 	end
@@ -1290,6 +1340,11 @@ local function OnCreateMove(userCmd)
 		G.lastCleanupTick = currentTick
 	end
 
+	-- Circuit breaker cleanup
+	if G.CircuitBreaker and G.CircuitBreaker.cleanupCircuitBreaker then
+		G.CircuitBreaker.cleanupCircuitBreaker()
+	end
+
 	-- Circuit breaker is unused by simplified unstuck; skip maintenance
 	ProfilerEnd()
 
@@ -1779,58 +1834,14 @@ Commands.Register("pf_performance", function(args)
 end)
 
 Commands.Register("pf_hierarchical", function(args)
-	if args[1] == "network" then
-		Notify.Simple("Hierarchical network generation disabled", "Using simplified pathfinding system", 5)
-	elseif args[1] == "status" then
-		-- Check setup progress by accessing the SetupState
-		if G.Navigation.hierarchical then
-			print("Hierarchical network ready and available")
-		else
-			print("Hierarchical network not yet available - check if setup is in progress")
-		end
-	elseif args[1] == "info" then
-		local areaId = tonumber(args[2])
-		if areaId then
-			local points = Node.GetAreaPoints(areaId)
-			if points then
-				print(string.format("Area %d: %d fine points", areaId, #points))
-				local edgeCount = 0
-				for _, point in ipairs(points) do
-					if point.isEdge then
-						edgeCount = edgeCount + 1
-					end
-				end
-				print(string.format("  - %d edge points, %d internal points", edgeCount, #points - edgeCount))
-			else
-				print("Area not found or no points generated")
-			end
-		else
-			print("Usage: pf_hierarchical info <areaId>")
-		end
-	else
-		print("Usage: pf_hierarchical network | status | info <areaId>")
-		print("  network - Start multi-tick hierarchical network generation")
-		print("  status  - Check if hierarchical network is ready")
-		print("  info    - Show detailed info for specific area")
-	end
+	Notify.Simple("Hierarchical pathfinding removed", "Using simplified pathfinding system", 5)
+	print("Hierarchical pathfinding has been removed from this version.")
+	print("The simplified pathfinding system works without hierarchical data.")
 end)
 
 Commands.Register("pf_test_hierarchical", function()
-	local hierarchical = G.Navigation.hierarchical
-	if hierarchical then
-		print(
-			string.format("Hierarchical data available for %d areas", hierarchical.areas and #hierarchical.areas or 0)
-		)
-		local totalEdgePoints = 0
-		local totalConnections = 0
-		for areaId, areaInfo in pairs(hierarchical.areas or {}) do
-			totalEdgePoints = totalEdgePoints + #areaInfo.edgePoints
-			totalConnections = totalConnections + #areaInfo.interAreaConnections
-		end
-		print(string.format("Total: %d edge points, %d inter-area connections", totalEdgePoints, totalConnections))
-	else
-		print("No hierarchical data available. Run 'pf_hierarchical network' first.")
-	end
+	print("Hierarchical pathfinding has been removed from this version.")
+	print("The simplified pathfinding system works without hierarchical data.")
 end)
 
 Commands.Register("pf_connections", function(args)
@@ -2015,6 +2026,130 @@ Commands.Register("pf_costs", function(args)
 	end
 end)
 
+Commands.Register("pf_debug", function(args)
+	if args[1] == "path" then
+		if args[2] and args[3] then
+			local startId = tonumber(args[2])
+			local goalId = tonumber(args[3])
+
+			if startId and goalId then
+				local nodes = G.Navigation.nodes
+				local startNode = nodes[startId]
+				local goalNode = nodes[goalId]
+
+				if startNode and goalNode then
+					print(string.format("Testing pathfinding from node %d to node %d", startId, goalId))
+					print(
+						string.format(
+							"Start pos: [%.1f, %.1f, %.1f]",
+							startNode.pos.x,
+							startNode.pos.y,
+							startNode.pos.z
+						)
+					)
+					print(string.format("Goal pos: [%.1f, %.1f, %.1f]", goalNode.pos.x, goalNode.pos.y, goalNode.pos.z))
+
+					-- Test adjacency function first
+					print("Testing adjacency function...")
+					local success, adjacent = pcall(Node.GetAdjacentNodesSimple, startNode, nodes)
+					if not success then
+						print("ERROR: Adjacency function failed - " .. tostring(adjacent))
+						return
+					end
+
+					if not adjacent or #adjacent == 0 then
+						print("ERROR: No adjacent nodes found - start node may be isolated")
+						return
+					end
+
+					print(string.format("Start node has %d connections:", #adjacent))
+					for i, adj in ipairs(adjacent) do
+						if i <= 5 then -- Show first 5
+							print(string.format("  -> %d (cost: %.1f)", adj.node.id, adj.cost))
+						end
+					end
+					if #adjacent > 5 then
+						print(string.format("  ... and %d more connections", #adjacent - 5))
+					end
+
+					-- Try D* pathfinding with safety
+					print("Attempting D* pathfinding...")
+					local success, path =
+						pcall(DStar.NormalPath, startNode, goalNode, nodes, Node.GetAdjacentNodesSimple)
+
+					if not success then
+						print("ERROR: D* pathfinding failed with error - " .. tostring(path))
+						print("Trying A* fallback...")
+
+						success, path = pcall(AStar.NormalPath, startNode, goalNode, nodes, Node.GetAdjacentNodesSimple)
+						if not success then
+							print("ERROR: A* fallback also failed - " .. tostring(path))
+							return
+						elseif path then
+							print("A* fallback succeeded!")
+						end
+					end
+
+					if path then
+						print(string.format("Success! Path found with %d nodes:", #path))
+						for i, pathNode in ipairs(path) do
+							if i <= 10 then -- Show first 10
+								print(string.format("  %d. Node %d", i, pathNode.id))
+							end
+						end
+						if #path > 10 then
+							print(string.format("  ... and %d more nodes", #path - 10))
+						end
+					else
+						print("FAILED - No path found!")
+
+						-- Check if nodes are isolated (with safety)
+						print("Checking connectivity...")
+						local visited = {}
+						local queue = { startNode }
+						visited[startNode.id] = true
+						local reachableCount = 0
+
+						while #queue > 0 and reachableCount < 1000 do
+							local current = table.remove(queue, 1)
+							reachableCount = reachableCount + 1
+
+							local success, neighbors = pcall(Node.GetAdjacentNodesSimple, current, nodes)
+							if not success then
+								print("ERROR: Failed to get neighbors during connectivity check")
+								break
+							end
+
+							for _, neighbor in ipairs(neighbors) do
+								if not visited[neighbor.node.id] then
+									visited[neighbor.node.id] = true
+									table.insert(queue, neighbor.node)
+								end
+							end
+						end
+
+						print(string.format("Can reach %d nodes from start node", reachableCount))
+						if visited[goalId] then
+							print("Goal IS reachable - there may be a bug in pathfinding algorithm")
+						else
+							print("Goal is NOT reachable - nodes are disconnected")
+						end
+					end
+				else
+					print(string.format("Invalid nodes: start=%s, goal=%s", tostring(startNode), tostring(goalNode)))
+				end
+			else
+				print("Usage: pf_debug path <startNodeId> <goalNodeId>")
+			end
+		else
+			print("Usage: pf_debug path <startNodeId> <goalNodeId>")
+		end
+	else
+		print("Usage: pf_debug path <startNodeId> <goalNodeId>")
+		print("  path - Debug pathfinding between two specific nodes")
+	end
+end)
+
 Notify.Alert("MedBot loaded!")
 if entities.GetLocalPlayer() then
 	-- Add safety check to prevent crashes when no map is loaded
@@ -2035,3 +2170,82 @@ if entities.GetLocalPlayer() then
 		Log:Info("Connection cleanup is disabled in settings (recommended for performance)")
 	end
 end
+
+Commands.Register("pf_test_circuit", function()
+	print("Testing circuit breaker functionality...")
+
+	if not G.CircuitBreaker then
+		print("ERROR: Circuit breaker not initialized")
+		return
+	end
+
+	if not G.CircuitBreaker.addConnectionFailure then
+		print("ERROR: addConnectionFailure function not available")
+		return
+	end
+
+	print("Circuit breaker is properly initialized")
+	print("Functions available:")
+	print("  - addConnectionFailure: " .. tostring(G.CircuitBreaker.addConnectionFailure ~= nil))
+	print("  - isConnectionBlocked: " .. tostring(G.CircuitBreaker.isConnectionBlocked ~= nil))
+	print("  - cleanupCircuitBreaker: " .. tostring(G.CircuitBreaker.cleanupCircuitBreaker ~= nil))
+
+	-- Test with dummy nodes
+	local dummyNodeA = { id = 999999 }
+	local dummyNodeB = { id = 999998 }
+
+	local success, result = pcall(G.CircuitBreaker.addConnectionFailure, dummyNodeA, dummyNodeB)
+	if success then
+		print("addConnectionFailure test: SUCCESS")
+	else
+		print("addConnectionFailure test: FAILED - " .. tostring(result))
+	end
+end)
+
+Commands.Register("pf_test_astar", function(args)
+	if args[1] and args[2] then
+		local startId = tonumber(args[1])
+		local goalId = tonumber(args[2])
+
+		if startId and goalId then
+			local nodes = G.Navigation.nodes
+			local startNode = nodes[startId]
+			local goalNode = nodes[goalId]
+
+			if startNode and goalNode then
+				print(string.format("Testing A* from node %d to node %d", startId, goalId))
+
+				-- Test adjacency function
+				local success, adjacent = pcall(Node.GetAdjacentNodesSimple, startNode, nodes)
+				if success and adjacent and #adjacent > 0 then
+					print(string.format("Start node has %d connections", #adjacent))
+
+					-- Test A* pathfinding
+					local success, path =
+						pcall(AStar.NormalPath, startNode, goalNode, nodes, Node.GetAdjacentNodesSimple)
+					if success and path then
+						print(string.format("A* SUCCESS: Found path with %d nodes", #path))
+						for i, node in ipairs(path) do
+							if i <= 5 then
+								print(string.format("  %d. Node %d", i, node.id))
+							end
+						end
+						if #path > 5 then
+							print(string.format("  ... and %d more nodes", #path - 5))
+						end
+					else
+						print("A* FAILED: No path found")
+					end
+				else
+					print("ERROR: Could not get adjacent nodes")
+				end
+			else
+				print(string.format("ERROR: Nodes %d or %d not found", startId, goalId))
+			end
+		else
+			print("Usage: pf_test_astar <startNodeId> <goalNodeId>")
+		end
+	else
+		print("Usage: pf_test_astar <startNodeId> <goalNodeId>")
+	end
+end)
