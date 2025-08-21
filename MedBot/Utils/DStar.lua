@@ -4,7 +4,7 @@ local Heap = require("MedBot.Utils.Heap")
 local DStar = {}
 
 local function manhattan(a, b)
-	return math.abs(a.pos.x - b.pos.x) + math.abs(a.pos.y - b.pos.y)
+	return (a.pos - b.pos):Length()
 end
 
 local function isKeyLess(a, b)

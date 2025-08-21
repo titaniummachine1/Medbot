@@ -1218,11 +1218,19 @@ Node.CreateDoorForAreas = createDoorForAreas
 -- Global storage for wall corner visualization
 G.WallCorners = G.WallCorners or {}
 
+-- Global door storage with indices for shared door geometry
+G.DoorRegistry = G.DoorRegistry or {}
+G.DoorIndex = G.DoorIndex or 0
+
 function Node.BuildDoorsForConnections()
 	local nodes = Node.GetNodes()
 	if not nodes then
 		return
 	end
+
+	-- Clear previous door registry and wall corners
+	G.DoorRegistry = {}
+	G.DoorIndex = 0
 
 	-- Clear previous wall corners (only if not already calculated)
 	if not G.WallCornersCalculated then
@@ -1450,10 +1458,10 @@ function Node.BuildDoorsForConnections()
 	end
 	Log:Info("Door generation complete using shared line approach")
 
-	-- Fourth pass: Cleanup bidirectional doors - keep only the bigger door
-	Log:Info("Cleaning up bidirectional doors...")
+	-- Fourth pass: Handle door sharing and preserve one-directional connections
+	Log:Info("Processing door sharing and preserving one-directional connections...")
 	local processedPairs = {}
-	local removedDoors = 0
+	local sharedDoors = 0
 
 	for _, id in ipairs(ids) do
 		local areaA = nodes[id]
@@ -1472,24 +1480,15 @@ function Node.BuildDoorsForConnections()
 							local pairKey = id < neighborId and (id .. "-" .. neighborId) or (neighborId .. "-" .. id)
 
 							if not processedPairs[pairKey] then
-								-- First time seeing this pair - calculate door widths for both directions
-								local doorWidthAB = (entry.right - entry.left):Length()
-
-								-- Find the reverse connection (B->A)
+								-- First time seeing this pair - check if reverse connection exists
 								local reverseEntry = nil
-								local reverseWidth = 0
 								if neighbor.c then
 									for _, neighborCDir in pairs(neighbor.c) do
 										if neighborCDir and neighborCDir.connections then
 											for _, reverseConnection in ipairs(neighborCDir.connections) do
 												local reverseNormalized = normalizeConnectionEntry(reverseConnection)
-												if
-													reverseNormalized.node == id
-													and reverseNormalized.left
-													and reverseNormalized.right
-												then
+												if reverseNormalized.node == id then
 													reverseEntry = reverseNormalized
-													reverseWidth = (reverseNormalized.right - reverseNormalized.left):Length()
 													break
 												end
 											end
@@ -1500,107 +1499,64 @@ function Node.BuildDoorsForConnections()
 									end
 								end
 
-								-- Decide which door to keep as canonical - prefer doors that don't span full width
-								local keepCurrentDirection = true
-								if reverseEntry then
-									-- Calculate how much of each area's edge the door spans
-									local geomAB = getDoorGeometry(areaA, neighbor)
-									local geomBA = getDoorGeometry(neighbor, areaA)
-									local currentSpanRatio = geomAB
-											and (doorWidthAB / math.max(geomAB.edgeLength, 0.001))
-										or 1.0
-									local reverseSpanRatio = (
-										geomBA and (reverseWidth / math.max(geomBA.edgeLength, 0.001))
-									) or 1.0
-
-									-- Prefer the door that doesn't span the full width (more specific positioning)
-									-- Debug for our problem areas
-									if (id == 60 and neighborId == 373) or (id == 373 and neighborId == 60) then
-										Log:Info(
-											"CLEANUP DEBUG: Area %d->%d span=%.3f vs Area %d->%d span=%.3f",
-											id,
-											neighborId,
-											currentSpanRatio,
-											neighborId,
-											id,
-											reverseSpanRatio
-										)
-									end
-
-									-- Prefer the door that doesn't span the full width (more specific positioning)
-									if reverseSpanRatio < 0.99 and currentSpanRatio >= 0.99 then
-										keepCurrentDirection = false
-									elseif currentSpanRatio < 0.99 and reverseSpanRatio >= 0.99 then
-										keepCurrentDirection = true
-									else
-										if reverseWidth > doorWidthAB then
-											keepCurrentDirection = false
-										end
-									end
-								end
-
-								-- Unify: reuse the same door geometry for both directions
-								local chosen = keepCurrentDirection and entry or reverseEntry or entry
-								local uniLeft, uniMid, uniRight = chosen.left, chosen.middle, chosen.right
-								local uniJump = chosen.needJump and true or false
-								local uniDir = chosen.dir
-								local uniOneWay = chosen.oneWayDown and true or false
-
-								-- Propagate unified geometry to both current and reverse entries (in-place)
-								entry.left, entry.middle, entry.right = uniLeft, uniMid, uniRight
-								entry.needJump, entry.dir, entry.oneWayDown = uniJump, uniDir, uniOneWay
-								if reverseEntry then
-									reverseEntry.left, reverseEntry.middle, reverseEntry.right =
-										uniLeft, uniMid, uniRight
-									reverseEntry.needJump, reverseEntry.dir, reverseEntry.oneWayDown =
-										uniJump, uniDir, uniOneWay
-								end
-
-								-- Set per-entry door ownership to the source area of each connection
-								entry.doorOwner = id
-								if reverseEntry then
-									reverseEntry.doorOwner = neighborId
-								end
-
-								-- Store the unified decision and geometry for this pair
-								local ownerId = (chosen == entry) and id or neighborId
-								processedPairs[pairKey] = {
-									reuseBoth = true,
-									keepAB = true,
-									keepBA = true,
-									left = uniLeft,
-									middle = uniMid,
-									right = uniRight,
-									needJump = uniJump,
-									dir = uniDir,
-									oneWayDown = uniOneWay,
-									doorOwner = ownerId,
+								-- Store door in registry and assign index
+								G.DoorIndex = G.DoorIndex + 1
+								local doorIndex = G.DoorIndex
+								G.DoorRegistry[doorIndex] = {
+									left = entry.left,
+									middle = entry.middle,
+									right = entry.right,
+									needJump = entry.needJump,
+									dir = entry.dir,
+									oneWayDown = entry.oneWayDown,
 								}
 
-								-- Always keep current entry (we keep both directions)
+								-- Assign door index to current connection
+								entry.doorIndex = doorIndex
+
+								-- If bidirectional connection exists, share the same door
+								if reverseEntry then
+									-- Both directions use same door geometry
+									reverseEntry.left = entry.left
+									reverseEntry.middle = entry.middle
+									reverseEntry.right = entry.right
+									reverseEntry.needJump = entry.needJump
+									reverseEntry.dir = entry.dir
+									reverseEntry.oneWayDown = entry.oneWayDown
+									reverseEntry.doorIndex = doorIndex
+
+									processedPairs[pairKey] = {
+										doorIndex = doorIndex,
+										hasReverse = true,
+										currentOwner = id, -- Current node determines door origin
+									}
+									sharedDoors = sharedDoors + 1
+								else
+									-- One-directional connection - current node is owner by default
+									processedPairs[pairKey] = {
+										doorIndex = doorIndex,
+										hasReverse = false,
+										currentOwner = id,
+									}
+								end
+
+								-- Always keep current entry - preserve all connections
 								updated[#updated + 1] = entry
 							else
-								-- We've already processed this pair, check our decision
+								-- We've already processed this pair, use shared door geometry
 								local decision = processedPairs[pairKey]
-								-- If unified, force geometry and keep; otherwise obey keep flags
-								if decision.reuseBoth then
-									entry.left, entry.middle, entry.right =
-										decision.left, decision.middle, decision.right
-									entry.needJump, entry.dir, entry.oneWayDown =
-										decision.needJump, decision.dir, decision.oneWayDown
-									-- Maintain ownership per direction
-									entry.doorOwner = id
-									updated[#updated + 1] = entry
-								else
-									local shouldKeepThis = (id < neighborId and decision.keepAB)
-										or (id > neighborId and decision.keepBA)
-									if shouldKeepThis then
-										updated[#updated + 1] = entry
-									else
-										removedDoors = removedDoors + 1
-										-- Skip this door
-									end
+								if decision and G.DoorRegistry[decision.doorIndex] then
+									local sharedDoor = G.DoorRegistry[decision.doorIndex]
+									entry.left = sharedDoor.left
+									entry.middle = sharedDoor.middle
+									entry.right = sharedDoor.right
+									entry.needJump = sharedDoor.needJump
+									entry.dir = sharedDoor.dir
+									entry.oneWayDown = sharedDoor.oneWayDown
+									entry.doorIndex = decision.doorIndex
 								end
+								-- Always keep the connection
+								updated[#updated + 1] = entry
 							end
 						else
 							-- Keep doors without proper geometry (fallback)
@@ -1614,7 +1570,7 @@ function Node.BuildDoorsForConnections()
 		end
 	end
 
-	Log:Info("Bidirectional door cleanup complete: removed %d smaller doors", removedDoors)
+	Log:Info("Door sharing complete: created %d shared doors", sharedDoors)
 
 	-- Fifth pass: Recalculate doors from correct source areas to fix alignment
 	Log:Info("Recalculating doors from correct source areas...")

@@ -20,7 +20,7 @@ local G = require("MedBot.Utils.Globals")
 local Node = require("MedBot.Modules.Node")
 local Visuals = require("MedBot.Visuals")
 local AStar = require("MedBot.Utils.A-Star")
---local DStar = require("MedBot.Utils.DStar")
+local DStar = require("MedBot.Utils.DStar")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -509,27 +509,18 @@ function Navigation.FindPath(startNode, goalNode)
 		return Navigation
 	end
 
-	local horizontalDistance = math.abs(goalNode.pos.x - startNode.pos.x) + math.abs(goalNode.pos.y - startNode.pos.y)
-	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
-
-	-- Try A* pathfinding as primary algorithm (more reliable than D*)
-	local success, path = pcall(AStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+	-- Try D* as fallback
+	Log:Info("Trying D* fallback pathfinding...")
+	success, path = pcall(DStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 
 	if not success then
-		Log:Error("A* pathfinding crashed: %s", tostring(path))
-		-- Try D* as fallback
-		Log:Info("Trying D* fallback pathfinding...")
-		success, path = pcall(DStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
-
-		if not success then
-			Log:Error("D* fallback also crashed: %s", tostring(path))
-			G.Navigation.path = nil
-			Navigation.pathFailed = true
-			Navigation.pathFound = false
-			return Navigation
-		elseif path then
-			Log:Info("D* fallback succeeded with %d nodes", #path)
-		end
+		Log:Error("D* fallback also crashed: %s", tostring(path))
+		G.Navigation.path = nil
+		Navigation.pathFailed = true
+		Navigation.pathFound = false
+		return Navigation
+	elseif path then
+		Log:Info("D* fallback succeeded with %d nodes", #path)
 	end
 
 	G.Navigation.path = path
