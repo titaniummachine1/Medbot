@@ -511,30 +511,33 @@ local function computeRobustSharedSpanOnA(aLeft, aRight, bLeft, bRight, minWidth
 		return nil
 	end
 
-	-- Shrink ends until points are within lateral tolerance of B segment
+	-- Only shrink ends if they're significantly misaligned (relaxed tolerance)
 	local function distToBSegAtS(s)
 		local px, py = aLeft.x + ux * s, aLeft.y + uy * s
 		return distancePointToSegment2D(px, py, bLeft.x, bLeft.y, bRight.x, bRight.y)
 	end
 
-	-- Left end shrink
-	for _ = 1, 10 do
+	-- Use more relaxed lateral tolerance for better door coverage
+	local RELAXED_LATERAL = EPS_LATERAL * 4 -- 10 units instead of 2.5
+
+	-- Left end shrink (only if severely misaligned)
+	for _ = 1, 5 do -- Fewer iterations
 		local d = distToBSegAtS(s0)
-		if d <= EPS_LATERAL then
+		if d <= RELAXED_LATERAL then
 			break
 		end
-		s0 = 0.5 * (s0 + s1)
+		s0 = s0 + (s1 - s0) * 0.1 -- Smaller adjustment
 		if s1 - s0 < reqWidth then
 			break
 		end
 	end
-	-- Right end shrink
-	for _ = 1, 10 do
+	-- Right end shrink (only if severely misaligned)
+	for _ = 1, 5 do -- Fewer iterations
 		local d = distToBSegAtS(s1)
-		if d <= EPS_LATERAL then
+		if d <= RELAXED_LATERAL then
 			break
 		end
-		s1 = 0.5 * (s0 + s1)
+		s1 = s1 - (s1 - s0) * 0.1 -- Smaller adjustment
 		if s1 - s0 < reqWidth then
 			break
 		end
@@ -892,7 +895,7 @@ local function checkJumpHeightCompatibility(areaA, areaB)
 	return heightDiff <= maxJumpHeight
 end
 
--- STEP 4: Apply outer corner clamping (24 units from outer corners)
+-- STEP 4: Apply outer corner clamping (24 units from outer corners on relevant axis)
 local function applyOuterCornerClamping(geometry, span, areaA)
 	local tL, tR = span.tL, span.tR
 	local doorWidth = (tR - tL) * geometry.edgeLength
@@ -906,33 +909,72 @@ local function applyOuterCornerClamping(geometry, span, areaA)
 	local doorLeft = geometry.aLeft + (geometry.aRight - geometry.aLeft) * tL
 	local doorRight = geometry.aLeft + (geometry.aRight - geometry.aLeft) * tR
 
-	-- Check distance to outer corners and clamp if needed
+	-- Determine door direction and relevant axis
+	local edgeVector = geometry.aRight - geometry.aLeft
+	local isHorizontalDoor = math.abs(edgeVector.x) > math.abs(edgeVector.y)
+
+	-- Check distance to outer corners and calculate individual clamp amounts
 	local clampDistance = 24
-	local clampLeft, clampRight = false, false
+	local safetyBuffer = 2 -- Extra buffer to ensure door doesn't sit exactly on boundary
+	local effectiveClampDistance = clampDistance + safetyBuffer
+	local leftClampAmount, rightClampAmount = 0, 0
 
 	-- Check all corners of current area
 	local areaCorners = { areaA.nw, areaA.ne, areaA.se, areaA.sw }
 	for _, corner in ipairs(areaCorners) do
 		if G.OuterCorners and G.OuterCorners[corner] then
-			-- This is an outer corner, check distances
-			local distToLeft = (doorLeft - corner):Length()
-			local distToRight = (doorRight - corner):Length()
+			-- Calculate how much each side needs to be clamped based on corner position
+			local leftAxisDist, rightAxisDist
 
-			if distToLeft < clampDistance then
-				clampLeft = true
+			if isHorizontalDoor then
+				-- For horizontal doors, check X-axis distance
+				leftAxisDist = math.abs(doorLeft.x - corner.x)
+				rightAxisDist = math.abs(doorRight.x - corner.x)
+			else
+				-- For vertical doors, check Y-axis distance
+				leftAxisDist = math.abs(doorLeft.y - corner.y)
+				rightAxisDist = math.abs(doorRight.y - corner.y)
 			end
-			if distToRight < clampDistance then
-				clampRight = true
+
+			-- Calculate individual clamp amounts using effective distance with safety buffer
+			if leftAxisDist < effectiveClampDistance then
+				local requiredClamp = effectiveClampDistance - leftAxisDist
+				leftClampAmount = math.max(leftClampAmount, requiredClamp)
+			end
+			if rightAxisDist < effectiveClampDistance then
+				local requiredClamp = effectiveClampDistance - rightAxisDist
+				rightClampAmount = math.max(rightClampAmount, requiredClamp)
 			end
 		end
 	end
 
-	-- Apply clamping by moving door points away from outer corners
-	if clampLeft then
-		tL = tL + (clampDistance / geometry.edgeLength)
+	-- Apply individual clamping amounts
+	if leftClampAmount > 0 then
+		tL = tL + (leftClampAmount / geometry.edgeLength)
 	end
-	if clampRight then
-		tR = tR - (clampDistance / geometry.edgeLength)
+	if rightClampAmount > 0 then
+		tR = tR - (rightClampAmount / geometry.edgeLength)
+	end
+
+	-- Ensure the clamped positions maintain at least 24 units between them
+	local clampedDoorWidth = (tR - tL) * geometry.edgeLength
+	if clampedDoorWidth < clampDistance then
+		-- If clamping would make door too narrow, find a compromise
+		local totalClampNeeded = leftClampAmount + rightClampAmount
+		local availableWidth = doorWidth - clampDistance
+
+		if availableWidth > 0 then
+			-- Proportionally reduce clamp amounts to maintain minimum width
+			local scaleFactor = availableWidth / totalClampNeeded
+			leftClampAmount = leftClampAmount * scaleFactor
+			rightClampAmount = rightClampAmount * scaleFactor
+
+			tL = span.tL + (leftClampAmount / geometry.edgeLength)
+			tR = span.tR - (rightClampAmount / geometry.edgeLength)
+		else
+			-- Revert to original if no compromise possible
+			return span.tL, span.tR
+		end
 	end
 
 	-- CRITICAL: Ensure door stays within the bounds of the source area (0.0 to 1.0)
@@ -1421,183 +1463,167 @@ function Node.BuildDoorsForConnections()
 		true
 	)
 
-	-- Third pass: Build doors for pathfinding (simple shared line approach)
-	Log:Info("Building doors using shared line approach...")
-	for _, id in ipairs(ids) do
-		local areaA = nodes[id]
-		if areaA and areaA.c then
-			for dirIndex = 1, 4 do
-				local cDir = areaA.c[dirIndex]
-				if cDir and cDir.connections then
-					local updated = {}
-					for _, connection in ipairs(cDir.connections) do
-						local entry = normalizeConnectionEntry(connection)
-						local neighbor = nodes[entry.node]
-						if neighbor and neighbor.pos then
-							local door = Node.CreateDoorForAreas(areaA, neighbor)
-							if door then
-								entry.left = door.left
-								entry.middle = door.middle
-								entry.right = door.right
-								entry.needJump = door.needJump and true or false
-								entry.dir = door.dir
-								entry.oneWayDown = door.oneWayDown and true or false
-								-- Door ownership belongs to the source area (directional owner)
-								entry.doorOwner = id
-								updated[#updated + 1] = entry
-							else
-								-- Drop unreachable connection
-							end
-						end
-					end
-					cDir.connections = updated
-					cDir.count = #updated
-				end
-			end
-		end
-	end
-	Log:Info("Door generation complete using shared line approach")
-
-	-- Fourth pass: Handle door sharing and preserve one-directional connections
-	Log:Info("Processing door sharing and preserving one-directional connections...")
+	-- Third pass: Build doors with proper sharing logic
+	Log:Info("Building doors with proper sharing logic...")
+	local totalConnections = 0
+	local successfulDoors = 0
 	local processedPairs = {}
-	local sharedDoors = 0
 
+	-- First, collect all bidirectional pairs to determine door ownership
+	local bidirectionalPairs = {}
 	for _, id in ipairs(ids) do
 		local areaA = nodes[id]
 		if areaA and areaA.c then
 			for dirIndex = 1, 4 do
 				local cDir = areaA.c[dirIndex]
 				if cDir and cDir.connections then
-					local updated = {}
 					for _, connection in ipairs(cDir.connections) do
 						local entry = normalizeConnectionEntry(connection)
 						local neighborId = entry.node
 						local neighbor = nodes[neighborId]
-
-						if neighbor and entry.left and entry.middle and entry.right then
-							-- Create a unique pair key (smaller ID first to avoid A->B vs B->A)
-							local pairKey = id < neighborId and (id .. "-" .. neighborId) or (neighborId .. "-" .. id)
-
-							if not processedPairs[pairKey] then
-								-- First time seeing this pair - check if reverse connection exists
-								local reverseEntry = nil
-								if neighbor.c then
-									for _, neighborCDir in pairs(neighbor.c) do
-										if neighborCDir and neighborCDir.connections then
-											for _, reverseConnection in ipairs(neighborCDir.connections) do
-												local reverseNormalized = normalizeConnectionEntry(reverseConnection)
-												if reverseNormalized.node == id then
-													reverseEntry = reverseNormalized
-													break
-												end
+						if neighbor and neighbor.pos then
+							-- Check if reverse connection exists
+							local hasReverse = false
+							if neighbor.c then
+								for _, neighborCDir in pairs(neighbor.c) do
+									if neighborCDir and neighborCDir.connections then
+										for _, reverseConnection in ipairs(neighborCDir.connections) do
+											local reverseEntry = normalizeConnectionEntry(reverseConnection)
+											if reverseEntry.node == id then
+												hasReverse = true
+												break
 											end
 										end
-										if reverseEntry then
-											break
+									end
+									if hasReverse then
+										break
+									end
+								end
+							end
+
+							if hasReverse then
+								local pairKey = id < neighborId and (id .. "-" .. neighborId)
+									or (neighborId .. "-" .. id)
+								if not bidirectionalPairs[pairKey] then
+									-- Determine door owner (prefer higher elevation for easier downward movement)
+									local owner = id
+									if areaA.pos.z < neighbor.pos.z then
+										owner = neighborId -- Neighbor is higher, should own the door
+									elseif areaA.pos.z == neighbor.pos.z then
+										owner = math.min(id, neighborId) -- Same height, use ID as tiebreaker
+									end
+									-- If areaA.pos.z > neighbor.pos.z, current area (id) remains owner
+
+									bidirectionalPairs[pairKey] = {
+										owner = owner,
+										nodeA = id,
+										nodeB = neighborId,
+									}
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- Second, process connections with proper door sharing
+	for _, id in ipairs(ids) do
+		local areaA = nodes[id]
+		if areaA and areaA.c then
+			for dirIndex = 1, 4 do
+				local cDir = areaA.c[dirIndex]
+				if cDir and cDir.connections then
+					local updated = {}
+					for _, connection in ipairs(cDir.connections) do
+						totalConnections = totalConnections + 1
+						local entry = normalizeConnectionEntry(connection)
+						local neighborId = entry.node
+						local neighbor = nodes[neighborId]
+
+						if neighbor and neighbor.pos then
+							local pairKey = id < neighborId and (id .. "-" .. neighborId) or (neighborId .. "-" .. id)
+							local bidirectional = bidirectionalPairs[pairKey]
+
+							if bidirectional then
+								-- Bidirectional connection - ensure single shared door
+								local sharedData = processedPairs[pairKey]
+								if not sharedData then
+									-- First time processing this pair - create door from owner
+									if bidirectional.owner == id then
+										local door = Node.CreateDoorForAreas(areaA, neighbor)
+										if door then
+											-- Store door in registry
+											G.DoorIndex = G.DoorIndex + 1
+											local doorIndex = G.DoorIndex
+											G.DoorRegistry[doorIndex] = {
+												left = door.left,
+												middle = door.middle,
+												right = door.right,
+												needJump = door.needJump,
+												dir = door.dir,
+												oneWayDown = door.oneWayDown,
+											}
+
+											sharedData = {
+												doorIndex = doorIndex,
+												door = door,
+												owner = id,
+											}
+											processedPairs[pairKey] = sharedData
+											successfulDoors = successfulDoors + 1
 										end
+									else
+										-- Non-owner processed first - mark as pending
+										sharedData = { pending = true, nonOwner = id }
+										processedPairs[pairKey] = sharedData
 									end
 								end
 
-								-- Store door in registry and assign index
-								G.DoorIndex = G.DoorIndex + 1
-								local doorIndex = G.DoorIndex
-								G.DoorRegistry[doorIndex] = {
-									left = entry.left,
-									middle = entry.middle,
-									right = entry.right,
-									needJump = entry.needJump,
-									dir = entry.dir,
-									oneWayDown = entry.oneWayDown,
-								}
+								-- Apply shared door geometry to this connection
+								if sharedData and sharedData.door then
+									entry.left = sharedData.door.left
+									entry.middle = sharedData.door.middle
+									entry.right = sharedData.door.right
+									entry.needJump = sharedData.door.needJump and true or false
+									entry.dir = sharedData.door.dir
+									entry.oneWayDown = sharedData.door.oneWayDown and true or false
+									entry.doorIndex = sharedData.doorIndex
+								elseif sharedData and sharedData.pending and bidirectional.owner == id then
+									-- Owner processing after non-owner - create door now
+									local door = Node.CreateDoorForAreas(areaA, neighbor)
+									if door then
+										G.DoorIndex = G.DoorIndex + 1
+										local doorIndex = G.DoorIndex
+										G.DoorRegistry[doorIndex] = {
+											left = door.left,
+											middle = door.middle,
+											right = door.right,
+											needJump = door.needJump,
+											dir = door.dir,
+											oneWayDown = door.oneWayDown,
+										}
 
-								-- Assign door index to current connection
-								entry.doorIndex = doorIndex
+										-- Update shared data
+										sharedData.door = door
+										sharedData.doorIndex = doorIndex
+										sharedData.owner = id
+										sharedData.pending = nil
 
-								-- If bidirectional connection exists, share the same door
-								if reverseEntry then
-									-- Both directions use same door geometry
-									reverseEntry.left = entry.left
-									reverseEntry.middle = entry.middle
-									reverseEntry.right = entry.right
-									reverseEntry.needJump = entry.needJump
-									reverseEntry.dir = entry.dir
-									reverseEntry.oneWayDown = entry.oneWayDown
-									reverseEntry.doorIndex = doorIndex
-
-									processedPairs[pairKey] = {
-										doorIndex = doorIndex,
-										hasReverse = true,
-										currentOwner = id, -- Current node determines door origin
-									}
-									sharedDoors = sharedDoors + 1
-								else
-									-- One-directional connection - current node is owner by default
-									processedPairs[pairKey] = {
-										doorIndex = doorIndex,
-										hasReverse = false,
-										currentOwner = id,
-									}
+										-- Apply to current entry
+										entry.left = door.left
+										entry.middle = door.middle
+										entry.right = door.right
+										entry.needJump = door.needJump and true or false
+										entry.dir = door.dir
+										entry.oneWayDown = door.oneWayDown and true or false
+										entry.doorIndex = doorIndex
+										successfulDoors = successfulDoors + 1
+									end
 								end
-
-								-- Always keep current entry - preserve all connections
-								updated[#updated + 1] = entry
 							else
-								-- We've already processed this pair, use shared door geometry
-								local decision = processedPairs[pairKey]
-								if decision and G.DoorRegistry[decision.doorIndex] then
-									local sharedDoor = G.DoorRegistry[decision.doorIndex]
-									entry.left = sharedDoor.left
-									entry.middle = sharedDoor.middle
-									entry.right = sharedDoor.right
-									entry.needJump = sharedDoor.needJump
-									entry.dir = sharedDoor.dir
-									entry.oneWayDown = sharedDoor.oneWayDown
-									entry.doorIndex = decision.doorIndex
-								end
-								-- Always keep the connection
-								updated[#updated + 1] = entry
-							end
-						else
-							-- Keep doors without proper geometry (fallback)
-							updated[#updated + 1] = entry
-						end
-					end
-					cDir.connections = updated
-					cDir.count = #updated
-				end
-			end
-		end
-	end
-
-	Log:Info("Door sharing complete: created %d shared doors", sharedDoors)
-
-	-- Fifth pass: Recalculate doors from correct source areas to fix alignment
-	Log:Info("Recalculating doors from correct source areas...")
-	local recalculatedDoors = 0
-
-	for _, id in ipairs(ids) do
-		local areaA = nodes[id]
-		if areaA and areaA.c then
-			for dirIndex = 1, 4 do
-				local cDir = areaA.c[dirIndex]
-				if cDir and cDir.connections then
-					local updated = {}
-					for _, connection in ipairs(cDir.connections) do
-						local entry = normalizeConnectionEntry(connection)
-						local neighborId = entry.node
-						local neighbor = nodes[neighborId]
-
-						if neighbor and entry.left and entry.middle and entry.right then
-							-- Check if this door was inherited from a different area
-							local pairKey = id < neighborId and (id .. "-" .. neighborId) or (neighborId .. "-" .. id)
-							local decision = processedPairs[pairKey]
-
-							if decision and decision.reuseBoth then
-								-- Geometry unified for both directions; no recalculation needed
-								-- Keep entry as-is
-							elseif decision and decision.doorOwner ~= id then
-								-- This door was calculated from the other area, recalculate from this area
+								-- One-directional connection - create door normally
 								local door = Node.CreateDoorForAreas(areaA, neighbor)
 								if door then
 									entry.left = door.left
@@ -1606,17 +1632,25 @@ function Node.BuildDoorsForConnections()
 									entry.needJump = door.needJump and true or false
 									entry.dir = door.dir
 									entry.oneWayDown = door.oneWayDown and true or false
-									-- Keep ownership on recalculation: still belongs to the source area
-									entry.doorOwner = id
-									recalculatedDoors = recalculatedDoors + 1
+
+									-- Store in registry
+									G.DoorIndex = G.DoorIndex + 1
+									entry.doorIndex = G.DoorIndex
+									G.DoorRegistry[G.DoorIndex] = {
+										left = door.left,
+										middle = door.middle,
+										right = door.right,
+										needJump = door.needJump,
+										dir = door.dir,
+										oneWayDown = door.oneWayDown,
+									}
+									successfulDoors = successfulDoors + 1
 								end
 							end
-
-							updated[#updated + 1] = entry
-						else
-							-- Keep doors without proper geometry (fallback)
-							updated[#updated + 1] = entry
 						end
+
+						-- Always keep connection (preserve pathfinding)
+						updated[#updated + 1] = entry
 					end
 					cDir.connections = updated
 					cDir.count = #updated
@@ -1625,7 +1659,17 @@ function Node.BuildDoorsForConnections()
 		end
 	end
 
-	Log:Info("Door recalculation complete: recalculated %d doors from correct source areas", recalculatedDoors)
+	local bidirectionalCount = 0
+	for _ in pairs(bidirectionalPairs) do
+		bidirectionalCount = bidirectionalCount + 1
+	end
+
+	Log:Info(
+		"Door generation complete: %d total connections, %d successful doors, %d bidirectional pairs",
+		totalConnections,
+		successfulDoors,
+		bidirectionalCount
+	)
 end
 
 --- Public utility functions for connection handling
@@ -1693,13 +1737,21 @@ function Node.GetDoorTargetPoint(areaA, areaB)
 		return DoorTargetCache[key]
 	end
 
-	-- Prefer precomputed door points on the connection
+	-- Prefer precomputed door points from the door registry
 	local entry = Node.GetConnectionEntry(areaA, areaB)
 	local doorLeft, doorMid, doorRight = nil, nil, nil
 	local dirOverride = nil
 	if entry then
-		doorLeft, doorMid, doorRight = entry.left, entry.middle, entry.right
-		dirOverride = entry.dir
+		-- Use door registry if doorIndex exists
+		if entry.doorIndex and G.DoorRegistry and G.DoorRegistry[entry.doorIndex] then
+			local door = G.DoorRegistry[entry.doorIndex]
+			doorLeft, doorMid, doorRight = door.left, door.middle, door.right
+			dirOverride = door.dir
+		else
+			-- Fallback to direct door points (legacy support)
+			doorLeft, doorMid, doorRight = entry.left, entry.middle, entry.right
+			dirOverride = entry.dir
+		end
 	end
 
 	-- If we lack door points, try constructing them on the fly
@@ -3272,7 +3324,13 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
 		if not (fromAreaId and toAreaId) then
 			return false
 		end
-		for _, cDir in pairs(nodes[fromAreaId] and nodes[fromAreaId].c or {}) do
+		local fromNode = nodes[fromAreaId]
+		if not fromNode or not fromNode.c then
+			Log:Debug("Node %d has no connections to penalize", fromAreaId)
+			return false
+		end
+
+		for _, cDir in pairs(fromNode.c) do
 			if cDir and cDir.connections then
 				for i, connection in pairs(cDir.connections) do
 					local targetNodeId = getConnectionNodeId(connection)
@@ -3294,6 +3352,7 @@ function Node.AddFailurePenalty(nodeA, nodeB, penalty)
 				end
 			end
 		end
+		Log:Debug("No direct connection found from %d to %d for penalty", fromAreaId, toAreaId)
 		return false
 	end
 

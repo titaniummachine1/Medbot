@@ -286,23 +286,38 @@ function Navigation.BuildDoorWaypointsFromPath()
 		if a and b and a.pos and b.pos then
 			-- Collect all available door points for this edge
 			local entry = Node.GetConnectionEntry(a, b)
-			if entry and (entry.left or entry.middle or entry.right) then
+			local doorLeft, doorMid, doorRight, doorDir = nil, nil, nil, nil
+			
+			if entry then
+				-- Use door registry if doorIndex exists
+				if entry.doorIndex and G.DoorRegistry and G.DoorRegistry[entry.doorIndex] then
+					local door = G.DoorRegistry[entry.doorIndex]
+					doorLeft, doorMid, doorRight = door.left, door.middle, door.right
+					doorDir = door.dir
+				else
+					-- Fallback to direct door points (legacy support)
+					doorLeft, doorMid, doorRight = entry.left, entry.middle, entry.right
+					doorDir = entry.dir
+				end
+			end
+			
+			if doorLeft or doorMid or doorRight then
 				local points = {}
-				if entry.left then
-					table.insert(points, entry.left)
+				if doorLeft then
+					table.insert(points, doorLeft)
 				end
-				if entry.middle then
-					table.insert(points, entry.middle)
+				if doorMid then
+					table.insert(points, doorMid)
 				end
-				if entry.right then
-					table.insert(points, entry.right)
+				if doorRight then
+					table.insert(points, doorRight)
 				end
 				table.insert(G.Navigation.waypoints, {
 					kind = "door",
 					fromId = a.id,
 					toId = b.id,
 					points = points,
-					dir = entry.dir,
+					dir = doorDir,
 				})
 			else
 				-- Fallback: use Node helper for a single door target
@@ -527,6 +542,33 @@ function Navigation.FindPath(startNode, goalNode)
 
 	if not G.Navigation.path or #G.Navigation.path == 0 then
 		Log:Error("Failed to find path from %d to %d!", startNode.id, goalNode.id)
+		
+		-- Debug: Check what connections exist for start and goal nodes
+		local startConnections = Node.GetAdjacentNodesSimple(startNode, G.Navigation.nodes)
+		local goalConnections = Node.GetAdjacentNodesSimple(goalNode, G.Navigation.nodes)
+		Log:Debug("Start node %d has %d connections", startNode.id, #startConnections)
+		Log:Debug("Goal node %d has %d connections", goalNode.id, #goalConnections)
+		
+		-- Show first few connections for debugging
+		for i = 1, math.min(3, #startConnections) do
+			local conn = startConnections[i]
+			local blocked = G.CircuitBreaker and G.CircuitBreaker.isConnectionBlocked and G.CircuitBreaker.isConnectionBlocked(startNode, conn.node)
+			Log:Debug("  Start->%d (cost %.1f)%s", conn.node.id, conn.cost, blocked and " [BLOCKED]" or "")
+		end
+		for i = 1, math.min(3, #goalConnections) do
+			local conn = goalConnections[i]
+			local blocked = G.CircuitBreaker and G.CircuitBreaker.isConnectionBlocked and G.CircuitBreaker.isConnectionBlocked(goalNode, conn.node)
+			Log:Debug("  Goal->%d (cost %.1f)%s", conn.node.id, conn.cost, blocked and " [BLOCKED]" or "")
+		end
+		
+		-- Check if circuit breaker is blocking too many connections
+		if G.CircuitBreaker and G.CircuitBreaker.getBlockedCount then
+			local blockedCount = G.CircuitBreaker.getBlockedCount()
+			if blockedCount > 0 then
+				Log:Debug("Circuit breaker has %d blocked connections", blockedCount)
+			end
+		end
+		
 		G.Navigation.path = nil
 		Navigation.pathFailed = true
 		Navigation.pathFound = false
