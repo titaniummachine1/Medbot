@@ -264,20 +264,19 @@ local function OnDraw()
     Visuals.MaybeRebuildGrid()
     collectVisible(me)
     local p = me:GetAbsOrigin()
-    local manhattanRadius = (G.Menu.Visuals.renderRadius or 2000)
+    local renderRadius = (G.Menu.Visuals.renderRadius or 400)
     local function withinRadius(pos)
-        -- use cheaper 2D where viable
-        local d2 = math.abs(pos.x - p.x) + math.abs(pos.y - p.y)
-        return d2 <= manhattanRadius
+        -- Use vector Length() for proper render distance culling
+        local distance = (pos - p):Length()
+        return distance <= renderRadius
     end
         local visibleNodes = {}
         for i = 1, visCount do
             local id = visBuf[i]
             local node = G.Navigation.nodes and G.Navigation.nodes[id]
             if node then
-                -- Manhattan distance cull
-                local d = math.abs(node.pos.x - p.x) + math.abs(node.pos.y - p.y)
-                if d <= manhattanRadius then
+                -- Use withinRadius for consistent distance culling
+                if withinRadius(node.pos) then
                     local scr = client.WorldToScreen(node.pos)
                     if scr then
                         visibleNodes[id] = { node = node, screen = scr }
@@ -387,7 +386,9 @@ local function OnDraw()
     -- Draw pre-calculated wall corners (orange squares) - controlled by corner connections option
     if G.Menu.Visuals.showCornerConnections and G.WallCorners then
         for _, cornerPoint in ipairs(G.WallCorners) do
-            if withinRadius(cornerPoint) then
+            -- Direct distance check for wall corners
+            local cornerDistance = (cornerPoint - p):Length()
+            if cornerDistance <= renderRadius then
                 local cornerScreen = client.WorldToScreen(cornerPoint)
                 if cornerScreen then
                     -- Draw orange square for outer corners only
