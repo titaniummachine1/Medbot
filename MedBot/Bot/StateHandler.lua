@@ -8,11 +8,7 @@ local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local isWalkable = {
-	getWalkablePosition = function()
-		return nil
-	end,
-}
+local ISWalkable = require("MedBot.Navigation.ISWalkable")
 
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
@@ -47,27 +43,26 @@ function StateHandler.handleIdleState()
 	if goalNode and goalPos then
 		local distance = (G.pLocal.Origin - goalPos):Length()
 
-		-- Try direct movement first, regardless of current path
-		if distance > 25 then
-			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-			if distance < 300 then
-				walkMode = "Aggressive"
-			end
-
-			if isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
-				Log:Info(
-					"Goal directly reachable with %s mode, moving immediately (distance: %.1f)",
-					walkMode,
-					distance
-				)
-				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-				G.Navigation.goalPos = goalPos
-				G.Navigation.goalNodeId = goalNode.id
-				G.currentState = G.States.MOVING
-				G.lastPathfindingTick = globals.TickCount()
-				return
-			end
-		end
+		-- Only use direct-walk shortcut outside CTF and for short hops
+        local mapName = engine.GetMapName():lower()
+        local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
+        if allowDirectWalk then
+            local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+            walkMode = "Aggressive" -- short hops favor aggressive checks
+            if ISWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
+                Log:Info(
+                    "Direct-walk (short hop) with %s, moving immediately (dist: %.1f)",
+                    walkMode,
+                    distance
+                )
+                G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+                G.Navigation.goalPos = goalPos
+                G.Navigation.goalNodeId = goalNode.id
+                G.currentState = G.States.MOVING
+                G.lastPathfindingTick = globals.TickCount()
+                return
+            end
+        end
 
 		-- Check if goal has changed significantly from current path
 		if G.Navigation.goalPos then
@@ -129,7 +124,7 @@ function StateHandler.handleIdleState()
 			end
 		end
 
-		if goalPos and isWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
+		if goalPos and ISWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick

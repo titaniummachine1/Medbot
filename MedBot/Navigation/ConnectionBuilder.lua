@@ -45,7 +45,7 @@ local function determineDirection(fromPos, toPos)
 	end
 end
 
-local function getFacingEdgeCorners(area, dirX, dirY, otherPos)
+local function getFacingEdgeCorners(area, dirX, dirY, _)
 	if not (area and area.nw and area.ne and area.se and area.sw) then
 		return nil, nil
 	end
@@ -58,44 +58,76 @@ local function getFacingEdgeCorners(area, dirX, dirY, otherPos)
 	return nil, nil
 end
 
+-- Compute scalar overlap on an axis and return segment [a1,a2] overlapped with [b1,b2]
+local function overlap1D(a1, a2, b1, b2)
+    if a1 > a2 then a1, a2 = a2, a1 end
+    if b1 > b2 then b1, b2 = b2, b1 end
+    local left = math.max(a1, b1)
+    local right = math.min(a2, b2)
+    if right <= left then return nil end
+    return left, right
+end
+
+local function lerp(a, b, t) return a + (b - a) * t end
+
 local function createDoorForAreas(areaA, areaB)
 	if not (areaA and areaB and areaA.pos and areaB.pos) then
 		return nil
 	end
 	
 	local dirX, dirY = determineDirection(areaA.pos, areaB.pos)
-	local leftA, rightA = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
-	local leftB, rightB = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
-	
-	if not (leftA and rightA and leftB and rightB) then
-		return nil
-	end
-	
-	-- Simple overlap calculation
-	local overlapLeft = Vector3(
-		math.max(leftA.x, leftB.x),
-		math.max(leftA.y, leftB.y),
-		math.max(leftA.z, leftB.z)
-	)
-	local overlapRight = Vector3(
-		math.min(rightA.x, rightB.x),
-		math.min(rightA.y, rightB.y),
-		math.min(rightA.z, rightB.z)
-	)
-	
-	local width = EdgeCalculator.Distance3D(overlapLeft, overlapRight)
-	if width < HITBOX_WIDTH then
-		return nil
-	end
-	
-	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
-	
-	return {
-		left = overlapLeft,
-		middle = middle,
-		right = overlapRight,
-		needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT
-	}
+    local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
+    local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
+    if not (a0 and a1 and b0 and b1) then return nil end
+
+    -- Decide owner by higher edge Z (max of the two edge endpoints)
+    local aZmax = math.max(a0.z, a1.z)
+    local bZmax = math.max(b0.z, b1.z)
+    local owner = (aZmax > bZmax + 0.5) and "A" or ((bZmax > aZmax + 0.5) and "B" or "TIE")
+
+    -- Determine 1D overlap along edge axis and reconstruct points on OWNER edge
+    local oL, oR, edgeConst, axis -- axis: "x" or "y" varying
+    if dirX ~= 0 then
+        -- East/West: vertical edge, y varies, x constant
+        oL, oR = overlap1D(a0.y, a1.y, b0.y, b1.y)
+        axis = "y"
+        edgeConst = owner == "B" and b0.x or a0.x
+    else
+        -- North/South: horizontal edge, x varies, y constant
+        oL, oR = overlap1D(a0.x, a1.x, b0.x, b1.x)
+        axis = "x"
+        edgeConst = owner == "B" and b0.y or a0.y
+    end
+    if not oL then return nil end
+
+    -- Helper to get endpoint pair on chosen owner edge
+    local e0, e1 = (owner == "B" and b0 or a0), (owner == "B" and b1 or a1)
+    local function pointOnOwnerEdge(val)
+        -- compute t along owner edge based on axis coordinate
+        local denom = (axis == "x") and (e1.x - e0.x) or (e1.y - e0.y)
+        local t = denom ~= 0 and ((val - ((axis == "x") and e0.x or e0.y)) / denom) or 0
+        t = math.max(0, math.min(1, t))
+        local x = (axis == "x") and val or edgeConst
+        local y = (axis == "y") and val or edgeConst
+        local z = lerp(e0.z, e1.z, t)
+        return Vector3(x, y, z)
+    end
+
+    local overlapLeft = pointOnOwnerEdge(oL)
+    local overlapRight = pointOnOwnerEdge(oR)
+    local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
+
+    -- Validate width on the edge axis only (2D length)
+    local width2D = (axis == "x") and math.abs(oR - oL) or math.abs(oR - oL)
+    if width2D < HITBOX_WIDTH then return nil end
+
+    return {
+        left = overlapLeft,
+        middle = middle,
+        right = overlapRight,
+        owner = (owner == "A") and areaA.id or (owner == "B") and areaB.id or math.max(areaA.id, areaB.id),
+        needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT
+    }
 end
 
 function ConnectionBuilder.BuildDoorsForConnections()
@@ -114,13 +146,41 @@ function ConnectionBuilder.BuildDoorsForConnections()
 						if targetNode and type(connection) == "table" then
 							local door = createDoorForAreas(node, targetNode)
 							if door then
-								connection.left = door.left
-								connection.middle = door.middle
-								connection.right = door.right
-								connection.needJump = door.needJump
-								doorsBuilt = doorsBuilt + 1
-							end
-						end
+                                -- Populate on owner side
+                                if door.owner == node.id then
+                                    connection.left = door.left
+                                    connection.middle = door.middle
+                                    connection.right = door.right
+                                    connection.needJump = door.needJump
+                                    connection.owner = door.owner
+                                    doorsBuilt = doorsBuilt + 1
+                                end
+
+                                -- Mirror onto reverse connection so both directions share the same geometry
+                                if nodes[targetId] and nodes[targetId].c then
+                                    for _, tdir in pairs(nodes[targetId].c) do
+                                        if tdir.connections then
+                                            for rIndex, revConn in ipairs(tdir.connections) do
+                                                local backId = ConnectionUtils.GetNodeId(revConn)
+                                                if backId == node.id then
+                                                    if type(revConn) ~= "table" then
+                                                        -- normalize inline if raw id, and write back
+                                                        local norm = ConnectionUtils.NormalizeEntry(revConn)
+                                                        tdir.connections[rIndex] = norm
+                                                        revConn = norm
+                                                    end
+                                                    revConn.left = door.left
+                                                    revConn.middle = door.middle
+                                                    revConn.right = door.right
+                                                    revConn.needJump = door.needJump
+                                                    revConn.owner = door.owner
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
 					end
 				end
 			end
@@ -156,5 +216,6 @@ function ConnectionBuilder.GetDoorTargetPoint(areaA, areaB)
 	
 	return areaB.pos
 end
+
 
 return ConnectionBuilder

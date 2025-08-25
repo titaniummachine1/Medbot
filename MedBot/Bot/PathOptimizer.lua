@@ -25,7 +25,9 @@ function PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path)
         return true
     end
     -- Only skip if we have a multi-node path AND goal is directly reachable
-    if path and #path > 1 then
+    -- Never skip on CTF maps to avoid beelining to the wrong flag area
+    local mapName = engine.GetMapName():lower()
+    if path and #path > 1 and not mapName:find("ctf_") then
         local walkMode = G.Menu.Main.WalkableMode or "Smooth"
         if ISWalkable.Path(origin, goalPos, walkMode) then
             Navigation.ClearPath()

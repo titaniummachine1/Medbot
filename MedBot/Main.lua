@@ -39,6 +39,9 @@ G.currentState = G.States.IDLE
 -- Delegates all complex logic to focused modules with single responsibilities
 
 ---@param userCmd UserCmd
+-- Forward declare to allow use inside onCreateMove
+local handleMovingState
+
 local function onCreateMove(userCmd)
 
 	-- Basic validation
@@ -95,7 +98,7 @@ local function onCreateMove(userCmd)
 end
 
 -- Moving state handler using modular components
-local function handleMovingState(userCmd)
+function handleMovingState(userCmd)
 	if not G.Navigation.path or #G.Navigation.path == 0 then
 		Log:Warn("No path available, returning to IDLE state")
 		G.currentState = G.States.IDLE
@@ -103,6 +106,16 @@ local function handleMovingState(userCmd)
 	end
 
 	local currentNode = G.Navigation.path[1]
+
+	-- Throttled debug about current path/node
+	G.__lastMoveDebugTick = G.__lastMoveDebugTick or 0
+	local now = globals.TickCount()
+	if now - G.__lastMoveDebugTick > 15 then -- ~0.25s
+		local pathLen = #G.Navigation.path
+		local nodeId = currentNode and currentNode.id or -1
+		Log:Debug("MOVING: pathLen=%d firstNodeId=%s", pathLen, tostring(nodeId))
+		G.__lastMoveDebugTick = now
+	end
 	if not currentNode then
 		Log:Warn("Current node is nil, returning to IDLE state")
 		G.currentState = G.States.IDLE
@@ -129,6 +142,7 @@ local function handleMovingState(userCmd)
 	local verticalDist = math.abs(LocalOrigin.z - currentNode.pos.z)
 
 	if (horizontalDist < G.Misc.NodeTouchDistance) and verticalDist <= G.Misc.NodeTouchHeight then
+		Log:Debug("Reached node id=%s horiz=%.1f vert=%.1f (touchDist=%d, touchH=%d)", tostring(currentNode.id), horizontalDist, verticalDist, G.Misc.NodeTouchDistance, G.Misc.NodeTouchHeight)
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 
@@ -142,6 +156,11 @@ local function handleMovingState(userCmd)
 	end
 
 	-- Use superior movement controller
+	if now - (G.__lastWalkDebugTick or 0) > 15 then
+		local distVec = currentNode.pos - LocalOrigin
+		Log:Debug("Walking towards node id=%s dx=%.1f dy=%.1f dz=%.1f", tostring(currentNode.id), distVec.x, distVec.y, distVec.z)
+		G.__lastWalkDebugTick = now
+	end
 	MovementController.walkTo(userCmd, G.pLocal.entity, currentNode.pos)
 
 	-- Increment stuck counter

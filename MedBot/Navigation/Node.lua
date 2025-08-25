@@ -24,7 +24,7 @@ function Node.Setup()
 	
 	NavLoader.LoadNavFile()
 	ConnectionBuilder.NormalizeConnections()
-	AccessibilityChecker.PruneInvalidConnections(G.Navigation.nodes)
+	-- AccessibilityChecker.PruneInvalidConnections(G.Navigation.nodes) -- DISABLED: Uses area centers not edges
 	ConnectionBuilder.BuildDoorsForConnections()
 	
 	Log:Info("Navigation setup complete")
