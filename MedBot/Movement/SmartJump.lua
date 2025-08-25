@@ -5,12 +5,6 @@ local SmartJump = {}
 local Common = require("MedBot.Common")
 local G = require("MedBot.Utils.Globals")
 
--- Profiler disabled to prevent crashes
-local Profiler = nil
-
--- Disable all profiler functions to prevent crashes
-local function ProfilerBeginSystem(name) end
-local function ProfilerEndSystem() end
 
 local Log = Common.Log.new("SmartJump")
 Log.Level = 0 -- Default log level
@@ -460,16 +454,13 @@ SmartJump.GetJumpPeak = GetJumpPeak
 
 -- Standalone CreateMove callback for SmartJump (works independently of MedBot)
 local function OnCreateMoveStandalone(cmd)
-	ProfilerBeginSystem("smartjump_move")
 
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
-		ProfilerEndSystem()
 		return
 	end
 
 	if not G.Menu.SmartJump.Enable then
-		ProfilerEndSystem()
 		return
 	end
 
@@ -478,17 +469,13 @@ local function OnCreateMoveStandalone(cmd)
 
 	-- Note: The state machine handles all button inputs directly in SmartJump.Main()
 	-- No need to apply additional jump commands here
-
-	ProfilerEndSystem()
 end
 
 -- Visual debugging (matching user's exact visual logic)
 local function OnDrawSmartJump()
-	ProfilerBeginSystem("smartjump_draw")
 
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not G.Menu.SmartJump.Enable then
-		ProfilerEndSystem()
 		return
 	end
 
@@ -562,7 +549,6 @@ local function OnDrawSmartJump()
 	draw.Color(255, 255, 255, 255)
 	draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
 
-	ProfilerEndSystem()
 end
 
 -- Register callbacks

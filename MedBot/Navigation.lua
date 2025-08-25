@@ -15,11 +15,31 @@ PERFORMANCE OPTIMIZATION STRATEGY:
 
 local Navigation = {}
 
-local Common = require("MedBot.Common")
-local G = require("MedBot.Utils.Globals")
-local Node = require("MedBot.Modules.Node")
-local Visuals = require("MedBot.Visuals")
-local AStar = require("MedBot.Utils.A-Star")
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
+-- Use late-binding to avoid circular dependencies - REAL LOADING
+local Node, AStar, DStar
+
+local function ensureNode()
+    if not Node then
+        Node = require("MedBot.Navigation.Node")
+    end
+    return Node
+end
+
+local function ensureAStar()
+    if not AStar then
+        AStar = require("MedBot.Algorithms.A-Star")
+    end
+    return AStar
+end
+
+local function ensureDStar()
+    if not DStar then
+        DStar = require("MedBot.Algorithms.DStar")
+    end
+    return DStar
+end
 --local DStar = require("MedBot.Utils.DStar")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
@@ -48,8 +68,8 @@ function Navigation.AddConnection(nodeA, nodeB)
 		print("One or both nodes are nil, exiting function")
 		return
 	end
-	Node.AddConnection(nodeA, nodeB)
-	Node.AddConnection(nodeB, nodeA)
+	ensureNode().AddConnection(nodeA, nodeB)
+	ensureNode().AddConnection(nodeB, nodeA)
 	G.Navigation.navMeshUpdated = true
 end
 
@@ -59,8 +79,8 @@ function Navigation.RemoveConnection(nodeA, nodeB)
 		print("One or both nodes are nil, exiting function")
 		return
 	end
-	Node.RemoveConnection(nodeA, nodeB)
-	Node.RemoveConnection(nodeB, nodeA)
+	ensureNode().RemoveConnection(nodeA, nodeB)
+	ensureNode().RemoveConnection(nodeB, nodeA)
 	G.Navigation.navMeshUpdated = true
 end
 
@@ -72,7 +92,7 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 	end
 
 	-- Use Node module's implementation to avoid duplication
-	Node.AddCostToConnection(nodeA, nodeB, cost)
+	ensureNode().AddCostToConnection(nodeA, nodeB, cost)
 end
 
 --[[
@@ -191,10 +211,7 @@ end
 
 function Navigation.Setup()
 	if engine.GetMapName() then
-		Node.Setup()
-		if Visuals and Visuals.BuildGrid then
-			Visuals.BuildGrid()
-		end
+		ensureNode().Setup()
 		Navigation.ClearPath()
 	end
 end
@@ -285,7 +302,7 @@ function Navigation.BuildDoorWaypointsFromPath()
 		local a, b = path[i], path[i + 1]
 		if a and b and a.pos and b.pos then
 			-- Collect all available door points for this edge
-			local entry = Node.GetConnectionEntry(a, b)
+			local entry = ensureNode().GetConnectionEntry(a, b)
 			if entry and (entry.left or entry.middle or entry.right) then
 				local points = {}
 				if entry.left then
@@ -306,7 +323,7 @@ function Navigation.BuildDoorWaypointsFromPath()
 				})
 			else
 				-- Fallback: use Node helper for a single door target
-				local single = Node.GetDoorTargetPoint(a, b)
+				local single = ensureNode().GetDoorTargetPoint(a, b)
 				if single then
 					table.insert(
 						G.Navigation.waypoints,
@@ -489,7 +506,7 @@ function Navigation.GetClosestNode(pos)
 		Log:Debug("No navigation nodes available for GetClosestNode")
 		return nil
 	end
-	local n = Node.GetClosestNode(pos)
+	local n = ensureNode().GetClosestNode(pos)
 	if not n then
 		return nil
 	end
@@ -513,13 +530,13 @@ function Navigation.FindPath(startNode, goalNode)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
 	-- Try A* pathfinding as primary algorithm (more reliable than D*)
-	local success, path = pcall(AStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+	local success, path = pcall(ensureAStar().NormalPath, startNode, goalNode, G.Navigation.nodes, ensureNode().GetAdjacentNodesSimple)
 
 	if not success then
 		Log:Error("A* pathfinding crashed: %s", tostring(path))
 		-- Try D* as fallback
 		Log:Info("Trying D* fallback pathfinding...")
-		success, path = pcall(DStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+		success, path = pcall(ensureDStar().NormalPath, startNode, goalNode, G.Navigation.nodes, ensureNode().GetAdjacentNodesSimple)
 
 		if not success then
 			Log:Error("D* fallback also crashed: %s", tostring(path))

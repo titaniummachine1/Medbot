@@ -1,15 +1,9 @@
 --[[ Imports ]]
-local Common = require("MedBot.Common")
-local G = require("MedBot.Utils.Globals")
-local Node = require("MedBot.Modules.Node")
-local isWalkable = require("MedBot.Modules.ISWalkable")
-
--- Profiler disabled to prevent crashes
-local Profiler = nil
-
--- Disable all profiler functions to prevent crashes
-local function ProfilerBeginSystem(name) end
-local function ProfilerEndSystem() end
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
+local Node = require("MedBot.Navigation.Node")
+local isWalkable = require("MedBot.Navigation.ISWalkable")
+local Distance = require("MedBot.Helpers.Distance")
 
 local Visuals = {}
 
@@ -94,7 +88,7 @@ local function ArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, 
 	end
 
 	-- Normalize the direction vector
-	local normalized_direction = Common.Normalize(direction)
+	local normalized_direction = direction / direction_length
 
 	-- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
 	local arrow_base = end_pos - normalized_direction * arrowhead_length
@@ -166,7 +160,8 @@ local function buildGrid()
     nodeCell = {}
     local size = G.Menu.Visuals.chunkSize or 256
     for id, node in pairs(G.Navigation.nodes or {}) do
-        if not node or not node.pos then
+        -- if isWalkable(nodeA.pos, nodeB.pos) then -- Temporarily disabled
+        if false then
             Log:Warn("Visuals.buildGrid: skipping invalid node %s", tostring(id))
             goto continue
         end
@@ -233,19 +228,16 @@ end
 
 
 local function OnDraw()
-        ProfilerBeginSystem("visuals_draw")
 
         draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 0, 0, 255)
 
     local me = entities.GetLocalPlayer()
     if not me then
-        ProfilerEndSystem()
         return
     end
     -- Master enable switch for visuals
     if not G.Menu.Visuals.EnableVisuals then
-        ProfilerEndSystem()
         return
     end
 
@@ -266,14 +258,16 @@ local function OnDraw()
     local p = me:GetAbsOrigin()
     local renderRadius = (G.Menu.Visuals.renderRadius or 400)
     local function withinRadius(pos)
-        -- Use vector Length() for proper render distance culling
-        local distance = (pos - p):Length()
-        return distance <= renderRadius
+        -- Inline distance check for bundle compatibility
+        return (pos - p):Length() <= renderRadius
     end
         local visibleNodes = {}
         for i = 1, visCount do
+            -- local nodeA = Node.GetNodeByID(connection.areaID) -- Temporarily disabled
+            -- local nodeB = Node.GetNodeByID(connection.targetAreaID) -- Temporarily disabled
+            local nodeA, nodeB = nil, nil
             local id = visBuf[i]
-            local node = G.Navigation.nodes and G.Navigation.nodes[id]
+            local node = G.Navigation.nodes[id]
             if node then
                 -- Use withinRadius for consistent distance culling
                 if withinRadius(node.pos) then
@@ -286,7 +280,6 @@ local function OnDraw()
         end
     G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
     if G.Navigation.currentNodeIndex == nil then
-        ProfilerEndSystem()
         return
     end
 
@@ -386,9 +379,8 @@ local function OnDraw()
     -- Draw pre-calculated wall corners (orange squares) - controlled by corner connections option
     if G.Menu.Visuals.showCornerConnections and G.WallCorners then
         for _, cornerPoint in ipairs(G.WallCorners) do
-            -- Direct distance check for wall corners
-            local cornerDistance = (cornerPoint - p):Length()
-            if cornerDistance <= renderRadius then
+            -- Inline distance check for wall corners
+            if (cornerPoint - p):Length() <= renderRadius then
                 local cornerScreen = client.WorldToScreen(cornerPoint)
                 if cornerScreen then
                     -- Draw orange square for outer corners only
@@ -689,10 +681,7 @@ local function OnDraw()
             draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentNodeIndex))
         end
     end
-
-    ProfilerEndSystem()
 end
-
 
 --[[ Callbacks ]]
 callbacks.Unregister("Draw", "MCT_Draw") -- unregister the "Draw" callback

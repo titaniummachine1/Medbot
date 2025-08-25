@@ -9,12 +9,6 @@ local libLoaded, Lib = pcall(require, "LNXlib")
 assert(libLoaded, "LNXlib not found, please install it!")
 local WPlayer = Lib.TF2.WPlayer
 
--- Profiler disabled to prevent crashes
-local Profiler = nil
-
--- Disable all profiler functions to prevent crashes
-local function ProfilerBeginSystem(name) end
-local function ProfilerEndSystem() end
 
 --[[ Module Declaration ]]
 local FastPlayers = {}
@@ -28,7 +22,6 @@ FastPlayers.EnemiesUpdated = false
 
 --[[ Private: Reset per-tick caches ]]
 local function ResetCaches()
-	ProfilerBeginSystem("fastplayers_reset")
 	cachedAllPlayers = nil
 	cachedTeammates = nil
 	cachedEnemies = nil
@@ -37,7 +30,6 @@ local function ResetCaches()
 	FastPlayers.TeammatesUpdated = false
 	FastPlayers.EnemiesUpdated = false
 
-	ProfilerEndSystem()
 end
 
 --[[ Simplified validity check ]]

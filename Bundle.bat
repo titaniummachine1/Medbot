@@ -1,4 +1,3 @@
 @echo off
-
 node bundle.js
-pause
+exit

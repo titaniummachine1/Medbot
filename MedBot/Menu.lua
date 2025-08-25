@@ -12,16 +12,10 @@
 local MenuModule = {}
 
 -- Import globals
-local G = require("MedBot.Utils.Globals")
-local Node = require("MedBot.Modules.Node")
-local Visuals = require("MedBot.Visuals")
+local G = require("MedBot.Core.Globals")
+-- local Node = require("MedBot.Navigation.Node")  -- Temporarily disabled
+-- local Visuals = require("MedBot.Visuals")       -- Temporarily disabled
 
--- Profiler disabled to prevent crashes
-local Profiler = nil
-
--- Disable all profiler functions to prevent crashes
-local function ProfilerBeginSystem(name) end
-local function ProfilerEndSystem() end
 
 -- Try loading TimMenu
 ---@type boolean, table
@@ -97,7 +91,7 @@ local function OnDrawMenu()
 
 			-- Auto-recalculate costs if mode changed
 			if G.Menu.Main.WalkableMode ~= previousMode then
-				Node.RecalculateConnectionCosts()
+				-- Node.RecalculateConnectionCosts() -- Temporarily disabled
 			end
 			TimMenu.Tooltip(
 				"Applies to path following only. Aggressive also enables direct skipping when path is walkable"
@@ -122,7 +116,8 @@ local function OnDrawMenu()
 
 			-- Connection processing status display
 			if G.Menu.Main.CleanupConnections then
-				local status = Node.GetConnectionProcessingStatus()
+				-- local status = Node.GetConnectionProcessingStatus() -- Temporarily disabled
+				local status = { isProcessing = false }
 				if status.isProcessing then
 					local phaseNames = {
 						[1] = "Basic validation",
@@ -177,7 +172,7 @@ local function OnDrawMenu()
 
 			G.Menu.Visuals.renderChunks = G.Menu.Visuals.renderChunks or 3
 			G.Menu.Visuals.renderChunks = TimMenu.Slider("Render Chunks", G.Menu.Visuals.renderChunks, 1, 10, 1)
-			Visuals.MaybeRebuildGrid()
+			-- Visuals.MaybeRebuildGrid() -- Temporarily disabled
 			TimMenu.EndSector()
 
 			TimMenu.NextLine()

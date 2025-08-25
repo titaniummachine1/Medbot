@@ -1,4 +1,4 @@
-local Heap = require("MedBot.Utils.Heap")
+local Heap = require("MedBot.Algorithms.Heap")
 
 ---@class DStar
 local DStar = {}

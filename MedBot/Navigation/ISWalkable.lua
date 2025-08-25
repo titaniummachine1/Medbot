@@ -1,6 +1,8 @@
+-- Path Validation Module - Uses trace hulls to check if path A→B is walkable
+-- This is NOT movement execution, just validation logic
 local isWalkable = {}
-local G = require("MedBot.Utils.Globals")
-local Common = require("MedBot.Common")
+local G = require("MedBot.Core.Globals")
+local Common = require("MedBot.Core.Common")
 
 -- Constants based on standstill dummy's robust implementation
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) } -- Player collision hull
