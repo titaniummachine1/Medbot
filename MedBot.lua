@@ -4185,6 +4185,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 
 		local groundTrace =
 			engine.TraceHull(finalPos + vStep, finalPos - downStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+		local onGround = false
 		if groundTrace.fraction < 1 then
 			-- We'll hit the ground - check ground angle (same as swing prediction)
 			local normal = groundTrace.plane
@@ -4194,14 +4195,23 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 			if angle < 45 then
 				-- Walkable surface - land on it
 				finalPos = groundTrace.endpos
+				onGround = true
 			elseif angle < 55 then
 				-- Too steep to walk but not steep enough to slide - stop movement
 				newVelocity = Vector3(0, 0, 0)
+				onGround = true
 			else
 				-- Very steep surface - slide along it
 				local dot = newVelocity:Dot(normal)
 				newVelocity = newVelocity - normal * dot
+				onGround = true
 			end
+		end
+
+		-- Apply gravity if not on ground (matching swing prediction)
+		if not onGround then
+			local gravity = 800 -- TF2 gravity
+			newVelocity.z = newVelocity.z - gravity * dt
 		end
 	end
 
@@ -4324,39 +4334,46 @@ local function SmartJumpDetection(cmd, pLocal)
 				if moveDir then
 					-- Get actual obstacle height from the simulation tick
 					local obstacleHeight = hitObstacle and 72 or 36 -- Default estimation
-					
+
 					-- Calculate minimum time needed to reach obstacle height
 					-- Using jump physics: height = 0.5 * gravity * time^2, solve for time
 					local gravity = 800 -- TF2 gravity
 					local timeToReachHeight = math.sqrt(2 * obstacleHeight / gravity)
 					local minJumpTick = math.ceil(timeToReachHeight / globals.TickInterval())
-					
+
 					-- Only jump if current tick <= minimum tick needed
 					if tick <= minJumpTick then
 						local jumpHeight = 72
 						local jumpPos = currentPos + Vector3(0, 0, jumpHeight)
 						local forwardPos = jumpPos + moveDir * 32 -- Move forward to landing area
-						
+
 						-- Find landing position
 						local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
 						local MASK_PLAYERSOLID = 33636363
 						local landTrace = engine.TraceHull(
 							forwardPos,
 							forwardPos - Vector3(0, 0, jumpHeight + 18),
-							vHitbox[1], vHitbox[2], MASK_PLAYERSOLID
+							vHitbox[1],
+							vHitbox[2],
+							MASK_PLAYERSOLID
 						)
-						
+
 						if landTrace.fraction < 1 then
 							G.SmartJump.JumpPeekPos = landTrace.endpos
 							-- Update simulation path to show jump arc
 							table.insert(G.SmartJump.SimulationPath, jumpPos)
 							table.insert(G.SmartJump.SimulationPath, landTrace.endpos)
 						end
-						
+
 						G.SmartJump.PredPos = currentPos
 						G.SmartJump.HitObstacle = true
 
-						DebugLog("SmartJump: Jump at tick %d (min needed: %d), pos=%s", tick, minJumpTick, tostring(currentPos))
+						DebugLog(
+							"SmartJump: Jump at tick %d (min needed: %d), pos=%s",
+							tick,
+							minJumpTick,
+							tostring(currentPos)
+						)
 						return true
 					else
 						-- Set visuals but don't jump yet - too early
