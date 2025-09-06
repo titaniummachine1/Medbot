@@ -252,6 +252,33 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 							local groundAngle = math.deg(math.acos(landTrace.plane:Dot(Vector3(0, 0, 1))))
 							if groundAngle < 45 then -- Walkable surface
 								shouldJump = true
+							else
+								-- Landing surface too steep - try 10 units further into obstacle
+								local forwardFromHit10 = hitPoint + moveDir * 20
+								local jumpPos10 = forwardFromHit10 + Vector3(0, 0, 72)
+
+								-- Check if we're clear at jump height (10 units further)
+								local clearTrace10 =
+									engine.TraceHull(jumpPos10, jumpPos10, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+								if clearTrace10.fraction > 0 then
+									-- Check landing 10 units further
+									local landTrace10 = engine.TraceHull(
+										jumpPos10,
+										jumpPos10 - Vector3(0, 0, 72 + 18),
+										vHitbox[1],
+										vHitbox[2],
+										MASK_PLAYERSOLID
+									)
+
+									-- If we can land and surface is walkable at 10 units
+									if landTrace10.fraction > 0 and landTrace10.fraction < 1 then
+										local groundAngle10 =
+											math.deg(math.acos(landTrace10.plane:Dot(Vector3(0, 0, 1))))
+										if groundAngle10 < 45 then -- Walkable surface at 10 units
+											shouldJump = true
+										end
+									end
+								end
 							end
 						end
 					end
@@ -789,15 +816,6 @@ local function OnDrawSmartJump()
 		end
 	end
 
-	-- Draw jump arc if available
-	if G.SmartJump.PredPos and G.SmartJump.JumpPeekPos then
-		local obstacleScreen = client.WorldToScreen(G.SmartJump.PredPos)
-		local landingScreen = client.WorldToScreen(G.SmartJump.JumpPeekPos)
-		if obstacleScreen and landingScreen then
-			draw.Color(255, 255, 0, 200) -- Yellow for jump arc
-			draw.Line(obstacleScreen[1], obstacleScreen[2], landingScreen[1], landingScreen[2])
-		end
-	end
 
 	-- Draw jump landing position if available
 	if G.SmartJump.JumpPeekPos then
