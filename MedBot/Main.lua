@@ -22,8 +22,9 @@ local CommandHandler = require("MedBot.Bot.CommandHandler")
 local HealthLogic = require("MedBot.Bot.HealthLogic")
 
 --[[ Additional Systems ]]
+local SmartJump = require("MedBot.Movement.SmartJump")
 require("MedBot.Visuals")
-require("MedBot.Utils.Config") 
+require("MedBot.Utils.Config")
 require("MedBot.Menu")
 
 --[[ Setup ]]
@@ -43,7 +44,6 @@ G.currentState = G.States.IDLE
 local handleMovingState
 
 local function onCreateMove(userCmd)
-
 	-- Basic validation
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
@@ -71,7 +71,9 @@ local function onCreateMove(userCmd)
 
 	-- Periodic maintenance
 	local currentTick = globals.TickCount()
-	if not G.lastCleanupTick then G.lastCleanupTick = currentTick end
+	if not G.lastCleanupTick then
+		G.lastCleanupTick = currentTick
+	end
 	if currentTick - G.lastCleanupTick > 300 then -- Every 5 seconds
 		G.CleanupMemory()
 		CircuitBreaker.cleanup()
@@ -94,7 +96,6 @@ local function onCreateMove(userCmd)
 
 	-- Work management
 	WorkManager.processWorks()
-
 end
 
 -- Moving state handler using modular components
@@ -142,7 +143,14 @@ function handleMovingState(userCmd)
 	local verticalDist = math.abs(LocalOrigin.z - currentNode.pos.z)
 
 	if (horizontalDist < G.Misc.NodeTouchDistance) and verticalDist <= G.Misc.NodeTouchHeight then
-		Log:Debug("Reached node id=%s horiz=%.1f vert=%.1f (touchDist=%d, touchH=%d)", tostring(currentNode.id), horizontalDist, verticalDist, G.Misc.NodeTouchDistance, G.Misc.NodeTouchHeight)
+		Log:Debug(
+			"Reached node id=%s horiz=%.1f vert=%.1f (touchDist=%d, touchH=%d)",
+			tostring(currentNode.id),
+			horizontalDist,
+			verticalDist,
+			G.Misc.NodeTouchDistance,
+			G.Misc.NodeTouchHeight
+		)
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 
@@ -158,7 +166,13 @@ function handleMovingState(userCmd)
 	-- Use superior movement controller
 	if now - (G.__lastWalkDebugTick or 0) > 15 then
 		local distVec = currentNode.pos - LocalOrigin
-		Log:Debug("Walking towards node id=%s dx=%.1f dy=%.1f dz=%.1f", tostring(currentNode.id), distVec.x, distVec.y, distVec.z)
+		Log:Debug(
+			"Walking towards node id=%s dx=%.1f dy=%.1f dz=%.1f",
+			tostring(currentNode.id),
+			distVec.x,
+			distVec.y,
+			distVec.z
+		)
 		G.__lastWalkDebugTick = now
 	end
 	MovementController.walkTo(userCmd, G.pLocal.entity, currentNode.pos)
@@ -194,7 +208,7 @@ end
 --[[ Initialization ]]
 
 -- Ensure SmartJump callback runs BEFORE MedBot's callback
-callbacks.Unregister("CreateMove", "ZMedBot.CreateMove") 
+callbacks.Unregister("CreateMove", "ZMedBot.CreateMove")
 callbacks.Unregister("DrawModel", "MedBot.DrawModel")
 callbacks.Unregister("FireGameEvent", "MedBot.FireGameEvent")
 

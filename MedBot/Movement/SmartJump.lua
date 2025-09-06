@@ -2,9 +2,8 @@
 ---@class SmartJump
 local SmartJump = {}
 
-local Common = require("MedBot.Common")
+local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Utils.Globals")
-
 
 local Log = Common.Log.new("SmartJump")
 Log.Level = 0 -- Default log level
@@ -147,7 +146,6 @@ local function SmartVelocity(cmd, pLocal)
 
 		-- Create movement vector in command space (note: sidemove is negated in the original code)
 		moveDir = Vector3(forwardComponent * 450, -rightComponent * 450, 0) -- 450 is typical max speed
-		DebugLog("SmartJump: Using bot movement direction (%.1f, %.1f)", forwardComponent, rightComponent)
 	end
 
 	local viewAngles = engine.GetViewAngles()
@@ -199,8 +197,11 @@ local function SmartJumpDetection(cmd, pLocal)
 	local peakDist = horizontalVel * peakTime
 	local peakPos = pLocalPos + horizontalDir * peakDist
 	local trace1 = engine.TraceHull(pLocalPos, peakPos, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
-	if trace1.fraction >= 1 then
+	if trace1.fraction == 1 then
 		return false -- no obstacle to jump
+	end
+	if trace1.fraction == 0 then
+		return false -- starting inside wall
 	end
 
 	-- Measure obstacle height
@@ -220,10 +221,25 @@ local function SmartJumpDetection(cmd, pLocal)
 	local refinedPeek = pLocalPos + horizontalDir * neededDist
 	G.SmartJump.JumpPeekPos = refinedPeek
 
+	-- CRITICAL: Check ceiling clearance first - trace upward from current position
+	local ceilingCheck =
+		engine.TraceHull(pLocalPos, pLocalPos + MAX_JUMP_HEIGHT, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
+
+	-- If we hit ceiling (fraction < 1), we can't jump safely
+	if ceilingCheck.fraction < 1.0 then
+		return false -- not enough ceiling clearance for jump
+	end
+	if ceilingCheck.fraction == 0 then
+		return false -- starting inside ceiling
+	end
+
 	-- Second pass: prepare jump clearance
 	local startUp = obstaclePoint + MAX_JUMP_HEIGHT
 	local forwardPoint = startUp + horizontalDir * 1
 	local forwardTrace = engine.TraceHull(startUp, forwardPoint, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
+	if forwardTrace.fraction == 0 then
+		return false -- starting inside wall at jump peak
+	end
 	G.SmartJump.JumpPeekPos = forwardTrace.endpos
 
 	-- Trace down to check landing
@@ -234,6 +250,9 @@ local function SmartJumpDetection(cmd, pLocal)
 		hitboxMax,
 		MASK_PLAYERSOLID_BRUSHONLY
 	)
+	if traceDown.fraction == 0 then
+		return false -- starting inside wall at landing check
+	end
 	G.SmartJump.JumpPeekPos = traceDown.endpos
 
 	if traceDown.fraction > 0 and traceDown.fraction < 0.75 then
@@ -454,7 +473,6 @@ SmartJump.GetJumpPeak = GetJumpPeak
 
 -- Standalone CreateMove callback for SmartJump (works independently of MedBot)
 local function OnCreateMoveStandalone(cmd)
-
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
 		return
@@ -473,7 +491,6 @@ end
 
 -- Visual debugging (matching user's exact visual logic)
 local function OnDrawSmartJump()
-
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not G.Menu.SmartJump.Enable then
 		return
@@ -548,7 +565,6 @@ local function OnDrawSmartJump()
 	-- Draw current state info
 	draw.Color(255, 255, 255, 255)
 	draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
-
 end
 
 -- Register callbacks

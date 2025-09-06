@@ -9,6 +9,7 @@ local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
 local ISWalkable = require("MedBot.Navigation.ISWalkable")
+local SmartJump = require("MedBot.Movement.SmartJump")
 
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
@@ -281,6 +282,13 @@ function StateHandler.handleStuckState(userCmd)
 			Navigation.ClearPath()
 		end
 	else
+		-- Try SmartJump for emergency unstuck after being stuck for a while
+		if stuckDuration > 66 and stuckDuration < 132 then -- Between 1-2 seconds
+			if SmartJump.Execute(userCmd) then
+				Log:Info("Emergency SmartJump executed while stuck")
+			end
+		end
+		
 		-- Only switch back to MOVING if we've been stuck for at least 0.5 seconds
 		if stuckDuration > 33 then
 			G.Navigation.stuckStartTick = nil
