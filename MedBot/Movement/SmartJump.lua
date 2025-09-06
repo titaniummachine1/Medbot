@@ -210,7 +210,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 		-- Use fresh copy of current position for jump checks - don't affect simulation
 		local jumpCheckPos = Vector3(startPos.x, startPos.y, startPos.z)
 		local jumpCheckStepUp = jumpCheckPos + vStep
-		
+
 		-- Check if there's an obstacle ahead that requires jumping
 		local forwardTrace =
 			engine.TraceHull(jumpCheckStepUp, jumpCheckStepUp + moveDir * 32, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
@@ -230,8 +230,8 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 				MASK_PLAYERSOLID
 			)
 
-			if downTrace.fraction < 0.75 then
-				-- Obstacle is higher than step height (>18 units)
+			if downTrace.fraction < 1 then
+				-- Obstacle detected - simple jump check
 				local obstacleHeight = 72 * (1 - downTrace.fraction)
 
 				-- Only jump if obstacle is worth jumping over (>18 units)
@@ -245,7 +245,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 						-- Check if we can land after clearing obstacle
 						local landTrace = engine.TraceHull(
 							jumpPos,
-							jumpPos - Vector3(0, 0, 72 + 18),
+							jumpPos - Vector3(0, 0, 72),
 							vHitbox[1],
 							vHitbox[2],
 							MASK_PLAYERSOLID
@@ -256,33 +256,6 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 							local groundAngle = math.deg(math.acos(landTrace.plane:Dot(Vector3(0, 0, 1))))
 							if groundAngle < 45 then -- Walkable surface
 								shouldJump = true
-							else
-								-- Landing surface too steep - try 10 units further into obstacle
-								local forwardFromHit10 = hitPoint + moveDir * 24
-								local jumpPos10 = forwardFromHit10 + Vector3(0, 0, 72)
-
-								-- Check if we're clear at jump height (10 units further)
-								local clearTrace10 =
-									engine.TraceHull(jumpPos10, jumpPos10, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
-								if clearTrace10.fraction > 0 then
-									-- Check landing 10 units further
-									local landTrace10 = engine.TraceHull(
-										jumpPos10,
-										jumpPos10 - Vector3(0, 0, 72 + 18),
-										vHitbox[1],
-										vHitbox[2],
-										MASK_PLAYERSOLID
-									)
-
-									-- If we can land and surface is walkable at 10 units
-									if landTrace10.fraction > 0 and landTrace10.fraction < 1 then
-										local groundAngle10 =
-											math.deg(math.acos(landTrace10.plane:Dot(Vector3(0, 0, 1))))
-										if groundAngle10 < 45 then -- Walkable surface at 10 units
-											shouldJump = true
-										end
-									end
-								end
 							end
 						end
 					end
