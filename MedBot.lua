@@ -4329,20 +4329,10 @@ local function SmartJumpDetection(cmd, pLocal)
 				local timeToReachHeight = math.sqrt(2 * obstacleHeight / GRAVITY)
 				local ticksToReachHeight = math.ceil(timeToReachHeight / globals.TickInterval())
 
-				-- Calculate distance we'll travel horizontally in that time
-				local distanceInTime = horizontalSpeed * timeToReachHeight
-				local distanceToObstacle = (currentPos - pLocalPos):Length()
-
-				-- Calculate the exact tick when we need to jump (as late as possible)
-				-- We need to be at the obstacle when our jump reaches peak height
-				local ticksUntilObstacle = math.max(
-					0,
-					math.floor((distanceToObstacle - distanceInTime) / (horizontalSpeed * globals.TickInterval()))
-				)
-				local exactJumpTick = tick + ticksUntilObstacle
-
+				-- Store minimum T when first obstacle detected
 				if minJumpTick == nil then
-					minJumpTick = exactJumpTick
+					minJumpTick = ticksToReachHeight
+					DebugLog("SmartJump: Obstacle detected, minJumpTick=%d, current tick=%d", minJumpTick, tick)
 				end
 
 				-- Always set up visuals and prediction when obstacle detected
@@ -4374,19 +4364,21 @@ local function SmartJumpDetection(cmd, pLocal)
 				G.SmartJump.PredPos = currentPos
 				G.SmartJump.HitObstacle = true
 
-				-- Only actually trigger jump when we reach the exact minimum tick needed
-				if tick >= minJumpTick then
-					DebugLog(
-						"SmartJump: Jump required at tick %d, obstacleHeight=%.1f, exactJumpTick=%d",
-						tick,
-						obstacleHeight,
-						exactJumpTick
-					)
+				-- Debug: Show timing comparison
+				DebugLog(
+					"SmartJump: Obstacle at tick %d, obstacleHeight=%.1f, minJumpTick=%d",
+					tick,
+					obstacleHeight,
+					minJumpTick
+				)
+				
+				-- Temporarily comment out minimum jump check - jump immediately when obstacle found
+				-- if tick <= minJumpTick then
 					return true
-				else
-					-- Not time to jump yet - continue simulation
-					DebugLog("SmartJump: Obstacle detected at tick %d, will jump at tick %d", tick, minJumpTick)
-				end
+				-- else
+				--	-- Too late to jump - continue simulation
+				--	DebugLog("SmartJump: Too late to jump at tick %d, needed tick %d", tick, minJumpTick)
+				-- end
 			else
 				-- No jump needed (obstacle <=18 units) or can't jump - continue simulation
 				DebugLog("SmartJump: No jump needed at tick %d, continuing simulation", tick)
