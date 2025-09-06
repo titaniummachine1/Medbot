@@ -207,9 +207,13 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 	local shouldJump = false
 	local moveDir = NormalizeVector(velocity)
 	if moveDir then
+		-- Use fresh copy of current position for jump checks - don't affect simulation
+		local jumpCheckPos = Vector3(startPos.x, startPos.y, startPos.z)
+		local jumpCheckStepUp = jumpCheckPos + vStep
+		
 		-- Check if there's an obstacle ahead that requires jumping
 		local forwardTrace =
-			engine.TraceHull(stepUpPos, stepUpPos + moveDir * 32, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+			engine.TraceHull(jumpCheckStepUp, jumpCheckStepUp + moveDir * 32, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
 		if forwardTrace.fraction < 1 then
 			-- Found obstacle - move 1 unit forward from hit point, then up 72 units, then trace down
 			-- This guarantees we collide with obstacle from above
@@ -475,7 +479,7 @@ local function SmartJumpDetection(cmd, pLocal)
 					local minJumpTick = math.ceil(timeToReachHeight / globals.TickInterval())
 
 					-- Only jump if current tick <= minimum tick needed
-					if tick <= minJumpTick then
+					if tick <= minJumpTick - 2 then
 						local jumpHeight = 72
 						local jumpPos = currentPos + Vector3(0, 0, jumpHeight)
 						local forwardPos = jumpPos + moveDir * 32 -- Move forward to landing area
