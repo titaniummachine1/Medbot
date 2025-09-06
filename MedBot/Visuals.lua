@@ -688,6 +688,66 @@ local function OnDraw()
             draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentNodeIndex))
         end
     end
+
+    -- Draw SmartJump simulation visualization (like AutoPeek)
+    if G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then
+        -- Draw simulation path lines like AutoPeek's LineDrawList
+        local pathCount = #G.SmartJump.SimulationPath
+        for i = 1, pathCount - 1 do
+            local startPos = G.SmartJump.SimulationPath[i]
+            local endPos = G.SmartJump.SimulationPath[i + 1]
+            
+            -- Guard clause: ensure positions are valid Vector3 objects
+            if startPos and endPos then
+                local startScreen = client.WorldToScreen(startPos)
+                local endScreen = client.WorldToScreen(endPos)
+                
+                if startScreen and endScreen then
+                    -- Color gradient like AutoPeek (brighter at end)
+                    local brightness = math.floor(100 + (155 * (i / pathCount)))
+                    draw.Color(brightness, brightness, 255, 200) -- Blue gradient
+                    draw.Line(startScreen[1], startScreen[2], endScreen[1], endScreen[2])
+                end
+            end
+        end
+        
+        -- Draw endpoint marker
+        if G.SmartJump and G.SmartJump.PredPos then
+            local predPos = G.SmartJump.PredPos
+            local hitObstacle = G.SmartJump.HitObstacle
+            local predScreen = client.WorldToScreen(predPos)
+            
+            if predScreen then
+                if hitObstacle then
+                    draw.Color(255, 100, 100, 255) -- Red for obstacle hit
+                else
+                    draw.Color(100, 255, 100, 255) -- Green for clear path
+                end
+                Draw3DBox(8, predPos)
+                draw.Text(predScreen[1], predScreen[2] + 20, hitObstacle and "OBSTACLE" or "CLEAR")
+            end
+        end
+        
+        -- Draw jump landing position if available
+        if G.SmartJump and G.SmartJump.JumpPeekPos then
+            local jumpPos = G.SmartJump.JumpPeekPos
+            local jumpScreen = client.WorldToScreen(jumpPos)
+            if jumpScreen then
+                draw.Color(100, 100, 255, 255) -- Blue for jump landing
+                Draw3DBox(6, jumpPos)
+                draw.Text(jumpScreen[1], jumpScreen[2] + 20, "LANDING")
+                
+                -- Draw arrow from obstacle to landing like AutoPeek
+                if G.SmartJump and G.SmartJump.PredPos then
+                    local predScreen = client.WorldToScreen(G.SmartJump.PredPos)
+                    if predScreen and jumpScreen then
+                        draw.Color(255, 255, 0, 180) -- Yellow jump arc
+                        draw.Line(predScreen[1], predScreen[2], jumpScreen[1], jumpScreen[2])
+                    end
+                end
+            end
+        end
+    end
 end
 
 --[[ Callbacks ]]

@@ -1,9 +1,9 @@
 ---@diagnostic disable: duplicate-set-field, undefined-field
 ---@class SmartJump
-local SmartJump = {}
-
+-- Detects when the player should jump to clear obstacles
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Utils.Globals")
+local Prediction = require("MedBot.Deprecated.Prediction")
 
 local Log = Common.Log.new("SmartJump")
 Log.Level = 0 -- Default log level
@@ -14,6 +14,9 @@ local function DebugLog(...)
 		Log:Debug(...)
 	end
 end
+
+-- SmartJump module
+local SmartJump = {}
 
 -- Constants
 local GRAVITY = 800 -- Gravity per second squared
@@ -41,26 +44,44 @@ if G.Menu.SmartJump.Debug == nil then
 	G.Menu.SmartJump.Debug = false -- Disable debug logs by default
 end
 
--- Initialize jump state
+-- Initialize jump state (ensure all fields exist)
 if not G.SmartJump then
 	G.SmartJump = {}
 end
 if not G.SmartJump.jumpState then
 	G.SmartJump.jumpState = STATE_IDLE
 end
+if not G.SmartJump.SimulationPath then
+	G.SmartJump.SimulationPath = {}
+end
+if not G.SmartJump.PredPos then
+	G.SmartJump.PredPos = nil
+end
+if not G.SmartJump.JumpPeekPos then
+	G.SmartJump.JumpPeekPos = nil
+end
+if not G.SmartJump.HitObstacle then
+	G.SmartJump.HitObstacle = false
+end
+if not G.SmartJump.lastAngle then
+	G.SmartJump.lastAngle = nil
+end
+if not G.SmartJump.stateStartTime then
+	G.SmartJump.stateStartTime = 0
+end
+if not G.SmartJump.lastState then
+	G.SmartJump.lastState = nil
+end
+if not G.SmartJump.lastJumpTime then
+	G.SmartJump.lastJumpTime = 0
+end
 
--- Initialize visual debug variables
-G.SmartJump.PredPos = Vector3(0, 0, 0)
-G.SmartJump.JumpPeekPos = Vector3(0, 0, 0)
-G.SmartJump.lastAngle = nil
+-- Visual debug variables initialized above
 
 -- Function to normalize a vector
 local function NormalizeVector(vector)
 	local length = vector:Length()
-	if length == 0 then
-		return vector
-	end
-	return Vector3(vector.x / length, vector.y / length, vector.z / length)
+	return length == 0 and nil or vector / length
 end
 
 -- Rotate vector by yaw angle
@@ -169,98 +190,186 @@ local function SmartVelocity(cmd, pLocal)
 	return vel
 end
 
--- Smart jump detection logic (user's exact logic)
+-- Tick-by-tick movement simulation with wall collision detection
+local function SimulateMovementTick(startPos, moveDir, speed, stepHeight)
+	local vUp = Vector3(0, 0, 1)
+	local vStep = Vector3(0, 0, stepHeight or 18)
+	local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
+	local MASK_PLAYERSOLID = 33636363
+
+	-- Scale movement direction to match our current speed
+	local velocity = moveDir * speed
+	local dt = globals.TickInterval()
+	local targetPos = startPos + velocity * dt
+
+	-- Step 1: Move up by step height
+	local stepUpPos = startPos + vStep
+
+	-- Step 2: Forward collision check
+	local wallTrace = engine.TraceHull(stepUpPos, targetPos + vStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+	local hitWall = wallTrace.fraction < 1
+	local finalPos = targetPos
+	local slidingDir = moveDir
+
+	if hitWall then
+		-- Hit wall - calculate sliding direction
+		local normal = wallTrace.plane
+		local angle = math.deg(math.acos(normal:Dot(vUp)))
+
+		if angle > 55 then
+			-- Wall too steep - slide along it
+			local dot = velocity:Dot(normal)
+			local slidingVel = velocity - normal * dot
+			slidingDir = NormalizeVector(slidingVel)
+			finalPos = Vector3(wallTrace.endpos.x, wallTrace.endpos.y, targetPos.z)
+		end
+	end
+
+	-- Step 3: Ground collision (step down)
+	local groundTrace = engine.TraceHull(finalPos + vStep, finalPos - vStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+	if groundTrace.fraction < 1 then
+		finalPos = groundTrace.endpos
+	end
+
+	return finalPos, hitWall, slidingDir
+end
+
+-- Check if we can jump over obstacle at current position
+local function CanJumpOverObstacle(pos, moveDir, obstacleHeight)
+	local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
+	local MASK_PLAYERSOLID = 33636363
+	local jumpHeight = 72 -- Max jump height
+	local stepHeight = 18 -- Normal step height
+	
+	-- Only jump if obstacle is higher than step height (>18 units)
+	if obstacleHeight and obstacleHeight <= stepHeight then
+		return false -- Can step over, no need to jump
+	end
+	
+	-- Check if we can move up 72 units without hitting ceiling
+	local upTrace = engine.TraceHull(pos, pos + Vector3(0, 0, jumpHeight), vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+	if upTrace.fraction < 1 then
+		return false -- Hit ceiling
+	end
+	
+	-- Check if we can move forward 1 unit at jump height
+	local jumpPos = pos + Vector3(0, 0, jumpHeight)
+	local forwardPos = jumpPos + moveDir * 1
+	
+	-- Check if we can land after clearing obstacle
+	local landTrace = engine.TraceHull(
+		forwardPos,
+		forwardPos - Vector3(0, 0, jumpHeight + 18),
+		vHitbox[1],
+		vHitbox[2],
+		MASK_PLAYERSOLID
+	)
+	
+	-- If trace fraction is 0, we cannot jump this obstacle
+	if landTrace.fraction == 0 then
+		return false
+	end
+	
+	if landTrace.fraction < 1 then
+		local landingPos = landTrace.endpos
+		local groundAngle = math.deg(math.acos(landTrace.plane:Dot(Vector3(0, 0, 1))))
+		if groundAngle < 45 then -- Walkable surface
+			return true, landingPos
+		end
+	end
+	
+	return false
+end
+
+-- Smart jump detection with improved tick-by-tick simulation
 local function SmartJumpDetection(cmd, pLocal)
+	-- Basic validation - fail fast
 	if not pLocal then
 		return false
 	end
-
-	-- Gather input and player data
-	local pLocalPos = pLocal:GetAbsOrigin()
-	local velVec = SmartVelocity(cmd, pLocal)
-	local horizontalVel = velVec:Length()
-	if horizontalVel <= 1 then
-		return false -- no meaningful movement
-	end
-	local horizontalDir = NormalizeVector(velVec)
-	local onGround = isPlayerOnGround(pLocal)
-	if not onGround then
+	if not isPlayerOnGround(pLocal) then
 		return false
 	end
 
-	-- Adjust hitbox based on ducking state
-	local ducking = isPlayerDucking(pLocal)
-	local hitboxMax = ducking and Vector3(23.99, 23.99, 62) or HITBOX_MAX
-
-	-- First pass: detect obstacle using full jump range
-	local peakTime = JUMP_FORCE / GRAVITY
-	local peakDist = horizontalVel * peakTime
-	local peakPos = pLocalPos + horizontalDir * peakDist
-	local trace1 = engine.TraceHull(pLocalPos, peakPos, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
-	if trace1.fraction == 1 then
-		return false -- no obstacle to jump
+	local pLocalPos = pLocal:GetAbsOrigin()
+	
+	-- Get move intent direction from cmd
+	local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
+	if moveIntent:Length() == 0 and G.BotIsMoving and G.BotMovementDirection then
+		-- Use bot movement direction if no manual input
+		local viewAngles = engine.GetViewAngles()
+		local forward = viewAngles:Forward()
+		local right = viewAngles:Right()
+		local forwardComponent = G.BotMovementDirection:Dot(forward)
+		local rightComponent = G.BotMovementDirection:Dot(right)
+		moveIntent = Vector3(forwardComponent * 450, -rightComponent * 450, 0)
 	end
-	if trace1.fraction == 0 then
-		return false -- starting inside wall
+	
+	if moveIntent:Length() == 0 then
+		return false
 	end
-
-	-- Measure obstacle height
-	local obstaclePoint = trace1.endpos
-	local obstacleHeight = obstaclePoint.z - pLocalPos.z
-
-	-- Compute time to reach obstacle height (ascending)
-	local V0 = JUMP_FORCE
-	local disc = V0 * V0 - 2 * GRAVITY * obstacleHeight
-	if disc <= 0 then
-		return false -- obstacle too high to reach
-	end
-	local timeToHeight = (V0 - math.sqrt(disc)) / GRAVITY
-
-	-- Calculate minimal horizontal distance to jump ahead
-	local neededDist = horizontalVel * timeToHeight
-	local refinedPeek = pLocalPos + horizontalDir * neededDist
-	G.SmartJump.JumpPeekPos = refinedPeek
-
-	-- CRITICAL: Check ceiling clearance first - trace upward from current position
-	local ceilingCheck =
-		engine.TraceHull(pLocalPos, pLocalPos + MAX_JUMP_HEIGHT, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
-
-	-- If we hit ceiling (fraction < 1), we can't jump safely
-	if ceilingCheck.fraction < 1.0 then
-		return false -- not enough ceiling clearance for jump
-	end
-	if ceilingCheck.fraction == 0 then
-		return false -- starting inside ceiling
+	
+	-- Use move intent direction but current velocity strength
+	local viewAngles = engine.GetViewAngles()
+	local rotatedMoveIntent = RotateVectorByYaw(moveIntent, viewAngles.yaw)
+	local moveDir = NormalizeVector(rotatedMoveIntent)
+	local currentVel = pLocal:EstimateAbsVelocity()
+	local horizontalVel = currentVel:Length()
+	
+	if horizontalVel <= 1 then
+		return false
 	end
 
-	-- Second pass: prepare jump clearance
-	local startUp = obstaclePoint + MAX_JUMP_HEIGHT
-	local forwardPoint = startUp + horizontalDir * 1
-	local forwardTrace = engine.TraceHull(startUp, forwardPoint, HITBOX_MIN, hitboxMax, MASK_PLAYERSOLID_BRUSHONLY)
-	if forwardTrace.fraction == 0 then
-		return false -- starting inside wall at jump peak
-	end
-	G.SmartJump.JumpPeekPos = forwardTrace.endpos
+	local maxSimTicks = 33 -- ~0.5 seconds
 
-	-- Trace down to check landing
-	local traceDown = engine.TraceHull(
-		G.SmartJump.JumpPeekPos,
-		G.SmartJump.JumpPeekPos - MAX_JUMP_HEIGHT,
-		HITBOX_MIN,
-		hitboxMax,
-		MASK_PLAYERSOLID_BRUSHONLY
-	)
-	if traceDown.fraction == 0 then
-		return false -- starting inside wall at landing check
-	end
-	G.SmartJump.JumpPeekPos = traceDown.endpos
+	-- Initialize simulation path for visualization
+	G.SmartJump.SimulationPath = { pLocalPos }
 
-	if traceDown.fraction > 0 and traceDown.fraction < 0.75 then
-		local normal = traceDown.plane
-		if isSurfaceWalkable(normal) then
-			return true
+	local currentPos = pLocalPos
+	local currentDir = moveDir
+	local hitObstacle = false
+
+	-- Tick-by-tick simulation until jump peak time
+	for tick = 1, maxSimTicks do
+		local newPos, wallHit, slidingDir = SimulateMovementTick(currentPos, currentDir, horizontalVel, 18)
+
+		-- Store simulation step for visualization
+		table.insert(G.SmartJump.SimulationPath, newPos)
+
+		if wallHit then
+			hitObstacle = true
+
+			-- Calculate obstacle height for jump necessity check
+			local obstacleHeight = nil
+			if currentPos and newPos then
+				obstacleHeight = math.abs(newPos.z - currentPos.z)
+			end
+
+			-- Check if we can jump over this obstacle BEFORE continuing simulation
+			local canJump, landingPos = CanJumpOverObstacle(currentPos, currentDir, obstacleHeight)
+			if canJump then
+				-- Store results for visualization - keep full simulation path
+				G.SmartJump.PredPos = currentPos
+				G.SmartJump.HitObstacle = true
+				G.SmartJump.JumpPeekPos = landingPos
+
+				DebugLog("SmartJump: Can jump over obstacle at tick %d, pos=%s", tick, tostring(currentPos))
+				return true
+			else
+				-- Cannot jump over obstacle - continue simulation with sliding until jump peak time
+				currentDir = slidingDir
+				DebugLog("SmartJump: Cannot jump over obstacle at tick %d, continuing simulation", tick)
+			end
 		end
+
+		currentPos = newPos
 	end
+
+	-- Store final simulation results
+	G.SmartJump.PredPos = currentPos
+	G.SmartJump.HitObstacle = hitObstacle
+
+	DebugLog("SmartJump: Simulation complete, hitObstacle=%s, finalPos=%s", tostring(hitObstacle), tostring(currentPos))
 	return false
 end
 
@@ -495,76 +604,114 @@ local function OnDrawSmartJump()
 	if not pLocal or not G.Menu.SmartJump.Enable then
 		return
 	end
-
-	-- Draw prediction position (red square)
-	local screenPos = client.WorldToScreen(G.SmartJump.PredPos)
-	if screenPos then
-		draw.Color(255, 0, 0, 255)
-		draw.FilledRect(screenPos[1] - 5, screenPos[2] - 5, screenPos[1] + 5, screenPos[2] + 5)
+	if G.SmartJump.PredPos then
+		-- Draw prediction position (red square)
+		local screenPos = client.WorldToScreen(G.SmartJump.PredPos)
+		if screenPos then
+			draw.Color(255, 0, 0, 255)
+			draw.FilledRect(screenPos[1] - 5, screenPos[2] - 5, screenPos[1] + 5, screenPos[2] + 5)
+		end
 	end
 
 	-- Draw jump peek position (green square)
-	local screenpeekpos = client.WorldToScreen(G.SmartJump.JumpPeekPos)
-	if screenpeekpos then
-		draw.Color(0, 255, 0, 255)
-		draw.FilledRect(screenpeekpos[1] - 5, screenpeekpos[2] - 5, screenpeekpos[1] + 5, screenpeekpos[2] + 5)
+	if G.SmartJump.JumpPeekPos then
+		local screenpeekpos = client.WorldToScreen(G.SmartJump.JumpPeekPos)
+		if screenpeekpos then
+			draw.Color(0, 255, 0, 255)
+			draw.FilledRect(screenpeekpos[1] - 5, screenpeekpos[2] - 5, screenpeekpos[1] + 5, screenpeekpos[2] + 5)
+		end
+
+		-- Draw 3D hitbox at jump peek position
+		local minPoint = HITBOX_MIN + G.SmartJump.JumpPeekPos
+		local maxPoint = HITBOX_MAX + G.SmartJump.JumpPeekPos
+
+		local vertices = {
+			Vector3(minPoint.x, minPoint.y, minPoint.z), -- Bottom-back-left
+			Vector3(minPoint.x, maxPoint.y, minPoint.z), -- Bottom-front-left
+			Vector3(maxPoint.x, maxPoint.y, minPoint.z), -- Bottom-front-right
+			Vector3(maxPoint.x, minPoint.y, minPoint.z), -- Bottom-back-right
+			Vector3(minPoint.x, minPoint.y, maxPoint.z), -- Top-back-left
+			Vector3(minPoint.x, maxPoint.y, maxPoint.z), -- Top-front-left
+			Vector3(maxPoint.x, maxPoint.y, maxPoint.z), -- Top-front-right
+			Vector3(maxPoint.x, minPoint.y, maxPoint.z), -- Top-back-right
+		}
+
+		-- Convert 3D coordinates to 2D screen coordinates
+		for i, vertex in ipairs(vertices) do
+			vertices[i] = client.WorldToScreen(vertex)
+		end
+
+		-- Draw lines between vertices to visualize the box
+		if
+			vertices[1]
+			and vertices[2]
+			and vertices[3]
+			and vertices[4]
+			and vertices[5]
+			and vertices[6]
+			and vertices[7]
+			and vertices[8]
+		then
+			draw.Color(0, 255, 255, 255) -- Cyan color for hitbox
+
+			-- Draw front face
+			draw.Line(vertices[1][1], vertices[1][2], vertices[2][1], vertices[2][2])
+			draw.Line(vertices[2][1], vertices[2][2], vertices[3][1], vertices[3][2])
+			draw.Line(vertices[3][1], vertices[3][2], vertices[4][1], vertices[4][2])
+			draw.Line(vertices[4][1], vertices[4][2], vertices[1][1], vertices[1][2])
+
+			-- Draw back face
+			draw.Line(vertices[5][1], vertices[5][2], vertices[6][1], vertices[6][2])
+			draw.Line(vertices[6][1], vertices[6][2], vertices[7][1], vertices[7][2])
+			draw.Line(vertices[7][1], vertices[7][2], vertices[8][1], vertices[8][2])
+			draw.Line(vertices[8][1], vertices[8][2], vertices[5][1], vertices[5][2])
+
+			-- Draw connecting lines
+			draw.Line(vertices[1][1], vertices[1][2], vertices[5][1], vertices[5][2])
+			draw.Line(vertices[2][1], vertices[2][2], vertices[6][1], vertices[6][2])
+			draw.Line(vertices[3][1], vertices[3][2], vertices[7][1], vertices[7][2])
+			draw.Line(vertices[4][1], vertices[4][2], vertices[8][1], vertices[8][2])
+		end
 	end
 
-	-- Draw 3D hitbox at jump peek position
-	local minPoint = HITBOX_MIN + G.SmartJump.JumpPeekPos
-	local maxPoint = HITBOX_MAX + G.SmartJump.JumpPeekPos
+	-- Draw prediction visualization like AutoPeek
+	if G.SmartJump.PredPos then
+		local predScreen = client.WorldToScreen(G.SmartJump.PredPos)
+		if predScreen then
+			-- Draw prediction position
+			local color = G.SmartJump.HitObstacle and { 255, 0, 0, 255 } or { 0, 255, 0, 255 }
+			draw.Color(color[1], color[2], color[3], color[4])
+			draw.FilledRect(predScreen[1] - 3, predScreen[2] - 3, predScreen[1] + 3, predScreen[2] + 3)
 
-	local vertices = {
-		Vector3(minPoint.x, minPoint.y, minPoint.z), -- Bottom-back-left
-		Vector3(minPoint.x, maxPoint.y, minPoint.z), -- Bottom-front-left
-		Vector3(maxPoint.x, maxPoint.y, minPoint.z), -- Bottom-front-right
-		Vector3(maxPoint.x, minPoint.y, minPoint.z), -- Bottom-back-right
-		Vector3(minPoint.x, minPoint.y, maxPoint.z), -- Top-back-left
-		Vector3(minPoint.x, maxPoint.y, maxPoint.z), -- Top-front-left
-		Vector3(maxPoint.x, maxPoint.y, maxPoint.z), -- Top-front-right
-		Vector3(maxPoint.x, minPoint.y, maxPoint.z), -- Top-back-right
-	}
-
-	-- Convert 3D coordinates to 2D screen coordinates
-	for i, vertex in ipairs(vertices) do
-		vertices[i] = client.WorldToScreen(vertex)
+			-- Draw line from player to prediction
+			local pLocal = entities.GetLocalPlayer()
+			if pLocal then
+				local playerScreen = client.WorldToScreen(pLocal:GetAbsOrigin())
+				if playerScreen then
+					draw.Color(255, 255, 255, 100)
+					draw.Line(playerScreen[1], playerScreen[2], predScreen[1], predScreen[2])
+				end
+			end
+		end
 	end
 
-	-- Draw lines between vertices to visualize the box
-	if
-		vertices[1]
-		and vertices[2]
-		and vertices[3]
-		and vertices[4]
-		and vertices[5]
-		and vertices[6]
-		and vertices[7]
-		and vertices[8]
-	then
-		draw.Color(0, 255, 255, 255) -- Cyan color for hitbox
-
-		-- Draw front face
-		draw.Line(vertices[1][1], vertices[1][2], vertices[2][1], vertices[2][2])
-		draw.Line(vertices[2][1], vertices[2][2], vertices[3][1], vertices[3][2])
-		draw.Line(vertices[3][1], vertices[3][2], vertices[4][1], vertices[4][2])
-		draw.Line(vertices[4][1], vertices[4][2], vertices[1][1], vertices[1][2])
-
-		-- Draw back face
-		draw.Line(vertices[5][1], vertices[5][2], vertices[6][1], vertices[6][2])
-		draw.Line(vertices[6][1], vertices[6][2], vertices[7][1], vertices[7][2])
-		draw.Line(vertices[7][1], vertices[7][2], vertices[8][1], vertices[8][2])
-		draw.Line(vertices[8][1], vertices[8][2], vertices[5][1], vertices[5][2])
-
-		-- Draw connecting lines
-		draw.Line(vertices[1][1], vertices[1][2], vertices[5][1], vertices[5][2])
-		draw.Line(vertices[2][1], vertices[2][2], vertices[6][1], vertices[6][2])
-		draw.Line(vertices[3][1], vertices[3][2], vertices[7][1], vertices[7][2])
-		draw.Line(vertices[4][1], vertices[4][2], vertices[8][1], vertices[8][2])
+	-- Draw jump landing position if available
+	if G.SmartJump.JumpPeekPos then
+		local landingScreen = client.WorldToScreen(G.SmartJump.JumpPeekPos)
+		if landingScreen then
+			draw.Color(0, 255, 255, 255) -- Cyan for landing
+			draw.FilledRect(landingScreen[1] - 4, landingScreen[2] - 4, landingScreen[1] + 4, landingScreen[2] + 4)
+		end
 	end
 
 	-- Draw current state info
 	draw.Color(255, 255, 255, 255)
 	draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
+	if G.SmartJump.HitObstacle then
+		draw.Text(10, 120, "Obstacle Detected: YES")
+	else
+		draw.Text(10, 120, "Obstacle Detected: NO")
+	end
 end
 
 -- Register callbacks

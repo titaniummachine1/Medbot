@@ -57,6 +57,16 @@ G.LastEmergencyJump = 0 -- Track last emergency jump time
 G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
 G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
 
+-- SmartJump state table
+G.SmartJump = {
+	SimulationPath = {},
+	PredPos = nil,
+	HitObstacle = false,
+	JumpPeekPos = nil,
+	stateStartTime = 0,
+	lastState = nil,
+}
+
 -- Bot movement tracking (for SmartJump integration)
 G.BotIsMoving = false -- Track if bot is actively moving
 G.BotMovementDirection = Vector3(0, 0, 0) -- Bot's intended movement direction

@@ -1,7 +1,7 @@
 -- Prediction.lua
 -- Utility for simulating movement and timing jumps
-local Common = require("MedBot.Common")
-local G = require("MedBot.Utils.Globals")
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
 
 local Prediction = {}
 
@@ -59,6 +59,97 @@ function Prediction.SimulateWalkUntilObstacle(player, maxTicks)
 		vel.z = vel.z - GRAVITY * dt
 	end
 	return nil
+end
+
+-- Simulate movement for jump peak ticks (tick-based like AutoPeek)
+-- Returns: walked distance, final position, hit obstacle flag
+function Prediction.SimulateMovementForJumpPeak(startPos, direction, speed)
+	local peakTime = JUMP_FORCE / GRAVITY
+	local peakTicks = math.ceil(peakTime / globals.TickInterval())
+
+	local dirLen = direction:Length()
+	if dirLen == 0 then
+		return 0, startPos, false
+	end
+	local stepDir = direction / dirLen -- normalized
+
+	local currentPos = startPos
+	local walked = 0
+	local stepSize = speed * globals.TickInterval() -- distance per simulated tick
+	
+	-- Clear and populate simulation path like AutoPeek's LineDrawList
+	G.SmartJump.SimulationPath = {}
+	table.insert(G.SmartJump.SimulationPath, startPos)
+	if stepSize <= 0 then
+		stepSize = 8 -- sensible fallback
+	end
+
+	-- Simulate for jump peak ticks (tick-based, not distance-based)
+	for tick = 1, peakTicks do
+		-- STEP 1: Step up 18 units to account for stairs / small ledges
+		local stepUpPos = currentPos + Vector3(0, 0, STEP_HEIGHT)
+
+		-- STEP 2: Forward trace from stepped-up position
+		local forwardEnd = stepUpPos + stepDir * stepSize
+		local fwdTrace = engine.TraceHull(stepUpPos, forwardEnd, HITBOX_MIN, HITBOX_MAX, MASK_PLAYERSOLID_BRUSHONLY)
+
+		if fwdTrace.fraction < 1.0 then
+			-- Hit obstacle - return final position and obstacle flag
+			return walked, currentPos, true
+		end
+
+		-- STEP 3: Drop down to find ground
+		local dropStart = fwdTrace.endpos
+		local dropEnd = dropStart - Vector3(0, 0, STEP_HEIGHT + 1)
+		local dropTrace = engine.TraceHull(dropStart, dropEnd, HITBOX_MIN, HITBOX_MAX, MASK_PLAYERSOLID_BRUSHONLY)
+		if dropTrace.fraction >= 1.0 then
+			-- No ground within step height => would fall; abort
+			break
+		end
+
+		-- Update position on ground and distance walked
+		currentPos = dropTrace.endpos
+		walked = walked + stepSize
+		
+		-- Add current position to simulation path for visualization
+		table.insert(G.SmartJump.SimulationPath, currentPos)
+	end
+
+	return walked, currentPos, false
+end
+
+-- Check if simulation hit obstacle and do SmartJump logic
+-- Returns: canJump (bool), obstaclePos (Vector3), landingPos (Vector3) or nil
+function Prediction.CheckJumpFromSimulation(finalPos, hitObstacle, moveDir)
+	if not hitObstacle then
+		return false, nil, nil -- No obstacle found
+	end
+
+	-- Do SmartJump logic on final position where obstacle was hit
+	local jumpPeakPos = finalPos + Vector3(0, 0, 72) -- 72 units up for jump clearance
+
+	-- Check for head clipping in roof
+	local ceilingTrace = engine.TraceHull(finalPos, jumpPeakPos, HITBOX_MIN, HITBOX_MAX, MASK_PLAYERSOLID_BRUSHONLY)
+	if ceilingTrace.fraction == 0 then
+		return false, nil, nil -- Head would clip roof
+	end
+
+	-- Move 1 unit forward from jump peak (no trace needed)
+	local clearancePos = jumpPeakPos + moveDir * 1
+
+	-- Trace down to find landing
+	local downTrace = engine.TraceHull(
+		clearancePos,
+		clearancePos + Vector3(0, 0, -200),
+		HITBOX_MIN,
+		HITBOX_MAX,
+		MASK_PLAYERSOLID_BRUSHONLY
+	)
+	if downTrace.fraction < 1.0 and isSurfaceWalkable(downTrace.plane) then
+		return true, finalPos, downTrace.endpos
+	end
+
+	return false, finalPos, nil -- No valid landing
 end
 
 -- Compute time to reach a given height with initial jump force
