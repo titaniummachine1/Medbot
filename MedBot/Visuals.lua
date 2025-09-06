@@ -355,41 +355,48 @@ local function OnDraw()
 		end
 	end
 
-    -- Draw all corner connections (if enabled) - simplified without scores
-    if G.Menu.Visuals.showCornerConnections and G.AllCorners then
-        for cornerPoint, _ in pairs(G.AllCorners) do
-            if withinRadius(cornerPoint) then
-                local cornerScreen = client.WorldToScreen(cornerPoint)
-                if cornerScreen then
-                    -- Color based on whether it's an outer corner or not
-                    if G.OuterCorners and G.OuterCorners[cornerPoint] then
-                        draw.Color(255, 165, 0, 200) -- Orange for outer corners
-                    else
-                        draw.Color(0, 255, 0, 200) -- Green for inside corners
+    -- Draw corner connections from node-level data (if enabled) 
+    if G.Menu.Visuals.showCornerConnections then
+        local wallCornerCount = 0
+        local allCornerCount = 0
+        
+        for id, entry in pairs(visibleNodes) do
+            local node = entry.node
+            -- Draw all corners (green for inside corners)
+            if node.allCorners then
+                for _, cornerPoint in ipairs(node.allCorners) do
+                    allCornerCount = allCornerCount + 1
+                    if withinRadius(cornerPoint) then
+                        local cornerScreen = client.WorldToScreen(cornerPoint)
+                        if cornerScreen then
+                            draw.Color(0, 255, 0, 200) -- Green for inside corners
+                            draw.FilledRect(cornerScreen[1] - 2, cornerScreen[2] - 2, 
+                                          cornerScreen[1] + 2, cornerScreen[2] + 2)
+                        end
                     end
-                    
-                    -- Draw small square at corner
-                    draw.FilledRect(cornerScreen[1] - 2, cornerScreen[2] - 2, 
-                                  cornerScreen[1] + 2, cornerScreen[2] + 2)
+                end
+            end
+            
+            -- Draw wall corners (orange squares)
+            if node.wallCorners then
+                for _, cornerPoint in ipairs(node.wallCorners) do
+                    wallCornerCount = wallCornerCount + 1
+                    if withinRadius(cornerPoint) then
+                        local cornerScreen = client.WorldToScreen(cornerPoint)
+                        if cornerScreen then
+                            draw.Color(255, 165, 0, 200) -- Orange for wall corners
+                            draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3, 
+                                          cornerScreen[1] + 3, cornerScreen[2] + 3)
+                        end
+                    end
                 end
             end
         end
-    end
-
-    -- Draw pre-calculated wall corners (orange squares) - controlled by corner connections option
-    if G.Menu.Visuals.showCornerConnections and G.WallCorners then
-        for _, cornerPoint in ipairs(G.WallCorners) do
-            -- Inline distance check for wall corners
-            if (cornerPoint - p):Length() <= renderRadius then
-                local cornerScreen = client.WorldToScreen(cornerPoint)
-                if cornerScreen then
-                    -- Draw orange square for outer corners only
-                    draw.Color(255, 165, 0, 200) -- Orange for wall corners
-                    draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3, 
-                                  cornerScreen[1] + 3, cornerScreen[2] + 3)
-                    -- NO NUMBERS - removed as requested
-                end
-            end
+        
+        -- Debug output in top-left corner
+        if wallCornerCount > 0 or allCornerCount > 0 then
+            draw.Color(255, 255, 255, 255)
+            draw.Text(10, 10, "Wall corners: " .. wallCornerCount .. " / All corners: " .. allCornerCount)
         end
     end
 

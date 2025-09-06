@@ -27,6 +27,9 @@ function Node.Setup()
 	-- AccessibilityChecker.PruneInvalidConnections(G.Navigation.nodes) -- DISABLED: Uses area centers not edges
 	ConnectionBuilder.BuildDoorsForConnections()
 	
+	local WallCornerDetector = require("MedBot.Navigation.WallCornerDetector")
+	WallCornerDetector.DetectWallCorners()
+	
 	Log:Info("Navigation setup complete")
 end
 
@@ -115,21 +118,25 @@ function Node.RemoveConnection(nodeA, nodeB)
 	end
 end
 
--- Pathfinding adjacency
+-- Pathfinding adjacency - optimized with door registry lookup
 function Node.GetAdjacentNodesSimple(node, nodes)
-	local adjacent = {}
-	if not node or not node.c or not nodes then return adjacent end
+	if not node or not node.c or not nodes then return {} end
 	
-	for dirId, dir in pairs(node.c) do
-		if dir.connections then
-			for _, connection in ipairs(dir.connections) do
-				local targetId = ConnectionUtils.GetNodeId(connection)
+	local adjacent = {}
+	local count = 0
+	
+	for _, dir in pairs(node.c) do
+		local connections = dir.connections
+		if connections then
+			for i = 1, #connections do
+				local targetId = ConnectionUtils.GetNodeId(connections[i])
 				local targetNode = nodes[targetId]
 				if targetNode then
-					table.insert(adjacent, {
+					count = count + 1
+					adjacent[count] = {
 						node = targetNode,
-						cost = ConnectionUtils.GetCost(connection)
-					})
+						cost = ConnectionUtils.GetCost(connections[i])
+					}
 				end
 			end
 		end
@@ -138,15 +145,34 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 	return adjacent
 end
 
+-- Optimized version for when only nodes are needed (no cost data)
 function Node.GetAdjacentNodesOnly(node, nodes)
-	local adjacent = {}
-	local adjacentWithCost = Node.GetAdjacentNodesSimple(node, nodes)
+	if not node or not node.c or not nodes then return {} end
 	
-	for _, entry in ipairs(adjacentWithCost) do
-		table.insert(adjacent, entry.node)
+	local adjacent = {}
+	local count = 0
+	
+	for _, dir in pairs(node.c) do
+		local connections = dir.connections
+		if connections then
+			for i = 1, #connections do
+				local targetId = ConnectionUtils.GetNodeId(connections[i])
+				local targetNode = nodes[targetId]
+				if targetNode then
+					count = count + 1
+					adjacent[count] = targetNode
+				end
+			end
+		end
 	end
 	
 	return adjacent
+end
+
+-- Get door target point for pathfinding between two areas
+function Node.GetDoorTarget(nodeA, nodeB)
+	local DoorRegistry = require("MedBot.Navigation.DoorRegistry")
+	return DoorRegistry.GetDoorTarget(nodeA.id, nodeB.id)
 end
 
 -- Legacy compatibility

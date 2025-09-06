@@ -70,20 +70,75 @@ end
 
 local function lerp(a, b, t) return a + (b - a) * t end
 
-local function createDoorForAreas(areaA, areaB)
-	if not (areaA and areaB and areaA.pos and areaB.pos) then
-		return nil
+local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
+	local Distance = require("MedBot.Helpers.Distance")
+	local WALL_CLEARANCE = 24
+	
+	-- Check if door endpoints are too close to wall corners from both areas
+	local leftClamped = overlapLeft
+	local rightClamped = overlapRight
+	
+	-- Check wall corners from both areas involved in the connection
+	for _, area in ipairs({areaA, areaB}) do
+		if area.wallCorners then
+			for _, wallCorner in ipairs(area.wallCorners) do
+				-- Clamp left endpoint if too close to wall corner
+				if Distance.Fast3D(overlapLeft, wallCorner) < WALL_CLEARANCE then
+					-- Move left endpoint away from wall corner
+					local direction = (overlapRight - overlapLeft):Normalized()
+					leftClamped = leftClamped + direction * WALL_CLEARANCE
+				end
+				
+				-- Clamp right endpoint if too close to wall corner  
+				if Distance.Fast3D(overlapRight, wallCorner) < WALL_CLEARANCE then
+					-- Move right endpoint away from wall corner
+					local direction = (overlapLeft - overlapRight):Normalized()
+					rightClamped = rightClamped + direction * WALL_CLEARANCE
+				end
+			end
+		end
 	end
 	
-	local dirX, dirY = determineDirection(areaA.pos, areaB.pos)
-    local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
-    local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
-    if not (a0 and a1 and b0 and b1) then return nil end
+	return leftClamped, rightClamped
+end
 
-    -- Decide owner by higher edge Z (max of the two edge endpoints)
-    local aZmax = math.max(a0.z, a1.z)
-    local bZmax = math.max(b0.z, b1.z)
-    local owner = (aZmax > bZmax + 0.5) and "A" or ((bZmax > aZmax + 0.5) and "B" or "TIE")
+-- Determine which area owns the door based on edge heights
+local function calculateDoorOwner(a0, a1, b0, b1, areaA, areaB)
+	local aZmax = math.max(a0.z, a1.z)
+	local bZmax = math.max(b0.z, b1.z)
+	
+	if aZmax > bZmax + 0.5 then
+		return "A", areaA.id
+	elseif bZmax > aZmax + 0.5 then
+		return "B", areaB.id
+	else
+		return "TIE", math.max(areaA.id, areaB.id)
+	end
+end
+
+-- Calculate edge overlap and door geometry
+local function calculateDoorGeometry(areaA, areaB, dirX, dirY)
+	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
+	local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
+	if not (a0 and a1 and b0 and b1) then return nil end
+	
+	local owner, ownerId = calculateDoorOwner(a0, a1, b0, b1, areaA, areaB)
+	
+	return {
+		a0 = a0, a1 = a1, b0 = b0, b1 = b1,
+		owner = owner, ownerId = ownerId
+	}
+end
+
+local function createDoorForAreas(areaA, areaB)
+	if not (areaA and areaB and areaA.pos and areaB.pos) then return nil end
+	
+	local dirX, dirY = determineDirection(areaA.pos, areaB.pos)
+	local geometry = calculateDoorGeometry(areaA, areaB, dirX, dirY)
+	if not geometry then return nil end
+	
+	local owner = geometry.owner
+	local a0, a1, b0, b1 = geometry.a0, geometry.a1, geometry.b0, geometry.b1
 
     -- Determine 1D overlap along edge axis and reconstruct points on OWNER edge
     local oL, oR, edgeConst, axis -- axis: "x" or "y" varying
@@ -115,17 +170,21 @@ local function createDoorForAreas(areaA, areaB)
 
     local overlapLeft = pointOnOwnerEdge(oL)
     local overlapRight = pointOnOwnerEdge(oR)
+    
+    -- Clamp door away from wall corners
+    overlapLeft, overlapRight = clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
+    
     local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
 
-    -- Validate width on the edge axis only (2D length)
-    local width2D = (axis == "x") and math.abs(oR - oL) or math.abs(oR - oL)
-    if width2D < HITBOX_WIDTH then return nil end
+    -- Validate width on the edge axis only (2D length) - after clamping
+    local clampedWidth = (overlapRight - overlapLeft):Length()
+    if clampedWidth < HITBOX_WIDTH then return nil end
 
     return {
         left = overlapLeft,
         middle = middle,
         right = overlapRight,
-        owner = (owner == "A") and areaA.id or (owner == "B") and areaB.id or math.max(areaA.id, areaB.id),
+        owner = geometry.ownerId,
         needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT
     }
 end

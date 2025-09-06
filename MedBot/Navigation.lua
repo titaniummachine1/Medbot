@@ -17,29 +17,9 @@ local Navigation = {}
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
--- Use late-binding to avoid circular dependencies - REAL LOADING
-local Node, AStar, DStar
-
-local function ensureNode()
-    if not Node then
-        Node = require("MedBot.Navigation.Node")
-    end
-    return Node
-end
-
-local function ensureAStar()
-    if not AStar then
-        AStar = require("MedBot.Algorithms.A-Star")
-    end
-    return AStar
-end
-
-local function ensureDStar()
-    if not DStar then
-        DStar = require("MedBot.Algorithms.DStar")
-    end
-    return DStar
-end
+local Node = require("MedBot.Navigation.Node")
+local AStar = require("MedBot.Algorithms.A-Star")
+local DStar = require("MedBot.Algorithms.DStar")
 --local DStar = require("MedBot.Utils.DStar")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
@@ -68,8 +48,8 @@ function Navigation.AddConnection(nodeA, nodeB)
 		print("One or both nodes are nil, exiting function")
 		return
 	end
-	ensureNode().AddConnection(nodeA, nodeB)
-	ensureNode().AddConnection(nodeB, nodeA)
+	Node.AddConnection(nodeA, nodeB)
+	Node.AddConnection(nodeB, nodeA)
 	G.Navigation.navMeshUpdated = true
 end
 
@@ -79,8 +59,8 @@ function Navigation.RemoveConnection(nodeA, nodeB)
 		print("One or both nodes are nil, exiting function")
 		return
 	end
-	ensureNode().RemoveConnection(nodeA, nodeB)
-	ensureNode().RemoveConnection(nodeB, nodeA)
+	Node.RemoveConnection(nodeA, nodeB)
+	Node.RemoveConnection(nodeB, nodeA)
 	G.Navigation.navMeshUpdated = true
 end
 
@@ -92,7 +72,7 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 	end
 
 	-- Use Node module's implementation to avoid duplication
-	ensureNode().AddCostToConnection(nodeA, nodeB, cost)
+	Node.AddCostToConnection(nodeA, nodeB, cost)
 end
 
 --[[
@@ -211,7 +191,7 @@ end
 
 function Navigation.Setup()
 	if engine.GetMapName() then
-		ensureNode().Setup()
+		Node.Setup()
 		Navigation.ClearPath()
 	end
 end
@@ -283,7 +263,7 @@ function Navigation.ResetTickTimer()
 	G.Navigation.currentNodeTicks = 0
 end
 
--- Build waypoints: for each edge A->B, add the door target then B center
+-- Build flexible waypoints: choose optimal door points, skip centers when direct door-to-door is shorter
 function Navigation.BuildDoorWaypointsFromPath()
 	-- reuse existing table to avoid churn
 	if not G.Navigation.waypoints then
@@ -298,43 +278,84 @@ function Navigation.BuildDoorWaypointsFromPath()
 	if not path or #path == 0 then
 		return
 	end
+	
 	for i = 1, #path - 1 do
 		local a, b = path[i], path[i + 1]
 		if a and b and a.pos and b.pos then
-			-- Collect all available door points for this edge
-			local entry = ensureNode().GetConnectionEntry(a, b)
+			-- Get door entry for current edge
+			local entry = Node.GetConnectionEntry(a, b)
+			local doorPoint = nil
+			
 			if entry and (entry.left or entry.middle or entry.right) then
-				local points = {}
-				if entry.left then
-					table.insert(points, entry.left)
+				-- Choose best door point based on distance to destination
+				local bestPoint = nil
+				local bestDistance = math.huge
+				
+				for _, point in ipairs({entry.left, entry.middle, entry.right}) do
+					if point then
+						local distance = (point - b.pos):Length()
+						if distance < bestDistance then
+							bestDistance = distance
+							bestPoint = point
+						end
+					end
 				end
-				if entry.middle then
-					table.insert(points, entry.middle)
+				
+				doorPoint = bestPoint
+			else
+				-- Fallback: use Node helper for door target
+				doorPoint = Node.GetDoorTargetPoint(a, b)
+			end
+			
+			if doorPoint then
+				-- Check if we should skip area center for direct door-to-door navigation
+				local shouldSkipCenter = false
+				if i < #path - 1 then -- Not the last edge
+					local nextArea = path[i + 2]
+					if nextArea then
+						local nextEntry = Node.GetConnectionEntry(b, nextArea)
+						local nextDoorPoint = nil
+						
+						if nextEntry and (nextEntry.left or nextEntry.middle or nextEntry.right) then
+							nextDoorPoint = nextEntry.middle or nextEntry.left or nextEntry.right
+						else
+							nextDoorPoint = Node.GetDoorTargetPoint(b, nextArea)
+						end
+						
+						if nextDoorPoint then
+							-- Compare distances: door->center->nextDoor vs door->nextDoor
+							local viaCenterDist = (doorPoint - b.pos):Length() + (b.pos - nextDoorPoint):Length()
+							local directDist = (doorPoint - nextDoorPoint):Length()
+							
+							-- Skip center if direct path is shorter by meaningful margin
+							if directDist < viaCenterDist * 0.8 then
+								shouldSkipCenter = true
+							end
+						end
+					end
 				end
-				if entry.right then
-					table.insert(points, entry.right)
-				end
+				
+				-- Add door waypoint
 				table.insert(G.Navigation.waypoints, {
 					kind = "door",
 					fromId = a.id,
 					toId = b.id,
-					points = points,
-					dir = entry.dir,
+					pos = doorPoint
 				})
-			else
-				-- Fallback: use Node helper for a single door target
-				local single = ensureNode().GetDoorTargetPoint(a, b)
-				if single then
-					table.insert(
-						G.Navigation.waypoints,
-						{ kind = "door", fromId = a.id, toId = b.id, points = { single } }
-					)
+				
+				-- Add center waypoint only if not skipping
+				if not shouldSkipCenter then
+					table.insert(G.Navigation.waypoints, { 
+						pos = b.pos, 
+						kind = "center", 
+						areaId = b.id 
+					})
 				end
 			end
-			table.insert(G.Navigation.waypoints, { pos = b.pos, kind = "center", areaId = b.id })
 		end
 	end
-	-- Append final precise goal position if available, so we walk to the actual target
+	
+	-- Append final precise goal position if available
 	local goalPos = G.Navigation.goalPos
 	if goalPos then
 		table.insert(G.Navigation.waypoints, { pos = goalPos, kind = "goal" })
@@ -506,7 +527,7 @@ function Navigation.GetClosestNode(pos)
 		Log:Debug("No navigation nodes available for GetClosestNode")
 		return nil
 	end
-	local n = ensureNode().GetClosestNode(pos)
+	local n = Node.GetClosestNode(pos)
 	if not n then
 		return nil
 	end
@@ -530,19 +551,24 @@ function Navigation.FindPath(startNode, goalNode)
 	local verticalDistance = math.abs(goalNode.pos.z - startNode.pos.z)
 
 	-- Try A* pathfinding as primary algorithm (more reliable than D*)
-	local success, path = pcall(ensureAStar().NormalPath, startNode, goalNode, G.Navigation.nodes, ensureNode().GetAdjacentNodesSimple)
+	local success, path = pcall(AStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 
 	if not success then
 		Log:Error("A* pathfinding crashed: %s", tostring(path))
 		-- Try D* as fallback
 		Log:Info("Trying D* fallback pathfinding...")
-		success, path = pcall(ensureDStar().NormalPath, startNode, goalNode, G.Navigation.nodes, ensureNode().GetAdjacentNodesSimple)
+		success, path = pcall(DStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
 
 		if not success then
 			Log:Error("D* fallback also crashed: %s", tostring(path))
 			G.Navigation.path = nil
 			Navigation.pathFailed = true
 			Navigation.pathFound = false
+
+			-- Add circuit breaker penalty for this failed connection
+			if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
+				G.CircuitBreaker.addConnectionFailure(startNode, goalNode)
+			end
 			return Navigation
 		elseif path then
 			Log:Info("D* fallback succeeded with %d nodes", #path)
