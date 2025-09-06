@@ -711,40 +711,16 @@ local function OnDraw()
             end
         end
         
-        -- Draw endpoint marker
-        if G.SmartJump and G.SmartJump.PredPos then
+        -- Draw jump landing position if available (lines only, no boxes)
+        if G.SmartJump and G.SmartJump.JumpPeekPos and G.SmartJump.PredPos then
+            local jumpPos = G.SmartJump.JumpPeekPos
             local predPos = G.SmartJump.PredPos
-            local hitObstacle = G.SmartJump.HitObstacle
+            local jumpScreen = client.WorldToScreen(jumpPos)
             local predScreen = client.WorldToScreen(predPos)
             
-            if predScreen then
-                if hitObstacle then
-                    draw.Color(255, 100, 100, 255) -- Red for obstacle hit
-                else
-                    draw.Color(100, 255, 100, 255) -- Green for clear path
-                end
-                Draw3DBox(8, predPos)
-                draw.Text(predScreen[1], predScreen[2] + 20, hitObstacle and "OBSTACLE" or "CLEAR")
-            end
-        end
-        
-        -- Draw jump landing position if available
-        if G.SmartJump and G.SmartJump.JumpPeekPos then
-            local jumpPos = G.SmartJump.JumpPeekPos
-            local jumpScreen = client.WorldToScreen(jumpPos)
-            if jumpScreen then
-                draw.Color(100, 100, 255, 255) -- Blue for jump landing
-                Draw3DBox(6, jumpPos)
-                draw.Text(jumpScreen[1], jumpScreen[2] + 20, "LANDING")
-                
-                -- Draw arrow from obstacle to landing like AutoPeek
-                if G.SmartJump and G.SmartJump.PredPos then
-                    local predScreen = client.WorldToScreen(G.SmartJump.PredPos)
-                    if predScreen and jumpScreen then
-                        draw.Color(255, 255, 0, 180) -- Yellow jump arc
-                        draw.Line(predScreen[1], predScreen[2], jumpScreen[1], jumpScreen[2])
-                    end
-                end
+            if jumpScreen and predScreen then
+                draw.Color(255, 255, 0, 180) -- Yellow jump arc
+                draw.Line(predScreen[1], predScreen[2], jumpScreen[1], jumpScreen[2])
             end
         end
     end

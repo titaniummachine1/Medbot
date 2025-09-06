@@ -190,48 +190,45 @@ local function SmartVelocity(cmd, pLocal)
 	return vel
 end
 
--- Tick-by-tick movement simulation with wall collision detection
-local function SimulateMovementTick(startPos, moveDir, speed, stepHeight)
+-- Tick-by-tick movement simulation with proper velocity physics
+local function SimulateMovementTick(startPos, velocity, stepHeight)
 	local vUp = Vector3(0, 0, 1)
 	local vStep = Vector3(0, 0, stepHeight or 18)
 	local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
 	local MASK_PLAYERSOLID = 33636363
-
-	-- Scale movement direction to match our current speed
-	local velocity = moveDir * speed
+	
 	local dt = globals.TickInterval()
 	local targetPos = startPos + velocity * dt
-
+	
 	-- Step 1: Move up by step height
 	local stepUpPos = startPos + vStep
-
+	
 	-- Step 2: Forward collision check
 	local wallTrace = engine.TraceHull(stepUpPos, targetPos + vStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
 	local hitWall = wallTrace.fraction < 1
 	local finalPos = targetPos
-	local slidingDir = moveDir
-
+	local newVelocity = velocity
+	
 	if hitWall then
-		-- Hit wall - calculate sliding direction
+		-- Hit wall - calculate sliding velocity like swing prediction
 		local normal = wallTrace.plane
 		local angle = math.deg(math.acos(normal:Dot(vUp)))
-
+		
 		if angle > 55 then
-			-- Wall too steep - slide along it
+			-- Wall too steep - slide along it and lose velocity
 			local dot = velocity:Dot(normal)
-			local slidingVel = velocity - normal * dot
-			slidingDir = NormalizeVector(slidingVel)
+			newVelocity = velocity - normal * dot
 			finalPos = Vector3(wallTrace.endpos.x, wallTrace.endpos.y, targetPos.z)
 		end
 	end
-
+	
 	-- Step 3: Ground collision (step down)
 	local groundTrace = engine.TraceHull(finalPos + vStep, finalPos - vStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
 	if groundTrace.fraction < 1 then
 		finalPos = groundTrace.endpos
 	end
-
-	return finalPos, hitWall, slidingDir
+	
+	return finalPos, hitWall, newVelocity
 end
 
 -- Check if we can jump over obstacle at current position
@@ -240,22 +237,24 @@ local function CanJumpOverObstacle(pos, moveDir, obstacleHeight)
 	local MASK_PLAYERSOLID = 33636363
 	local jumpHeight = 72 -- Max jump height
 	local stepHeight = 18 -- Normal step height
-	
+
 	-- Only jump if obstacle is higher than step height (>18 units)
-	if obstacleHeight and obstacleHeight <= stepHeight then
+	if obstacleHeight and obstacleHeight > stepHeight then
+		-- Obstacle is high enough to require jumping
+	else
 		return false -- Can step over, no need to jump
 	end
-	
-	-- Check if we can move up 72 units without hitting ceiling
-	local upTrace = engine.TraceHull(pos, pos + Vector3(0, 0, jumpHeight), vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
-	if upTrace.fraction < 1 then
-		return false -- Hit ceiling
-	end
-	
-	-- Check if we can move forward 1 unit at jump height
+
+	-- Move up jump height first, then move 1 unit into wall
 	local jumpPos = pos + Vector3(0, 0, jumpHeight)
 	local forwardPos = jumpPos + moveDir * 1
-	
+
+	-- Check if we're inside wall at jump height (trace fraction 0 means inside solid)
+	local wallCheckTrace = engine.TraceHull(forwardPos, forwardPos, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+	if wallCheckTrace.fraction == 0 then
+		return false -- Still inside wall at jump height, cannot clear
+	end
+
 	-- Check if we can land after clearing obstacle
 	local landTrace = engine.TraceHull(
 		forwardPos,
@@ -264,12 +263,12 @@ local function CanJumpOverObstacle(pos, moveDir, obstacleHeight)
 		vHitbox[2],
 		MASK_PLAYERSOLID
 	)
-	
+
 	-- If trace fraction is 0, we cannot jump this obstacle
 	if landTrace.fraction == 0 then
 		return false
 	end
-	
+
 	if landTrace.fraction < 1 then
 		local landingPos = landTrace.endpos
 		local groundAngle = math.deg(math.acos(landTrace.plane:Dot(Vector3(0, 0, 1))))
@@ -277,7 +276,7 @@ local function CanJumpOverObstacle(pos, moveDir, obstacleHeight)
 			return true, landingPos
 		end
 	end
-	
+
 	return false
 end
 
@@ -292,7 +291,7 @@ local function SmartJumpDetection(cmd, pLocal)
 	end
 
 	local pLocalPos = pLocal:GetAbsOrigin()
-	
+
 	-- Get move intent direction from cmd
 	local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
 	if moveIntent:Length() == 0 and G.BotIsMoving and G.BotMovementDirection then
@@ -304,21 +303,24 @@ local function SmartJumpDetection(cmd, pLocal)
 		local rightComponent = G.BotMovementDirection:Dot(right)
 		moveIntent = Vector3(forwardComponent * 450, -rightComponent * 450, 0)
 	end
-	
+
 	if moveIntent:Length() == 0 then
 		return false
 	end
-	
-	-- Use move intent direction but current velocity strength
+
+	-- Use move intent direction with current velocity magnitude
 	local viewAngles = engine.GetViewAngles()
 	local rotatedMoveIntent = RotateVectorByYaw(moveIntent, viewAngles.yaw)
 	local moveDir = NormalizeVector(rotatedMoveIntent)
 	local currentVel = pLocal:EstimateAbsVelocity()
-	local horizontalVel = currentVel:Length()
+	local horizontalSpeed = currentVel:Length()
 	
-	if horizontalVel <= 1 then
+	if horizontalSpeed <= 1 then
 		return false
 	end
+	
+	-- Set initial velocity: move intent direction with current speed
+	local initialVelocity = moveDir * horizontalSpeed
 
 	local maxSimTicks = 33 -- ~0.5 seconds
 
@@ -326,12 +328,12 @@ local function SmartJumpDetection(cmd, pLocal)
 	G.SmartJump.SimulationPath = { pLocalPos }
 
 	local currentPos = pLocalPos
-	local currentDir = moveDir
+	local currentVelocity = initialVelocity
 	local hitObstacle = false
 
 	-- Tick-by-tick simulation until jump peak time
 	for tick = 1, maxSimTicks do
-		local newPos, wallHit, slidingDir = SimulateMovementTick(currentPos, currentDir, horizontalVel, 18)
+		local newPos, wallHit, newVelocity = SimulateMovementTick(currentPos, currentVelocity, 18)
 
 		-- Store simulation step for visualization
 		table.insert(G.SmartJump.SimulationPath, newPos)
@@ -339,13 +341,30 @@ local function SmartJumpDetection(cmd, pLocal)
 		if wallHit then
 			hitObstacle = true
 
-			-- Calculate obstacle height for jump necessity check
+			-- Calculate obstacle height using trace fraction logic
+			-- 0.75+ trace fraction down from 72 units = 18 units or less (step height)
 			local obstacleHeight = nil
-			if currentPos and newPos then
-				obstacleHeight = math.abs(newPos.z - currentPos.z)
+			local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
+			local MASK_PLAYERSOLID = 33636363
+			local jumpHeight = 72
+			
+			-- Trace down from jump height to measure obstacle
+			local downTrace = engine.TraceHull(
+				currentPos + Vector3(0, 0, jumpHeight),
+				currentPos - Vector3(0, 0, 18),
+				vHitbox[1], vHitbox[2], MASK_PLAYERSOLID
+			)
+			
+			if downTrace.fraction < 0.75 then
+				-- Obstacle is higher than step height (>18 units)
+				obstacleHeight = jumpHeight * (1 - downTrace.fraction)
+			else
+				-- Within step height, can step over
+				obstacleHeight = 0
 			end
 
 			-- Check if we can jump over this obstacle BEFORE continuing simulation
+			local currentDir = NormalizeVector(currentVelocity)
 			local canJump, landingPos = CanJumpOverObstacle(currentPos, currentDir, obstacleHeight)
 			if canJump then
 				-- Store results for visualization - keep full simulation path
@@ -356,13 +375,13 @@ local function SmartJumpDetection(cmd, pLocal)
 				DebugLog("SmartJump: Can jump over obstacle at tick %d, pos=%s", tick, tostring(currentPos))
 				return true
 			else
-				-- Cannot jump over obstacle - continue simulation with sliding until jump peak time
-				currentDir = slidingDir
+				-- Cannot jump over obstacle - continue simulation with new velocity
 				DebugLog("SmartJump: Cannot jump over obstacle at tick %d, continuing simulation", tick)
 			end
 		end
 
 		currentPos = newPos
+		currentVelocity = newVelocity
 	end
 
 	-- Store final simulation results
