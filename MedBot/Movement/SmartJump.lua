@@ -196,24 +196,82 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 	local vStep = Vector3(0, 0, stepHeight or 18)
 	local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
 	local MASK_PLAYERSOLID = 33636363
-	
+
 	local dt = globals.TickInterval()
 	local targetPos = startPos + velocity * dt
-	
+
 	-- Step 1: Move up by step height
 	local stepUpPos = startPos + vStep
-	
+
+	-- ALWAYS check for jump opportunities first, regardless of wall collision
+	local shouldJump = false
+	local moveDir = NormalizeVector(velocity)
+	if moveDir then
+		-- Check if there's an obstacle ahead that requires jumping
+		local forwardTrace =
+			engine.TraceHull(stepUpPos, stepUpPos + moveDir * 32, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+		if forwardTrace.fraction < 1 then
+			-- Found obstacle - move 1 unit forward from hit point, then up 72 units, then trace down
+			-- This guarantees we collide with obstacle from above
+			local hitPoint = forwardTrace.endpos
+			local forwardFromHit = hitPoint + moveDir * 1
+			local aboveObstacle = forwardFromHit + Vector3(0, 0, 72)
+
+			-- Trace down from above obstacle to measure height
+			local downTrace = engine.TraceHull(
+				aboveObstacle,
+				forwardFromHit - Vector3(0, 0, 18),
+				vHitbox[1],
+				vHitbox[2],
+				MASK_PLAYERSOLID
+			)
+
+			if downTrace.fraction < 0.75 then
+				-- Obstacle is higher than step height (>18 units)
+				local obstacleHeight = 72 * (1 - downTrace.fraction)
+
+				-- Only jump if obstacle is worth jumping over (>18 units)
+				if obstacleHeight > 18 then
+					-- Check if we can clear obstacle by jumping
+					local jumpPos = forwardFromHit + Vector3(0, 0, 72)
+
+					-- Check if we're clear at jump height
+					local clearTrace = engine.TraceHull(jumpPos, jumpPos, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+					if clearTrace.fraction > 0 then
+						-- Check if we can land after clearing obstacle
+						local landTrace = engine.TraceHull(
+							jumpPos,
+							jumpPos - Vector3(0, 0, 72 + 18),
+							vHitbox[1],
+							vHitbox[2],
+							MASK_PLAYERSOLID
+						)
+
+						-- If we can land and surface is walkable
+						if landTrace.fraction > 0 and landTrace.fraction < 1 then
+							local groundAngle = math.deg(math.acos(landTrace.plane:Dot(Vector3(0, 0, 1))))
+							if groundAngle < 45 then -- Walkable surface
+								shouldJump = true
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
 	-- Step 2: Forward collision check
 	local wallTrace = engine.TraceHull(stepUpPos, targetPos + vStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
 	local hitWall = wallTrace.fraction < 1
 	local finalPos = targetPos
 	local newVelocity = velocity
-	
-	if hitWall then
-		-- Hit wall - calculate sliding velocity like swing prediction
+
+	if hitWall and not shouldJump then
+		-- Apply wall sliding logic (matching swing prediction)
 		local normal = wallTrace.plane
 		local angle = math.deg(math.acos(normal:Dot(vUp)))
-		
+
+		-- Check the wall angle (same as swing prediction)
 		if angle > 55 then
 			-- Wall too steep - slide along it and lose velocity
 			local dot = velocity:Dot(normal)
@@ -221,14 +279,35 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 			finalPos = Vector3(wallTrace.endpos.x, wallTrace.endpos.y, targetPos.z)
 		end
 	end
-	
-	-- Step 3: Ground collision (step down)
-	local groundTrace = engine.TraceHull(finalPos + vStep, finalPos - vStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
-	if groundTrace.fraction < 1 then
-		finalPos = groundTrace.endpos
+
+	-- Step 3: Ground collision (step down) - only if not jumping, matching swing prediction logic
+	if not shouldJump then
+		-- Don't step down if we're in-air (simplified check)
+		local downStep = vStep
+
+		local groundTrace =
+			engine.TraceHull(finalPos + vStep, finalPos - downStep, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
+		if groundTrace.fraction < 1 then
+			-- We'll hit the ground - check ground angle (same as swing prediction)
+			local normal = groundTrace.plane
+			local angle = math.deg(math.acos(normal:Dot(vUp)))
+
+			-- Check the ground angle (matching swing prediction logic)
+			if angle < 45 then
+				-- Walkable surface - land on it
+				finalPos = groundTrace.endpos
+			elseif angle < 55 then
+				-- Too steep to walk but not steep enough to slide - stop movement
+				newVelocity = Vector3(0, 0, 0)
+			else
+				-- Very steep surface - slide along it
+				local dot = newVelocity:Dot(normal)
+				newVelocity = newVelocity - normal * dot
+			end
+		end
 	end
-	
-	return finalPos, hitWall, newVelocity
+
+	return finalPos, hitWall, newVelocity, shouldJump
 end
 
 -- Check if we can jump over obstacle at current position
@@ -314,11 +393,11 @@ local function SmartJumpDetection(cmd, pLocal)
 	local moveDir = NormalizeVector(rotatedMoveIntent)
 	local currentVel = pLocal:EstimateAbsVelocity()
 	local horizontalSpeed = currentVel:Length()
-	
+
 	if horizontalSpeed <= 1 then
 		return false
 	end
-	
+
 	-- Set initial velocity: move intent direction with current speed
 	local initialVelocity = moveDir * horizontalSpeed
 
@@ -333,7 +412,7 @@ local function SmartJumpDetection(cmd, pLocal)
 
 	-- Tick-by-tick simulation until jump peak time
 	for tick = 1, maxSimTicks do
-		local newPos, wallHit, newVelocity = SimulateMovementTick(currentPos, currentVelocity, 18)
+		local newPos, wallHit, newVelocity, shouldJump = SimulateMovementTick(currentPos, currentVelocity, 18)
 
 		-- Store simulation step for visualization
 		table.insert(G.SmartJump.SimulationPath, newPos)
@@ -341,42 +420,41 @@ local function SmartJumpDetection(cmd, pLocal)
 		if wallHit then
 			hitObstacle = true
 
-			-- Calculate obstacle height using trace fraction logic
-			-- 0.75+ trace fraction down from 72 units = 18 units or less (step height)
-			local obstacleHeight = nil
-			local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
-			local MASK_PLAYERSOLID = 33636363
-			local jumpHeight = 72
-			
-			-- Trace down from jump height to measure obstacle
-			local downTrace = engine.TraceHull(
-				currentPos + Vector3(0, 0, jumpHeight),
-				currentPos - Vector3(0, 0, 18),
-				vHitbox[1], vHitbox[2], MASK_PLAYERSOLID
-			)
-			
-			if downTrace.fraction < 0.75 then
-				-- Obstacle is higher than step height (>18 units)
-				obstacleHeight = jumpHeight * (1 - downTrace.fraction)
-			else
-				-- Within step height, can step over
-				obstacleHeight = 0
-			end
+			if shouldJump then
+				-- Jump detected - set simulation position to jump position and store results
+				local moveDir = NormalizeVector(currentVelocity)
+				if moveDir then
+					local jumpHeight = 72
+					local jumpPos = currentPos + Vector3(0, 0, jumpHeight)
+					local forwardPos = jumpPos + moveDir * 32 -- Move forward to landing area
 
-			-- Check if we can jump over this obstacle BEFORE continuing simulation
-			local currentDir = NormalizeVector(currentVelocity)
-			local canJump, landingPos = CanJumpOverObstacle(currentPos, currentDir, obstacleHeight)
-			if canJump then
-				-- Store results for visualization - keep full simulation path
+					-- Find landing position
+					local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
+					local MASK_PLAYERSOLID = 33636363
+					local landTrace = engine.TraceHull(
+						forwardPos,
+						forwardPos - Vector3(0, 0, jumpHeight + 18),
+						vHitbox[1],
+						vHitbox[2],
+						MASK_PLAYERSOLID
+					)
+
+					if landTrace.fraction < 1 then
+						G.SmartJump.JumpPeekPos = landTrace.endpos
+						-- Update simulation path to show jump arc
+						table.insert(G.SmartJump.SimulationPath, jumpPos)
+						table.insert(G.SmartJump.SimulationPath, landTrace.endpos)
+					end
+				end
+
 				G.SmartJump.PredPos = currentPos
 				G.SmartJump.HitObstacle = true
-				G.SmartJump.JumpPeekPos = landingPos
 
-				DebugLog("SmartJump: Can jump over obstacle at tick %d, pos=%s", tick, tostring(currentPos))
+				DebugLog("SmartJump: Jump required at tick %d, pos=%s", tick, tostring(currentPos))
 				return true
 			else
-				-- Cannot jump over obstacle - continue simulation with new velocity
-				DebugLog("SmartJump: Cannot jump over obstacle at tick %d, continuing simulation", tick)
+				-- No jump needed (obstacle <=18 units) or can't jump - continue simulation
+				DebugLog("SmartJump: No jump needed at tick %d, continuing simulation", tick)
 			end
 		end
 
@@ -693,24 +771,31 @@ local function OnDrawSmartJump()
 		end
 	end
 
-	-- Draw prediction visualization like AutoPeek
-	if G.SmartJump.PredPos then
-		local predScreen = client.WorldToScreen(G.SmartJump.PredPos)
-		if predScreen then
-			-- Draw prediction position
-			local color = G.SmartJump.HitObstacle and { 255, 0, 0, 255 } or { 0, 255, 0, 255 }
-			draw.Color(color[1], color[2], color[3], color[4])
-			draw.FilledRect(predScreen[1] - 3, predScreen[2] - 3, predScreen[1] + 3, predScreen[2] + 3)
+	-- Draw full simulation path as connected lines
+	if G.SmartJump.SimulationPath and #G.SmartJump.SimulationPath > 1 then
+		for i = 1, #G.SmartJump.SimulationPath - 1 do
+			local currentPos = G.SmartJump.SimulationPath[i]
+			local nextPos = G.SmartJump.SimulationPath[i + 1]
 
-			-- Draw line from player to prediction
-			local pLocal = entities.GetLocalPlayer()
-			if pLocal then
-				local playerScreen = client.WorldToScreen(pLocal:GetAbsOrigin())
-				if playerScreen then
-					draw.Color(255, 255, 255, 100)
-					draw.Line(playerScreen[1], playerScreen[2], predScreen[1], predScreen[2])
-				end
+			local currentScreen = client.WorldToScreen(currentPos)
+			local nextScreen = client.WorldToScreen(nextPos)
+
+			if currentScreen and nextScreen then
+				-- Blue gradient - darker at start, brighter at end
+				local alpha = math.floor(100 + (i / #G.SmartJump.SimulationPath) * 155)
+				draw.Color(0, 150, 255, alpha)
+				draw.Line(currentScreen[1], currentScreen[2], nextScreen[1], nextScreen[2])
 			end
+		end
+	end
+
+	-- Draw jump arc if available
+	if G.SmartJump.PredPos and G.SmartJump.JumpPeekPos then
+		local obstacleScreen = client.WorldToScreen(G.SmartJump.PredPos)
+		local landingScreen = client.WorldToScreen(G.SmartJump.JumpPeekPos)
+		if obstacleScreen and landingScreen then
+			draw.Color(255, 255, 0, 200) -- Yellow for jump arc
+			draw.Line(obstacleScreen[1], obstacleScreen[2], landingScreen[1], landingScreen[2])
 		end
 	end
 
