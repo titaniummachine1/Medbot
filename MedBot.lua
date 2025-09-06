@@ -4076,6 +4076,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 
 	-- ALWAYS check for jump opportunities first, regardless of wall collision
 	local shouldJump = false
+	local obstacleHeight = nil
 	local moveDir = NormalizeVector(velocity)
 	if moveDir then
 		-- Check if there's an obstacle ahead that requires jumping
@@ -4099,7 +4100,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 
 			if downTrace.fraction < 0.75 then
 				-- Obstacle is higher than step height (>18 units)
-				local obstacleHeight = 72 * (1 - downTrace.fraction)
+				obstacleHeight = 72 * (1 - downTrace.fraction)
 
 				-- Only jump if obstacle is worth jumping over (>18 units)
 				if obstacleHeight > 18 then
@@ -4125,7 +4126,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 								shouldJump = true
 							else
 								-- Landing surface too steep - try 10 units further into obstacle
-								local forwardFromHit10 = hitPoint + moveDir * 20
+								local forwardFromHit10 = hitPoint + moveDir * 24
 								local jumpPos10 = forwardFromHit10 + Vector3(0, 0, 72)
 
 								-- Check if we're clear at jump height (10 units further)
@@ -4163,6 +4164,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 	local hitWall = wallTrace.fraction < 1
 	local finalPos = targetPos
 	local newVelocity = velocity
+	local shouldJump = false
 
 	if hitWall and not shouldJump then
 		-- Apply wall sliding logic (matching swing prediction)
@@ -4205,7 +4207,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 		end
 	end
 
-	return finalPos, hitWall, newVelocity, shouldJump
+	return finalPos, hitWall, newVelocity, shouldJump, obstacleHeight
 end
 
 -- Check if we can jump over obstacle at current position
@@ -4307,10 +4309,12 @@ local function SmartJumpDetection(cmd, pLocal)
 	local currentPos = pLocalPos
 	local currentVelocity = initialVelocity
 	local hitObstacle = false
+	local minJumpTick = nil -- Track minimum tick needed for jump timing
 
 	-- Tick-by-tick simulation until jump peak time
 	for tick = 1, maxSimTicks do
-		local newPos, wallHit, newVelocity, shouldJump = SimulateMovementTick(currentPos, currentVelocity, 18)
+		local newPos, wallHit, newVelocity, shouldJump, obstacleHeight =
+			SimulateMovementTick(currentPos, currentVelocity, 18)
 
 		-- Store simulation step for visualization
 		table.insert(G.SmartJump.SimulationPath, newPos)
@@ -4318,20 +4322,42 @@ local function SmartJumpDetection(cmd, pLocal)
 		if wallHit then
 			hitObstacle = true
 
-			if shouldJump then
-				-- Jump detected - set simulation position to jump position and store results
+			if shouldJump and obstacleHeight then
+				-- Calculate minimum time needed to reach obstacle height
+				-- Jump force = 277, gravity = 800
+				-- For height h: t = sqrt(2*h/g) where we need to reach height h
+				local timeToReachHeight = math.sqrt(2 * obstacleHeight / GRAVITY)
+				local ticksToReachHeight = math.ceil(timeToReachHeight / globals.TickInterval())
+
+				-- Calculate distance we'll travel horizontally in that time
+				local distanceInTime = horizontalSpeed * timeToReachHeight
+				local distanceToObstacle = (currentPos - pLocalPos):Length()
+
+				-- Calculate the exact tick when we need to jump (as late as possible)
+				-- We need to be at the obstacle when our jump reaches peak height
+				local ticksUntilObstacle = math.max(
+					0,
+					math.floor((distanceToObstacle - distanceInTime) / (horizontalSpeed * globals.TickInterval()))
+				)
+				local exactJumpTick = tick + ticksUntilObstacle
+
+				if minJumpTick == nil then
+					minJumpTick = exactJumpTick
+				end
+
+				-- Always set up visuals and prediction when obstacle detected
 				local moveDir = NormalizeVector(currentVelocity)
 				if moveDir then
-					local jumpHeight = 72
-					local jumpPos = currentPos + Vector3(0, 0, jumpHeight)
-					local forwardPos = jumpPos + moveDir * 32 -- Move forward to landing area
+					-- Use actual obstacle height for jump calculation
+					local jumpPos = currentPos + Vector3(0, 0, obstacleHeight)
+					local forwardPos = jumpPos + moveDir * 32
 
 					-- Find landing position
 					local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
 					local MASK_PLAYERSOLID = 33636363
 					local landTrace = engine.TraceHull(
 						forwardPos,
-						forwardPos - Vector3(0, 0, jumpHeight + 18),
+						forwardPos - Vector3(0, 0, obstacleHeight + 18),
 						vHitbox[1],
 						vHitbox[2],
 						MASK_PLAYERSOLID
@@ -4348,8 +4374,19 @@ local function SmartJumpDetection(cmd, pLocal)
 				G.SmartJump.PredPos = currentPos
 				G.SmartJump.HitObstacle = true
 
-				DebugLog("SmartJump: Jump required at tick %d, pos=%s", tick, tostring(currentPos))
-				return true
+				-- Only actually trigger jump when we reach the exact minimum tick needed
+				if tick >= minJumpTick then
+					DebugLog(
+						"SmartJump: Jump required at tick %d, obstacleHeight=%.1f, exactJumpTick=%d",
+						tick,
+						obstacleHeight,
+						exactJumpTick
+					)
+					return true
+				else
+					-- Not time to jump yet - continue simulation
+					DebugLog("SmartJump: Obstacle detected at tick %d, will jump at tick %d", tick, minJumpTick)
+				end
 			else
 				-- No jump needed (obstacle <=18 units) or can't jump - continue simulation
 				DebugLog("SmartJump: No jump needed at tick %d, continuing simulation", tick)
@@ -4686,7 +4723,6 @@ local function OnDrawSmartJump()
 			end
 		end
 	end
-
 
 	-- Draw jump landing position if available
 	if G.SmartJump.JumpPeekPos then
