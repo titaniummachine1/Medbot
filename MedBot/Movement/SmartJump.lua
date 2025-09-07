@@ -151,37 +151,39 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 		return false, 0
 	end
 
-	-- Calculate actual obstacle height using (1 - fraction)
-	local obstacleHeight = 72 * (1 - trace.fraction)
-
 	-- Check if surface is walkable when we land
-	if trace.fraction > 0 and isSurfaceWalkable(trace.plane) then
-		-- Calculate minimum time in air to achieve this height
-		-- Jump velocity is 271 units/sec, gravity is 800 units/sec^2
-		-- Height = v0*t - 0.5*g*t^2, solve for t when height >= obstacleHeight
-		local jumpVel = 271
-		local gravity = 800
-		local tickInterval = globals.TickInterval()
+	if isSurfaceWalkable(trace.plane) then
+		-- Calculate actual obstacle height using (1 - fraction)
+		local obstacleHeight = 72 * (1 - trace.fraction)
+		print(obstacleHeight)
+		if obstacleHeight > 18 then -- skip if obstacle is too small
+			-- Calculate minimum time in air to achieve this height
+			-- Jump velocity is 271 units/sec, gravity is 800 units/sec^2
+			-- Height = v0*t - 0.5*g*t^2, solve for t when height >= obstacleHeight
+			local jumpVel = 271
+			local gravity = 800
+			local tickInterval = globals.TickInterval()
 
-		-- Time to reach peak: t_peak = jumpVel / gravity
-		local timeToPeak = jumpVel / gravity
+			-- Time to reach peak: t_peak = jumpVel / gravity
+			local timeToPeak = jumpVel / gravity
 
-		-- Height at time t: h = jumpVel*t - 0.5*gravity*t^2
-		-- We need h >= obstacleHeight, find minimum t
-		local minTimeNeeded = 0
-		for t = 0, timeToPeak, tickInterval do
-			local height = jumpVel * t - 0.5 * gravity * t * t
-			if height >= obstacleHeight then
-				minTimeNeeded = t
-				break
+			-- Height at time t: h = jumpVel*t - 0.5*gravity*t^2
+			-- We need h >= obstacleHeight, find minimum t
+			local minTimeNeeded = 0
+			for t = 0, timeToPeak, tickInterval do
+				local height = jumpVel * t - 0.5 * gravity * t * t
+				if height >= obstacleHeight then
+					minTimeNeeded = t
+					break
+				end
 			end
+
+			-- Convert to ticks and add safety margin
+			local minTicksNeeded = math.ceil(minTimeNeeded / tickInterval)
+
+			G.SmartJump.JumpPeekPos = trace.endpos
+			return true, minTicksNeeded
 		end
-
-		-- Convert to ticks and add safety margin
-		local minTicksNeeded = math.ceil(minTimeNeeded / tickInterval)
-
-		G.SmartJump.JumpPeekPos = trace.endpos
-		return true, minTicksNeeded
 	end
 
 	return false, 0
@@ -194,23 +196,27 @@ local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal)
 	local hitbox = GetPlayerHitbox(pLocal)
 	local deltaTime = globals.TickInterval()
 	local moveDirection = NormalizeVector(velocity)
+	local shouldJump = false
+	local minJumpTicks = 0
 
 	-- Calculate target position
-	local forwardDistance = velocity:Length() * deltaTime
 	local targetPos = startPos + velocity * deltaTime
 
 	-- Forward collision check (like swing prediction)
 	local wallTrace =
 		engine.TraceHull(startPos + stepVector, targetPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	targetPos = wallTrace.endpos
+
+	-- ensure the forawrd trace is moved down to ground after step up logic is applied by design
+	local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	targetPos = Groundtrace.endpos
 
 	local hitObstacle = wallTrace.fraction < 1
-	local shouldJump = false
-	local minJumpTicks = 0
 
 	if hitObstacle then
 		-- Check if obstacle is jumpable immediately
 		local canJump
-		canJump, minJumpTicks = CheckJumpable(wallTrace.endpos, moveDirection, hitbox)
+		canJump, minJumpTicks = CheckJumpable(targetPos, moveDirection, hitbox)
 
 		if canJump then
 			-- Jump over obstacle - move up to full jump height (72 units)
@@ -226,15 +232,12 @@ local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal)
 				local velocityDot = velocity:Dot(wallNormal)
 				velocity = velocity - wallNormal * velocityDot
 			end
-
-			-- Position at wall collision point
-			targetPos = Vector3(wallTrace.endpos.x, wallTrace.endpos.y, startPos.z)
 		end
 	end
 
 	-- Ground collision (step down logic)
 	local stepDownTrace =
-		engine.TraceHull(targetPos + stepVector, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+		engine.TraceHull(targetPos + upVector, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 
 	if stepDownTrace.fraction < 1 then
 		-- Found ground within step height - snap to it
