@@ -134,7 +134,7 @@ local function GetJumpPeak(horizontalVelocityVector, startPos)
 end
 
 -- Check if obstacle is jumpable and calculate minimum time needed
-local function CheckJumpable(hitPos, moveDirection, hitbox, currentTick)
+local function CheckJumpable(hitPos, moveDirection, hitbox)
 	if not moveDirection then
 		return false, 0
 	end
@@ -187,104 +187,64 @@ local function CheckJumpable(hitPos, moveDirection, hitbox, currentTick)
 	return false, 0
 end
 
--- Ground-only movement simulation: step up -> move forward -> check obstacle jump -> step down
+-- Ground-only movement simulation following swing prediction pattern
 local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal)
+	local upVector = Vector3(0, 0, 1)
 	local stepVector = Vector3(0, 0, stepHeight or 18)
 	local hitbox = GetPlayerHitbox(pLocal)
 	local deltaTime = globals.TickInterval()
 	local moveDirection = NormalizeVector(velocity)
 
-	-- Step 1: Move up by step height (temporary elevation)
-	local elevatedPos = startPos + stepVector
-
-	-- Step 2: Move forward at elevated position
+	-- Calculate target position
 	local forwardDistance = velocity:Length() * deltaTime
-	local targetPos = elevatedPos + moveDirection * forwardDistance
+	local targetPos = startPos + velocity * deltaTime
 
-	local forwardTrace = engine.TraceHull(elevatedPos, targetPos, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-	local hitObstacle = forwardTrace.fraction < 1
-	local currentPos = forwardTrace.endpos
+	-- Forward collision check (like swing prediction)
+	local wallTrace =
+		engine.TraceHull(startPos + stepVector, targetPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+
+	local hitObstacle = wallTrace.fraction < 1
 	local shouldJump = false
-
-	-- Step 3: Check for obstacle jump if we hit something
 	local minJumpTicks = 0
+
 	if hitObstacle then
+		-- Check if obstacle is jumpable immediately
 		local canJump
-		canJump, minJumpTicks = CheckJumpable(forwardTrace.endpos, moveDirection, hitbox, 0)
-		shouldJump = canJump
-	end
+		canJump, minJumpTicks = CheckJumpable(wallTrace.endpos, moveDirection, hitbox)
 
-	-- Step 4: Apply wall sliding if we hit obstacle but can't jump
-	if hitObstacle and not shouldJump then
-		local wallNormal = forwardTrace.plane
-		-- Simple wall sliding - move back from wall
-		currentPos = forwardTrace.endpos - wallNormal * 1
-	else
-		-- No obstacle hit, use target position
-		currentPos = targetPos
-	end
+		if canJump then
+			-- Jump over obstacle - move up to full jump height (72 units)
+			shouldJump = true
+			targetPos = targetPos
+		else
+			-- Wall sliding - slide along wall
+			local wallNormal = wallTrace.plane
+			local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
 
-	-- Step 5: Step down to find ground - STOP simulation if no ground within step height
-	local stepDownTrace = engine.TraceHull(currentPos, currentPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+			if wallAngle > 55 then
+				-- Steep wall - slide along it
+				local velocityDot = velocity:Dot(wallNormal)
+				velocity = velocity - wallNormal * velocityDot
+			end
 
-	if stepDownTrace.fraction < 1 then
-		-- Found ground within step height - snap to it
-		currentPos = stepDownTrace.endpos
-		return currentPos, hitObstacle, velocity, shouldJump, minJumpTicks
-	else
-		-- No ground within step height - would be falling, stop simulation
-		return nil, hitObstacle, velocity, shouldJump, minJumpTicks
-	end
-end
-
--- Check if we can jump over obstacle at current position
-local function CanJumpOverObstacle(pos, moveDir, obstacleHeight, pLocal)
-	local jumpHeight = 72 -- Max jump height
-	local stepHeight = 18 -- Normal step height
-
-	-- Only jump if obstacle is higher than step height (>18 units)
-	if obstacleHeight and obstacleHeight > stepHeight then
-		-- Obstacle is high enough to require jumping
-	else
-		return false -- Can step over, no need to jump
-	end
-
-	-- Move up jump height first, then move 1 unit into wall
-	local jumpPos = pos + Vector3(0, 0, jumpHeight)
-	local forwardPos = jumpPos + moveDir * 1
-
-	-- Get dynamic hitbox for local player
-	local vHitbox = GetPlayerHitbox(pLocal)
-
-	-- Check if we're inside wall at jump height (trace fraction 0 means inside solid)
-	local wallCheckTrace = engine.TraceHull(forwardPos, forwardPos, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
-	if wallCheckTrace.fraction == 0 then
-		return false -- Still inside wall at jump height, cannot clear
-	end
-
-	-- Check if we can land after clearing obstacle
-	local landTrace = engine.TraceHull(
-		forwardPos,
-		forwardPos - Vector3(0, 0, jumpHeight + 18),
-		vHitbox[1],
-		vHitbox[2],
-		MASK_PLAYERSOLID
-	)
-
-	-- If trace fraction is 0, we cannot jump this obstacle
-	if landTrace.fraction == 0 then
-		return false
-	end
-
-	if landTrace.fraction < 1 then
-		local landingPos = landTrace.endpos
-		local groundAngle = math.deg(math.acos(landTrace.plane:Dot(Vector3(0, 0, 1))))
-		if groundAngle < 45 then -- Walkable surface
-			return true, landingPos
+			-- Position at wall collision point
+			targetPos = Vector3(wallTrace.endpos.x, wallTrace.endpos.y, startPos.z)
 		end
 	end
 
-	return false
+	-- Ground collision (step down logic)
+	local stepDownTrace =
+		engine.TraceHull(targetPos + stepVector, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+
+	if stepDownTrace.fraction < 1 then
+		-- Found ground within step height - snap to it
+		targetPos = stepDownTrace.endpos
+	else
+		-- No ground within step height - would be falling, stop simulation
+		return nil, hitObstacle, velocity, false, 0
+	end
+
+	return targetPos, hitObstacle, velocity, shouldJump, minJumpTicks
 end
 
 -- Smart jump detection with proper tick-by-tick simulation
