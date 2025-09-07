@@ -187,17 +187,12 @@ local function CheckJumpable(hitPos, moveDirection, hitbox, currentTick)
 	return false, 0
 end
 
--- Simplified movement simulation: step up -> move forward -> check obstacle jump -> wall sliding -> step down
-local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal, onGroundInput)
-	local upVector = Vector3(0, 0, 1)
+-- Ground-only movement simulation: step up -> move forward -> check obstacle jump -> step down
+local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal)
 	local stepVector = Vector3(0, 0, stepHeight or 18)
 	local hitbox = GetPlayerHitbox(pLocal)
 	local deltaTime = globals.TickInterval()
 	local moveDirection = NormalizeVector(velocity)
-	local onGround = onGroundInput or true
-
-	-- Store original Z position to prevent elevation accumulation
-	local originalZ = startPos.z
 
 	-- Step 1: Move up by step height (temporary elevation)
 	local elevatedPos = startPos + stepVector
@@ -209,13 +204,12 @@ local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal, onGr
 	local forwardTrace = engine.TraceHull(elevatedPos, targetPos, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 	local hitObstacle = forwardTrace.fraction < 1
 	local currentPos = forwardTrace.endpos
-	local currentVelocity = velocity
 	local shouldJump = false
 
 	-- Step 3: Check for obstacle jump if we hit something
-	local canJump = false
 	local minJumpTicks = 0
 	if hitObstacle then
+		local canJump
 		canJump, minJumpTicks = CheckJumpable(forwardTrace.endpos, moveDirection, hitbox, 0)
 		shouldJump = canJump
 	end
@@ -223,88 +217,24 @@ local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal, onGr
 	-- Step 4: Apply wall sliding if we hit obstacle but can't jump
 	if hitObstacle and not shouldJump then
 		local wallNormal = forwardTrace.plane
-		local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
-
-		if wallAngle > 55 then
-			-- Steep wall - slide along it
-			local velocityDot = currentVelocity:Dot(wallNormal)
-			currentVelocity = currentVelocity - wallNormal * velocityDot
-			currentPos = forwardTrace.endpos - wallNormal * 1
-		else
-			-- Normal wall - move 1 unit into it
-			currentPos = forwardTrace.endpos - wallNormal * 1
-		end
+		-- Simple wall sliding - move back from wall
+		currentPos = forwardTrace.endpos - wallNormal * 1
 	else
 		-- No obstacle hit, use target position
 		currentPos = targetPos
 	end
 
-	-- Step 5: Step down to ground level - CRITICAL: Prevent elevation accumulation
-	-- Trace down from current position to find ground, extending well beyond step height
-	local maxStepDown = Vector3(0, 0, stepHeight + 72) -- Look much further down
-	local stepDownTrace = engine.TraceHull(currentPos, currentPos - maxStepDown, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	-- Step 5: Step down to find ground - STOP simulation if no ground within step height
+	local stepDownTrace = engine.TraceHull(currentPos, currentPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 
 	if stepDownTrace.fraction < 1 then
-		-- Hit ground - check if it's within reasonable step height
-		local groundNormal = stepDownTrace.plane
-		local groundAngle = math.deg(math.acos(groundNormal:Dot(upVector)))
-		local distanceToGround = maxStepDown:Length() * stepDownTrace.fraction
-
-		if distanceToGround <= stepHeight then
-			-- Ground is within step height - normal stepping
-			if groundAngle < 45 then
-				-- Walkable ground - snap to it
-				currentPos = stepDownTrace.endpos
-				onGround = true
-			elseif groundAngle > 55 then
-				-- Too steep - check if jumpable, otherwise slide
-				if not shouldJump then
-					local groundCanJump, groundMinTicks = CheckJumpable(currentPos, moveDirection, hitbox, 0)
-					if groundCanJump then
-						shouldJump = true
-						minJumpTicks = groundMinTicks
-					else
-						-- Slide along steep surface
-						local velocityDot = currentVelocity:Dot(groundNormal)
-						currentVelocity = currentVelocity - groundNormal * velocityDot
-						currentPos = stepDownTrace.endpos
-						onGround = false
-					end
-				else
-					-- Jumping over steep surface - stay elevated but limit to original + step height
-					local maxAllowedZ = originalZ + stepHeight
-					currentPos = Vector3(currentPos.x, currentPos.y, math.min(currentPos.z, maxAllowedZ))
-					onGround = false
-				end
-			else
-				-- Moderate slope - stop movement and snap to surface
-				currentVelocity = Vector3(0, 0, 0)
-				currentPos = stepDownTrace.endpos
-				onGround = true
-			end
-		else
-			-- Ground is too far down - we're falling or jumping
-			-- Limit maximum elevation to prevent flying into ceiling
-			local maxAllowedZ = originalZ + stepHeight
-			if currentPos.z > maxAllowedZ then
-				currentPos = Vector3(currentPos.x, currentPos.y, maxAllowedZ)
-			end
-			onGround = false
-		end
+		-- Found ground within step height - snap to it
+		currentPos = stepDownTrace.endpos
+		return currentPos, hitObstacle, velocity, shouldJump, minJumpTicks
 	else
-		-- No ground found - limit elevation and mark as airborne
-		local maxAllowedZ = originalZ + stepHeight
-		currentPos = Vector3(currentPos.x, currentPos.y, math.min(currentPos.z, maxAllowedZ))
-		onGround = false
+		-- No ground within step height - would be falling, stop simulation
+		return nil, hitObstacle, velocity, shouldJump, minJumpTicks
 	end
-
-	-- Apply gravity if not on ground
-	if not onGround then
-		local gravity = 800
-		currentVelocity.z = currentVelocity.z - gravity * deltaTime
-	end
-
-	return currentPos, hitObstacle, currentVelocity, shouldJump, onGround, minJumpTicks
 end
 
 -- Check if we can jump over obstacle at current position
@@ -410,12 +340,17 @@ local function SmartJumpDetection(cmd, pLocal)
 	local currentPos = pLocalPos
 	local currentVelocity = initialVelocity
 	local hitObstacle = false
-	local onGroundState = isPlayerOnGround(pLocal)
 
 	-- Tick-by-tick simulation until we hit jumpable obstacle or reach peak time
 	for tick = 1, jumpPeakTicks do
-		local newPos, wallHit, newVelocity, shouldJump, newOnGround, minJumpTicks =
-			SimulateMovementTick(currentPos, currentVelocity, 18, pLocal, onGroundState)
+		local newPos, wallHit, newVelocity, shouldJump, minJumpTicks =
+			SimulateMovementTick(currentPos, currentVelocity, 18, pLocal)
+
+		-- Stop simulation if no ground found (would be falling)
+		if newPos == nil then
+			DebugLog("SmartJump: Simulation stopped - no ground at tick %d", tick)
+			break
+		end
 
 		-- Store simulation step for visualization
 		table.insert(G.SmartJump.SimulationPath, newPos)
@@ -439,7 +374,6 @@ local function SmartJumpDetection(cmd, pLocal)
 		-- Update simulation state for next tick
 		currentPos = newPos
 		currentVelocity = newVelocity
-		onGroundState = newOnGround
 	end
 
 	-- Store final simulation results
