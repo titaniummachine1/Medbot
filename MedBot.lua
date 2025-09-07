@@ -4093,7 +4093,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 			-- Found obstacle - move 1 unit forward from hit point, then up 72 units, then trace down
 			-- This guarantees we collide with obstacle from above
 			local hitPoint = forwardTrace.endpos
-			local forwardFromHit = hitPoint + moveDir * 1
+			local forwardFromHit = hitPoint + moveDir * 0.1
 			local aboveObstacle = forwardFromHit + Vector3(0, 0, 72)
 
 			-- Trace down from above obstacle to measure height
@@ -4131,6 +4131,8 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 							local groundAngle = math.deg(math.acos(landTrace.plane:Dot(Vector3(0, 0, 1))))
 							if groundAngle < 45 then -- Walkable surface
 								shouldJump = true
+								-- Store the exact position where the down trace hit for cyan box visualization
+								G.SmartJump.JumpPeekPos = landTrace.endpos
 							end
 						end
 					end
@@ -4221,7 +4223,7 @@ local function CanJumpOverObstacle(pos, moveDir, obstacleHeight, pLocal)
 
 	-- Get dynamic hitbox for local player
 	local vHitbox = GetPlayerHitbox(pLocal)
-	
+
 	-- Check if we're inside wall at jump height (trace fraction 0 means inside solid)
 	local wallCheckTrace = engine.TraceHull(forwardPos, forwardPos, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
 	if wallCheckTrace.fraction == 0 then
@@ -4620,6 +4622,9 @@ local function OnDrawSmartJump()
 	if not pLocal or not G.Menu.SmartJump.Enable then
 		return
 	end
+
+	-- Get dynamic hitbox for visualization
+	local vHitbox = GetPlayerHitbox(pLocal)
 	if G.SmartJump.PredPos then
 		-- Draw prediction position (red square)
 		local screenPos = client.WorldToScreen(G.SmartJump.PredPos)
@@ -4637,7 +4642,7 @@ local function OnDrawSmartJump()
 			draw.FilledRect(screenpeekpos[1] - 5, screenpeekpos[2] - 5, screenpeekpos[1] + 5, screenpeekpos[2] + 5)
 		end
 
-		-- Draw 3D hitbox at jump peek position
+		-- Draw 3D hitbox at jump peek position (cyan AABB)
 		local minPoint = vHitbox[1] + G.SmartJump.JumpPeekPos
 		local maxPoint = vHitbox[2] + G.SmartJump.JumpPeekPos
 
