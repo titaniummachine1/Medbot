@@ -22,8 +22,12 @@ local SmartJump = {}
 local GRAVITY = 800 -- Gravity per second squared
 local JUMP_FORCE = 277 -- Initial vertical boost for a duck jump
 local MAX_JUMP_HEIGHT = Vector3(0, 0, 72) -- Maximum jump height vector
-local HITBOX_MIN = Vector3(-24, -24, 0)
-local HITBOX_MAX = Vector3(24, 24, 82) -- Default hitbox (standing)
+-- Dynamic hitbox calculation using entity bounds
+local function GetPlayerHitbox(player)
+	local mins = player:GetMins()
+	local maxs = player:GetMaxs()
+	return { mins, maxs }
+end
 local MAX_WALKABLE_ANGLE = 45 -- Maximum angle considered walkable
 
 -- State Definitions (matching user's exact logic)
@@ -329,9 +333,7 @@ local function SimulateMovementTick(startPos, velocity, stepHeight)
 end
 
 -- Check if we can jump over obstacle at current position
-local function CanJumpOverObstacle(pos, moveDir, obstacleHeight)
-	local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
-	local MASK_PLAYERSOLID = 33636363
+local function CanJumpOverObstacle(pos, moveDir, obstacleHeight, pLocal)
 	local jumpHeight = 72 -- Max jump height
 	local stepHeight = 18 -- Normal step height
 
@@ -346,6 +348,9 @@ local function CanJumpOverObstacle(pos, moveDir, obstacleHeight)
 	local jumpPos = pos + Vector3(0, 0, jumpHeight)
 	local forwardPos = jumpPos + moveDir * 1
 
+	-- Get dynamic hitbox for local player
+	local vHitbox = GetPlayerHitbox(pLocal)
+	
 	-- Check if we're inside wall at jump height (trace fraction 0 means inside solid)
 	local wallCheckTrace = engine.TraceHull(forwardPos, forwardPos, vHitbox[1], vHitbox[2], MASK_PLAYERSOLID)
 	if wallCheckTrace.fraction == 0 then
@@ -388,6 +393,7 @@ local function SmartJumpDetection(cmd, pLocal)
 	end
 
 	local pLocalPos = pLocal:GetAbsOrigin()
+	local vHitbox = GetPlayerHitbox(pLocal)
 
 	-- Get move intent direction from cmd
 	local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
@@ -454,11 +460,13 @@ local function SmartJumpDetection(cmd, pLocal)
 					-- Only jump if current tick <= minimum tick needed
 					if tick <= minJumpTick - 2 then
 						local jumpHeight = 72
-						local jumpPos = currentPos + Vector3(0, 0, jumpHeight)
+						-- Clamp jump position to max 72 units above original position where jump was initiated
+						local maxJumpZ = pLocalPos.z + jumpHeight
+						local clampedJumpZ = math.min(currentPos.z + jumpHeight, maxJumpZ)
+						local jumpPos = Vector3(currentPos.x, currentPos.y, clampedJumpZ)
 						local forwardPos = jumpPos + moveDir * 32 -- Move forward to landing area
 
 						-- Find landing position
-						local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
 						local MASK_PLAYERSOLID = 33636363
 						local landTrace = engine.TraceHull(
 							forwardPos,
@@ -759,8 +767,8 @@ local function OnDrawSmartJump()
 		end
 
 		-- Draw 3D hitbox at jump peek position
-		local minPoint = HITBOX_MIN + G.SmartJump.JumpPeekPos
-		local maxPoint = HITBOX_MAX + G.SmartJump.JumpPeekPos
+		local minPoint = vHitbox[1] + G.SmartJump.JumpPeekPos
+		local maxPoint = vHitbox[2] + G.SmartJump.JumpPeekPos
 
 		local vertices = {
 			Vector3(minPoint.x, minPoint.y, minPoint.z), -- Bottom-back-left
