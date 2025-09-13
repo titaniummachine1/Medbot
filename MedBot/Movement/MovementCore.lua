@@ -120,23 +120,119 @@ function MovementCore.WalkTo(cmd, player, dest)
 	local fwd = (moveVec.x / MAX_SPEED) * wishSpeed
 	local side = (moveVec.y / MAX_SPEED) * wishSpeed
 
+	-- Set the movement commands
 	cmd:SetForwardMove(fwd)
 	cmd:SetSideMove(side)
 end
 
--- Function to move towards a specific node
+-- Function to get the target position from a node, handling door positions if available
+local function getNodePosition(node)
+	if not node or not node.pos then
+		return nil
+	end
+
+	-- Check if this is a door node with specific positions
+	if node.doorPositions then
+		-- Use middle position if available, otherwise fall back to node position
+		return node.doorPositions.middle or node.pos
+	end
+
+	return node.pos
+end
+
+-- Simple function to get the next point in the path, following A*'s order
+local function getNextPathPoint()
+	local path = G.Navigation.path or {}
+	if #path == 0 then
+		return nil, nil
+	end
+
+	-- Initialize or get current path index
+	G.Navigation.currentIndex = G.Navigation.currentIndex or 1
+	local currentIdx = G.Navigation.currentIndex
+
+	-- If we've reached the end of the path, stay at the last node
+	if currentIdx > #path then
+		currentIdx = #path
+		G.Navigation.currentIndex = currentIdx
+	end
+
+	local currentNode = path[currentIdx]
+	if not currentNode then
+		return nil, nil
+	end
+
+	local nodePos = getNodePosition(currentNode)
+
+	-- If we're close to the current node, advance to the next one
+	if nodePos then
+		local LocalOrigin = G.pLocal and G.pLocal.Origin or Vector3(0, 0, 0)
+		local distance = (nodePos - LocalOrigin):Length2D()
+
+		-- If we're close enough to the current node, move to the next one
+		if distance < 32 and currentIdx < #path then -- 32 unit threshold
+			currentIdx = currentIdx + 1
+			G.Navigation.currentIndex = currentIdx
+			currentNode = path[currentIdx]
+			if currentNode then
+				nodePos = getNodePosition(currentNode)
+			else
+				nodePos = nil
+			end
+		end
+	end
+
+	return currentNode, nodePos
+end
+
+-- Function to move along the path
 function MovementCore.moveTowardsNode(userCmd, currentNode)
+	-- Reset path index if we don't have a valid current node
 	if not currentNode or not currentNode.pos then
+		G.Navigation.currentIndex = nil
+		return
+	end
+
+	-- Initialize path index if needed
+	if G.Navigation.currentIndex == nil then
+		G.Navigation.currentIndex = 1
+	end
+
+	-- Get the next point to move towards
+	local targetNode, targetPos = getNextPathPoint()
+	if not targetNode or not targetPos then
 		return
 	end
 
 	-- Store the intended movement direction for SmartJump to use
 	local LocalOrigin = G.pLocal.Origin
-	local direction = currentNode.pos - LocalOrigin
-	G.BotMovementDirection = direction:Length() > 0 and (direction / direction:Length()) or Vector3(0, 0, 0)
-	G.BotIsMoving = true
+	local direction = targetPos - LocalOrigin
+	local distance = direction:Length2D()
 
-	MovementCore.WalkTo(userCmd, G.pLocal.entity, currentNode.pos)
+	-- Only update direction if we have a valid distance
+	if distance > 0 then
+		G.BotMovementDirection = direction / distance
+		G.BotIsMoving = true
+
+		-- Move directly towards the target point
+		MovementCore.WalkTo(userCmd, G.pLocal.entity, targetPos)
+
+		-- Check if we've reached the end of the path
+		local nav = G.Navigation
+		if nav.currentIndex and nav.path and nav.currentIndex >= #nav.path then
+			-- Wait until we're close to the final node before clearing the path
+			local LocalOrigin = G.pLocal and G.pLocal.Origin or Vector3(0, 0, 0)
+			local finalNode = nav.path[#nav.path]
+			local finalPos = finalNode and getNodePosition(finalNode)
+
+			if finalPos and (finalPos - LocalOrigin):Length2D() < 32 then
+				nav.path = {}
+				nav.currentIndex = nil
+			end
+		end
+	else
+		G.BotIsMoving = false
+	end
 
 	-- Update movement tick counter
 	G.Navigation.currentNodeTicks = (G.Navigation.currentNodeTicks or 0) + 1
