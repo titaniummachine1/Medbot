@@ -694,10 +694,12 @@ local function OnDraw()
     if G.Menu.Visuals.drawPath then
         local wps = G.Navigation.waypoints
         if wps and #wps > 0 then
-            -- Draw remaining route only from current waypoint onward to avoid residue arrows
-            local startIdx = G.Navigation.currentWaypointIndex or 1
-            if startIdx < 1 then startIdx = 1 end
-            for i = startIdx, #wps - 1 do
+            -- Only draw waypoints from current position onward (don't show past waypoints)
+            local currentIdx = G.Navigation.currentWaypointIndex or 1
+            if currentIdx < 1 then currentIdx = 1 end
+
+            -- Draw segments from current waypoint to the end
+            for i = currentIdx, #wps - 1 do
                 local a, b = wps[i], wps[i + 1]
                 local aPos = a.pos
                 local bPos = b.pos
@@ -709,7 +711,7 @@ local function OnDraw()
                 end
                 local inRad = withinRadius(aPos or p) and withinRadius(bPos or p)
                 if aPos and bPos and (G.Menu.Visuals.ignorePathRadius or inRad) then
-                    draw.Color(255, 255, 255, 220) -- white route
+                    draw.Color(255, 255, 255, 255) -- white route
                     ArrowLine(aPos, bPos, 18, 12, false)
                 end
             end
