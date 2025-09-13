@@ -614,46 +614,6 @@ local function OnDraw()
         end
     end
 
-    -- Draw only the door-based path with player-to-target arrow
-    if G.Menu.Visuals.drawPath and G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
-        local wps = G.Navigation.waypoints
-        local localPos = G.pLocal and G.pLocal.Origin
-        
-        -- Draw direct arrow from player to current target (the position we're walking to)
-        local targetPos = G.Navigation.currentTargetPos
-        if localPos and targetPos and withinRadius(targetPos) then
-            draw.Color(255, 255, 0, 220) -- Yellow arrow to current target
-            ArrowLine(localPos, targetPos, 18, 12, false)
-        end
-        
-        -- Draw path segments between waypoints
-        draw.Color(255, 255, 255, 220) -- White path
-        for i = 1, #wps - 1 do
-            local a, b = wps[i], wps[i + 1]
-            local aPos = a.pos or (a.points and a.points[math.ceil(#a.points / 2)])
-            local bPos = b.pos or (b.points and b.points[math.ceil(#b.points / 2)])
-            
-            if aPos and bPos and withinRadius(aPos) and withinRadius(bPos) then
-                local aScreen = client.WorldToScreen(aPos)
-                local bScreen = client.WorldToScreen(bPos)
-                if aScreen and bScreen then
-                    draw.Line(aScreen[1], aScreen[2], bScreen[1], bScreen[2])
-                end
-            end
-        end
-        
-        -- Highlight current target position
-        if targetPos and withinRadius(targetPos) then
-            local s = client.WorldToScreen(targetPos)
-            if s then
-                s[1] = math.floor(s[1])
-                s[2] = math.floor(s[2])
-                draw.Color(255, 0, 0, 255) -- Red target indicator
-                draw.FilledRect(s[1] - 5, s[2] - 5, s[1] + 5, s[2] + 5)
-            end
-        end
-    end
-
     -- Draw SmartJump simulation visualization (like AutoPeek)
     if G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then
         -- Draw simulation path lines like AutoPeek's LineDrawList
