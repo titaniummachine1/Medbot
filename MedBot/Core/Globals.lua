@@ -68,6 +68,7 @@ G.SmartJump = {
 	lastState = nil,
 	jumpState = "STATE_IDLE", -- Added missing jumpState initialization
 	lastJumpTime = 0, -- Added missing lastJumpTime
+	LastObstacleHeight = 0,
 }
 
 -- Bot movement tracking (for SmartJump integration)

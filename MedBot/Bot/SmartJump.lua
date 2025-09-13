@@ -73,6 +73,7 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 		-- Calculate actual obstacle height using (1 - fraction)
 		local obstacleHeight = 72 * (1 - trace.fraction)
 		if obstacleHeight > 18 then -- skip if obstacle is too small
+			G.SmartJump.LastObstacleHeight = obstacleHeight
 			-- Calculate minimum time in air to achieve this height
 			-- Jump velocity is 271 units/sec, gravity is 800 units/sec^2
 			-- Height = v0*t - 0.5*g*t^2, solve for t when height >= obstacleHeight
@@ -101,7 +102,7 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 
 			-- minTimeNeeded is already in ticks from our loop
 			-- Add a small safety margin (1 tick) to ensure we clear the obstacle
-			local minTicksNeeded = math.max(1, minTicksNeeded + 1)
+			minTicksNeeded = math.max(1, minTicksNeeded + 1)
 
 			G.SmartJump.JumpPeekPos = trace.endpos
 			return true, minTicksNeeded
@@ -131,12 +132,21 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 	local downpostarget = uptrace.endpos
 
 	-- Forward collision check
-	local wallTrace = engine.TraceHull(downpstartPos, downpostarget, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	local wallTrace = engine.TraceHull(downpstartPos + stepVector, downpostarget + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 	if wallTrace.fraction ~= 0 then
 		targetPos = wallTrace.endpos
 	else --stop movement on wall
 		targetPos = startPos
 	end
+
+	-- Snap down to ground
+	local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector * 2, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	if Groundtrace.fraction < 1 then
+		targetPos = Groundtrace.endpos
+	else
+		return nil, false, velocity, false, 0
+	end
+
 
 	-- Snap down to ground
 	local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
@@ -233,6 +243,7 @@ local function SmartJumpDetection(cmd, pLocal)
 		table.insert(G.SmartJump.SimulationPath, newPos)
 		-- Check if we hit a jumpable obstacle
 		if hitObstacle and canJump then
+			print(tick)
 			-- Only trigger if we are at the exact tick needed to clear the obstacle
 			-- or later, but not before
 			if tick <= minJumpTicks then
