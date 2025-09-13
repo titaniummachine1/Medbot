@@ -602,17 +602,17 @@ local function OnDraw()
         end
     end
 
-    -- Draw all nodes
-    if G.Menu.Visuals.drawNodes then
-        draw.Color(0, 255, 0, 255)
-        for id, entry in pairs(visibleNodes) do
-            local s = entry.screen
-            draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
-            if G.Menu.Visuals.drawNodeIDs then
-                draw.Text(s[1], s[2] + 10, tostring(id))
-            end
-        end
-    end
+    -- Draw all nodes - REMOVED: Using wall corners instead
+    -- if G.Menu.Visuals.drawNodes then
+    --     draw.Color(0, 255, 0, 255)
+    --     for id, entry in pairs(visibleNodes) do
+    --         local s = entry.screen
+    --         draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
+    --         if G.Menu.Visuals.drawNodeIDs then
+    --             draw.Text(s[1], s[2] + 10, tostring(id))
+    --         end
+    --     end
+    -- end
 
     -- Draw SmartJump simulation visualization (like AutoPeek)
     if G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then
@@ -685,6 +685,26 @@ local function OnDraw()
         if localPos and targetPos and withinRadius(targetPos) then
             draw.Color(255, 255, 255, 220) -- White arrow to current target
             ArrowLine(localPos, targetPos, 18, 12, false)
+        end
+    end
+
+    -- Draw wall corners (orange points)
+    if G.Menu.Visuals.showCornerConnections then
+        for id, entry in pairs(visibleNodes) do
+            local node = entry.node
+            if node.wallCorners then
+                for _, cornerPoint in ipairs(node.wallCorners) do
+                    if withinRadius(cornerPoint) then
+                        local cornerScreen = client.WorldToScreen(cornerPoint)
+                        if cornerScreen then
+                            -- Draw orange square for wall corners
+                            draw.Color(255, 165, 0, 200) -- Orange for wall corners
+                            draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3,
+                                          cornerScreen[1] + 3, cornerScreen[2] + 3)
+                        end
+                    end
+                end
+            end
         end
     end
 end
