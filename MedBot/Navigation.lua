@@ -19,7 +19,7 @@ local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local AStar = require("MedBot.Algorithms.A-Star")
-local DStar = require("MedBot.Algorithms.DStar")
+--local DStar = require("MedBot.Algorithms.DStar")
 --local DStar = require("MedBot.Utils.DStar")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
@@ -278,20 +278,20 @@ function Navigation.BuildDoorWaypointsFromPath()
 	if not path or #path == 0 then
 		return
 	end
-	
+
 	for i = 1, #path - 1 do
 		local a, b = path[i], path[i + 1]
 		if a and b and a.pos and b.pos then
 			-- Get door entry for current edge
 			local entry = Node.GetConnectionEntry(a, b)
 			local doorPoint = nil
-			
+
 			if entry and (entry.left or entry.middle or entry.right) then
 				-- Choose best door point based on distance to destination
 				local bestPoint = nil
 				local bestDistance = math.huge
-				
-				for _, point in ipairs({entry.left, entry.middle, entry.right}) do
+
+				for _, point in ipairs({ entry.left, entry.middle, entry.right }) do
 					if point then
 						local distance = (point - b.pos):Length()
 						if distance < bestDistance then
@@ -300,13 +300,13 @@ function Navigation.BuildDoorWaypointsFromPath()
 						end
 					end
 				end
-				
+
 				doorPoint = bestPoint
 			else
 				-- Fallback: use Node helper for door target
 				doorPoint = Node.GetDoorTargetPoint(a, b)
 			end
-			
+
 			if doorPoint then
 				-- Check if we should skip area center for direct door-to-door navigation
 				local shouldSkipCenter = false
@@ -315,18 +315,18 @@ function Navigation.BuildDoorWaypointsFromPath()
 					if nextArea then
 						local nextEntry = Node.GetConnectionEntry(b, nextArea)
 						local nextDoorPoint = nil
-						
+
 						if nextEntry and (nextEntry.left or nextEntry.middle or nextEntry.right) then
 							nextDoorPoint = nextEntry.middle or nextEntry.left or nextEntry.right
 						else
 							nextDoorPoint = Node.GetDoorTargetPoint(b, nextArea)
 						end
-						
+
 						if nextDoorPoint then
 							-- Compare distances: door->center->nextDoor vs door->nextDoor
 							local viaCenterDist = (doorPoint - b.pos):Length() + (b.pos - nextDoorPoint):Length()
 							local directDist = (doorPoint - nextDoorPoint):Length()
-							
+
 							-- Skip center if direct path is shorter by meaningful margin
 							if directDist < viaCenterDist * 0.8 then
 								shouldSkipCenter = true
@@ -334,27 +334,27 @@ function Navigation.BuildDoorWaypointsFromPath()
 						end
 					end
 				end
-				
+
 				-- Add door waypoint
 				table.insert(G.Navigation.waypoints, {
 					kind = "door",
 					fromId = a.id,
 					toId = b.id,
-					pos = doorPoint
+					pos = doorPoint,
 				})
-				
+
 				-- Add center waypoint only if not skipping
 				if not shouldSkipCenter then
-					table.insert(G.Navigation.waypoints, { 
-						pos = b.pos, 
-						kind = "center", 
-						areaId = b.id 
+					table.insert(G.Navigation.waypoints, {
+						pos = b.pos,
+						kind = "center",
+						areaId = b.id,
 					})
 				end
 			end
 		end
 	end
-	
+
 	-- Append final precise goal position if available
 	local goalPos = G.Navigation.goalPos
 	if goalPos then
@@ -555,24 +555,15 @@ function Navigation.FindPath(startNode, goalNode)
 
 	if not success then
 		Log:Error("A* pathfinding crashed: %s", tostring(path))
-		-- Try D* as fallback
-		Log:Info("Trying D* fallback pathfinding...")
-		success, path = pcall(DStar.NormalPath, startNode, goalNode, G.Navigation.nodes, Node.GetAdjacentNodesSimple)
+		G.Navigation.path = nil
+		Navigation.pathFailed = true
+		Navigation.pathFound = false
 
-		if not success then
-			Log:Error("D* fallback also crashed: %s", tostring(path))
-			G.Navigation.path = nil
-			Navigation.pathFailed = true
-			Navigation.pathFound = false
-
-			-- Add circuit breaker penalty for this failed connection
-			if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
-				G.CircuitBreaker.addConnectionFailure(startNode, goalNode)
-			end
-			return Navigation
-		elseif path then
-			Log:Info("D* fallback succeeded with %d nodes", #path)
+		-- Add circuit breaker penalty for this failed connection
+		if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
+			G.CircuitBreaker.addConnectionFailure(startNode, goalNode)
 		end
+		return Navigation
 	end
 
 	G.Navigation.path = path

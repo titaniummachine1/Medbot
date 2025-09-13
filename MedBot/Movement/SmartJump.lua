@@ -190,9 +190,9 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 end
 
 -- Ground-only movement simulation following swing prediction pattern
-local function SimulateMovementTick(startPos, velocity, stepHeight, pLocal)
+local function SimulateMovementTick(startPos, velocity, pLocal)
 	local upVector = Vector3(0, 0, 1)
-	local stepVector = Vector3(0, 0, stepHeight or 18)
+	local stepVector = Vector3(0, 0, 18)
 	local hitbox = GetPlayerHitbox(pLocal)
 	local deltaTime = globals.TickInterval()
 	local moveDirection = NormalizeVector(velocity)
@@ -307,7 +307,7 @@ local function SmartJumpDetection(cmd, pLocal)
 	-- Tick-by-tick simulation until we hit jumpable obstacle or reach peak time
 	for tick = 1, jumpPeakTicks do
 		local newPos, wallHit, newVelocity, shouldJump, minJumpTicks =
-			SimulateMovementTick(currentPos, currentVelocity, 18, pLocal)
+			SimulateMovementTick(currentPos, currentVelocity, pLocal)
 
 		-- Stop simulation if no ground found (would be falling)
 		if newPos == nil then

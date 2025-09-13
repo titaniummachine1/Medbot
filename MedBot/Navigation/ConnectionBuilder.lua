@@ -193,6 +193,11 @@ function ConnectionBuilder.BuildDoorsForConnections()
 	local nodes = G.Navigation.nodes
 	if not nodes then return end
 	
+	-- First pass: clear any existing door flags
+	for _, node in pairs(nodes) do
+		node.isDoor = false
+	end
+	
 	local doorsBuilt = 0
 	for nodeId, node in pairs(nodes) do
 		if node.c then

@@ -5,7 +5,7 @@ local MovementCore = {}
 local G = require("MedBot.Core.Globals")
 local Common = require("MedBot.Core.Common")
 local isWalkable = require("MedBot.Navigation.ISWalkable")
-local Node = require("MedBot.Modules.Node")
+local Node = require("MedBot.Navigation.Node")
 local Navigation = require("MedBot.Navigation")
 
 local Log = Common.Log.new("MovementCore")
@@ -137,7 +137,7 @@ function MovementCore.moveTowardsNode(userCmd, currentNode)
 	G.BotIsMoving = true
 
 	MovementCore.WalkTo(userCmd, G.pLocal.entity, currentNode.pos)
-	
+
 	-- Update movement tick counter
 	G.Navigation.currentNodeTicks = (G.Navigation.currentNodeTicks or 0) + 1
 end
@@ -197,7 +197,9 @@ function MovementCore.handleStuckState(userCmd)
 			local origin = G.pLocal.Origin
 			local ent = G.pLocal and G.pLocal.entity or nil
 			local vel = ent and ent.EstimateAbsVelocity and ent:EstimateAbsVelocity() or Vector3(0, 0, 0)
-			if vel then vel.z = 0 end
+			if vel then
+				vel.z = 0
+			end
 			local speed = vel and vel.Length and vel:Length() or 0
 			local distNow = (toNode.pos - origin):Length()
 			local lastDist = G.Navigation._lastStuckEvalDist or distNow

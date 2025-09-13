@@ -21,15 +21,15 @@ function Node.Setup()
 		Log:Debug("Navigation already set up, skipping")
 		return
 	end
-	
+
 	NavLoader.LoadNavFile()
 	ConnectionBuilder.NormalizeConnections()
 	-- AccessibilityChecker.PruneInvalidConnections(G.Navigation.nodes) -- DISABLED: Uses area centers not edges
 	ConnectionBuilder.BuildDoorsForConnections()
-	
+
 	local WallCornerDetector = require("MedBot.Navigation.WallCornerDetector")
 	WallCornerDetector.DetectWallCorners()
-	
+
 	Log:Info("Navigation setup complete")
 end
 
@@ -60,8 +60,10 @@ function Node.GetNodeByID(id)
 end
 
 function Node.GetClosestNode(pos)
-	if not G.Navigation.nodes then return nil end
-	
+	if not G.Navigation.nodes then
+		return nil
+	end
+
 	local closestNode, closestDist = nil, math.huge
 	for _, node in pairs(G.Navigation.nodes) do
 		local dist = (node.pos - pos):Length()
@@ -75,6 +77,12 @@ end
 -- Connection utilities
 function Node.GetConnectionNodeId(connection)
 	return ConnectionUtils.GetNodeId(connection)
+end
+
+---@param node Node The node to check
+---@return boolean True if the node is a door node
+function Node.IsDoorNode(node)
+	return node and node.isDoor == true
 end
 
 function Node.GetConnectionCost(connection)
@@ -91,8 +99,10 @@ end
 
 -- Connection management
 function Node.AddConnection(nodeA, nodeB)
-	if not nodeA or not nodeB then return end
-	
+	if not nodeA or not nodeB then
+		return
+	end
+
 	for dirId, dir in pairs(nodeA.c or {}) do
 		if dir.connections then
 			table.insert(dir.connections, { node = nodeB.id, cost = 1 })
@@ -103,8 +113,10 @@ function Node.AddConnection(nodeA, nodeB)
 end
 
 function Node.RemoveConnection(nodeA, nodeB)
-	if not nodeA or not nodeB then return end
-	
+	if not nodeA or not nodeB then
+		return
+	end
+
 	for dirId, dir in pairs(nodeA.c or {}) do
 		if dir.connections then
 			for i = #dir.connections, 1, -1 do
@@ -120,39 +132,45 @@ end
 
 -- Pathfinding adjacency - optimized with door registry lookup
 function Node.GetAdjacentNodesSimple(node, nodes)
-	if not node or not node.c or not nodes then return {} end
-	
-	local adjacent = {}
-	local count = 0
-	
-	for _, dir in pairs(node.c) do
-		local connections = dir.connections
-		if connections then
-			for i = 1, #connections do
-				local targetId = ConnectionUtils.GetNodeId(connections[i])
+	local neighbors = {}
+
+	if not node.c then
+		return neighbors
+	end
+
+	for dirId, dir in pairs(node.c) do
+		if dir.connections then
+			for _, connection in ipairs(dir.connections) do
+				local targetId = ConnectionUtils.GetNodeId(connection)
 				local targetNode = nodes[targetId]
+
 				if targetNode then
-					count = count + 1
-					adjacent[count] = {
+					-- Check if this connection is a door
+					local isDoor = connection.isDoor == true or targetNode.isDoor == true
+
+					table.insert(neighbors, {
 						node = targetNode,
-						cost = ConnectionUtils.GetCost(connections[i])
-					}
+						cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
+						isDoor = isDoor,
+					})
 				end
 			end
 		end
 	end
-	
-	return adjacent
+
+	return neighbors
 end
 
 -- Optimized version for when only nodes are needed (no cost data)
 function Node.GetAdjacentNodesOnly(node, nodes)
-	if not node or not node.c or not nodes then return {} end
-	
+	if not node or not node.c or not nodes then
+		return {}
+	end
+
 	local adjacent = {}
 	local count = 0
-	
-	for _, dir in pairs(node.c) do
+
+	for _, dir in ipairs(node.c) do
 		local connections = dir.connections
 		if connections then
 			for i = 1, #connections do
@@ -165,7 +183,7 @@ function Node.GetAdjacentNodesOnly(node, nodes)
 			end
 		end
 	end
-	
+
 	return adjacent
 end
 
@@ -199,7 +217,7 @@ function Node.GetConnectionProcessingStatus()
 		currentPhase = "complete",
 		processedCount = 0,
 		totalCount = 0,
-		phaseDescription = "Connection processing complete"
+		phaseDescription = "Connection processing complete",
 	}
 end
 
