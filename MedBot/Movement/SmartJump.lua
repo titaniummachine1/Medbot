@@ -200,11 +200,18 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 	local minJumpTicks = 0
 
 	-- Calculate target position
-	local targetPos = startPos + velocity * deltaTime
+	local targetPos = startPos + (velocity * deltaTime)
+
+	--keeps the uptrace from climbing walls
+	local uptrace = engine.TraceHull(startPos, startPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	local stepposstart = uptrace.endpos
+
+	--keeps the uptrace from climbing walls
+	local downtrace = engine.TraceHull(targetPos, targetPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	local steppostarget = downtrace.endpos
 
 	-- Forward collision check (like swing prediction)
-	local wallTrace =
-		engine.TraceHull(startPos + stepVector, targetPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	local wallTrace = engine.TraceHull(stepposstart, steppostarget, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 	targetPos = wallTrace.endpos
 
 	-- ensure the forawrd trace is moved down to ground after step up logic is applied by design
