@@ -677,6 +677,16 @@ local function OnDraw()
             end
         end
     end
+
+    -- Draw direct white arrow from player to current target (the position we're walking to)
+    if G.Menu.Visuals.drawPath then
+        local localPos = G.pLocal and G.pLocal.Origin
+        local targetPos = G.Navigation.currentTargetPos
+        if localPos and targetPos and withinRadius(targetPos) then
+            draw.Color(255, 255, 255, 220) -- White arrow to current target
+            ArrowLine(localPos, targetPos, 18, 12, false)
+        end
+    end
 end
 
 --[[ Callbacks ]]
