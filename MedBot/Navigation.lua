@@ -317,7 +317,31 @@ function Navigation.BuildDoorWaypointsFromPath()
 						local nextDoorPoint = nil
 
 						if nextEntry and (nextEntry.left or nextEntry.middle or nextEntry.right) then
-							nextDoorPoint = nextEntry.middle or nextEntry.left or nextEntry.right
+							-- Choose optimal next door position based on distance to current door
+							local nextDoorPositions = {}
+							if nextEntry.left then
+								table.insert(nextDoorPositions, nextEntry.left)
+							end
+							if nextEntry.middle then
+								table.insert(nextDoorPositions, nextEntry.middle)
+							end
+							if nextEntry.right then
+								table.insert(nextDoorPositions, nextEntry.right)
+							end
+
+							if #nextDoorPositions > 0 then
+								local bestNextPos = nextDoorPositions[1]
+								local bestNextDist = (nextDoorPositions[1] - doorPoint):Length()
+
+								for j = 2, #nextDoorPositions do
+									local dist = (nextDoorPositions[j] - doorPoint):Length()
+									if dist < bestNextDist then
+										bestNextPos = nextDoorPositions[j]
+										bestNextDist = dist
+									end
+								end
+								nextDoorPoint = bestNextPos
+							end
 						else
 							nextDoorPoint = Node.GetDoorTargetPoint(b, nextArea)
 						end
@@ -328,7 +352,8 @@ function Navigation.BuildDoorWaypointsFromPath()
 							local directDist = (doorPoint - nextDoorPoint):Length()
 
 							-- Skip center if direct path is shorter by meaningful margin
-							if directDist < viaCenterDist * 0.8 then
+							-- Also skip if both doors are in same area (always skip center for same area)
+							if directDist < viaCenterDist * 0.9 or (a.areaId and b.areaId and a.areaId == b.areaId) then
 								shouldSkipCenter = true
 							end
 						end

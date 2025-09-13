@@ -91,6 +91,20 @@ local function reconstructPath(cameFrom, startNode, goalNode)
 		then
 			table.insert(optimizedPath, next)
 			i = i + 2 -- Skip the area center in between
+		-- Also skip area center if going from door directly to next door (even different areas)
+		elseif prev and next and prev.isDoor and next.isDoor and curr and not curr.isDoor then
+			-- Check if skipping center would be beneficial
+			local directDist = (prev.pos - next.pos):Length()
+			local viaCenterDist = (prev.pos - curr.pos):Length() + (curr.pos - next.pos):Length()
+
+			-- Skip center if direct path is significantly shorter
+			if directDist < viaCenterDist * 0.8 then
+				table.insert(optimizedPath, next)
+				i = i + 2 -- Skip the area center
+			else
+				table.insert(optimizedPath, curr)
+				i = i + 1
+			end
 		else
 			table.insert(optimizedPath, curr)
 			i = i + 1
