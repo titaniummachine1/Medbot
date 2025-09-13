@@ -11,13 +11,6 @@ Log.Level = 0 -- Default log level
 local SJ = G.SmartJump
 local SJC = G.SmartJump.Constants
 
--- Backwards compatibility for code that uses STATE_* directly
-local STATE_IDLE = SJC.STATE_IDLE
-local STATE_PREPARE_JUMP = SJC.STATE_PREPARE_JUMP
-local STATE_CTAP = SJC.STATE_CTAP
-local STATE_ASCENDING = SJC.STATE_ASCENDING
-local STATE_DESCENDING = SJC.STATE_DESCENDING
-
 -- Utility wrapper to respect debug toggle
 local function DebugLog(...)
 	if G.Menu.SmartJump and G.Menu.SmartJump.Debug then
@@ -34,13 +27,6 @@ local function GetPlayerHitbox(player)
 	local maxs = player:GetMaxs()
 	return { mins, maxs }
 end
-
--- State definitions from global constants
-local STATE_IDLE = SJC.STATE_IDLE
-local STATE_PREPARE_JUMP = SJC.STATE_PREPARE_JUMP
-local STATE_CTAP = SJC.STATE_CTAP
-local STATE_ASCENDING = SJC.STATE_ASCENDING
-local STATE_DESCENDING = SJC.STATE_DESCENDING
 
 -- Use Common.Normalize for vector normalization
 
@@ -111,13 +97,12 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 	if isSurfaceWalkable(trace.plane) then
 		-- Calculate actual obstacle height using (1 - fraction)
 		local obstacleHeight = 72 * (1 - trace.fraction)
-		print(obstacleHeight)
 		if obstacleHeight > 18 then -- skip if obstacle is too small
 			-- Calculate minimum time in air to achieve this height
 			-- Jump velocity is 271 units/sec, gravity is 800 units/sec^2
 			-- Height = v0*t - 0.5*g*t^2, solve for t when height >= obstacleHeight
-			local jumpVel = 271
-			local gravity = 800
+			local jumpVel = SJC.JUMP_FORCE
+			local gravity = SJC.GRAVITY
 			local tickInterval = globals.TickInterval()
 
 			-- Time to reach peak: t_peak = jumpVel / gravity
@@ -146,188 +131,150 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 end
 
 -- Ground-only movement simulation following swing prediction pattern
--- Local references to state and constants
-local SJ = G.SmartJump
-local SJC = G.SmartJump.Constants
-local MenuSJ = G.Menu.SmartJump
-
 local function SimulateMovementTick(startPos, velocity, pLocal)
-	local upVector = Vector3(0, 0, 1)
-	local stepVector = Vector3(0, 0, 18)
-	local hitbox = GetPlayerHitbox(pLocal)
-	local deltaTime = globals.TickInterval()
-	local moveDirection = Common.Normalize(velocity)
-	local shouldJump = false
-	local minJumpTicks = 0
+    local upVector = Vector3(0, 0, 1)
+    local stepVector = Vector3(0, 0, 18)
+    local hitbox = GetPlayerHitbox(pLocal)
+    local deltaTime = globals.TickInterval()
+    local moveDirection = Common.Normalize(velocity)
 
-	-- Calculate target position
-	local targetPos = startPos + (velocity * deltaTime)
+    -- Calculate target position
+    local targetPos = startPos + (velocity * deltaTime)
 
-	--keeps the uptrace from climbing walls
-	local uptrace = engine.TraceHull(startPos, startPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-	local stepposstart = uptrace.endpos
+    -- Step-up trace
+    local uptrace = engine.TraceHull(startPos, startPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+    local stepposstart = uptrace.endpos
 
-	--keeps the uptrace from climbing walls
-	local downtrace = engine.TraceHull(targetPos, targetPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-	local steppostarget = downtrace.endpos
+    local downtrace = engine.TraceHull(targetPos, targetPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+    local steppostarget = downtrace.endpos
 
-	-- Forward collision check (like swing prediction)
-	local wallTrace = engine.TraceHull(stepposstart, steppostarget, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-	targetPos = wallTrace.endpos
+    -- Forward collision check
+    local wallTrace = engine.TraceHull(stepposstart, steppostarget, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+    targetPos = wallTrace.endpos
 
-	-- ensure the forawrd trace is moved down to ground after step up logic is applied by design
-	local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-	targetPos = Groundtrace.endpos
+    -- Snap down to ground
+    local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+    if Groundtrace.fraction < 1 then
+        targetPos = Groundtrace.endpos
+    else
+        return nil, false, velocity, false, 0
+    end
 
-	local hitObstacle = wallTrace.fraction < 1
+    local hitObstacle = wallTrace.fraction < 1
+    local canJump = false
+    local minJumpTicks = 0
 
-	if hitObstacle then
-		-- Check if obstacle is jumpable immediately
-		local canJump
-		canJump, minJumpTicks = CheckJumpable(targetPos, moveDirection, hitbox)
+    if hitObstacle then
+        canJump, minJumpTicks = CheckJumpable(targetPos, moveDirection, hitbox)
+        
+        -- Wall sliding - slide along wall
+        local wallNormal = wallTrace.plane
+        local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
 
-		if canJump then
-			-- Jump over obstacle - move up to full jump height (72 units)
-			shouldJump = true
-			targetPos = targetPos
-		else
-			-- Wall sliding - slide along wall
-			local wallNormal = wallTrace.plane
-			local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
+        if wallAngle > 55 then
+            -- Steep wall - slide along it
+            local velocityDot = velocity:Dot(wallNormal)
+            velocity = velocity - wallNormal * velocityDot
+        end
+    end
 
-			if wallAngle > 55 then
-				-- Steep wall - slide along it
-				local velocityDot = velocity:Dot(wallNormal)
-				velocity = velocity - wallNormal * velocityDot
-			end
-		end
-	end
-
-	-- Ground collision (step down logic)
-	local stepDownTrace =
-		engine.TraceHull(targetPos + upVector, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-
-	if stepDownTrace.fraction < 1 then
-		-- Found ground within step height - snap to it
-		targetPos = stepDownTrace.endpos
-	else
-		-- No ground within step height - would be falling, stop simulation
-		return nil, hitObstacle, velocity, false, 0
-	end
-
-	return targetPos, hitObstacle, velocity, shouldJump, minJumpTicks
+    return targetPos, hitObstacle, velocity, canJump, minJumpTicks
 end
 
 -- Smart jump detection with proper tick-by-tick simulation
 local function SmartJumpDetection(cmd, pLocal)
-	-- Basic validation - fail fast
-	if not pLocal then
-		return false
-	end
-	if not isPlayerOnGround(pLocal) then
-		return false
-	end
+    -- Basic validation - fail fast
+    if not pLocal or not isPlayerOnGround(pLocal) then
+        return false
+    end
 
-	local pLocalPos = pLocal:GetAbsOrigin()
+    local pLocalPos = pLocal:GetAbsOrigin()
+    local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
+    local viewAngles = engine.GetViewAngles()
 
-	-- Get move intent direction from cmd
-	local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
-	if moveIntent:Length() == 0 and G.BotIsMoving and G.BotMovementDirection then
-		-- Use bot movement direction if no manual input
-		local viewAngles = engine.GetViewAngles()
-		local forward = viewAngles:Forward()
-		local right = viewAngles:Right()
-		local forwardComponent = G.BotMovementDirection:Dot(forward)
-		local rightComponent = G.BotMovementDirection:Dot(right)
-		moveIntent = Vector3(forwardComponent * 450, -rightComponent * 450, 0)
-	end
+    -- Handle bot movement if no manual input
+    if moveIntent:Length() == 0 and G.BotIsMoving and G.BotMovementDirection then
+        local forward = viewAngles:Forward()
+        local right = viewAngles:Right()
+        moveIntent = Vector3(
+            G.BotMovementDirection:Dot(forward) * 450,
+            -G.BotMovementDirection:Dot(right) * 450,
+            0
+        )
+    end
 
-	-- Rotate move intent by view angles to get world space direction
-	local viewAngles = engine.GetViewAngles()
-	local rotatedMoveIntent = RotateVectorByYaw(moveIntent, viewAngles.yaw)
+    -- Rotate move intent by view angles
+    local rotatedMoveIntent = RotateVectorByYaw(moveIntent, viewAngles.yaw)
+    if rotatedMoveIntent:Length() <= 1 then
+        return false -- No movement intent
+    end
 
-	-- Only proceed if there's actual movement intent
-	if rotatedMoveIntent:Length() <= 1 then
-		return false
-	end
+    -- Calculate movement direction and speed
+    local moveDir = Common.Normalize(rotatedMoveIntent)
+    local currentVel = pLocal:EstimateAbsVelocity()
+    local horizontalSpeed = currentVel:Length()
+    
+    -- Use minimum speed if we have movement intent but low velocity
+    if horizontalSpeed <= 1 then
+        horizontalSpeed = rotatedMoveIntent:Length() > 1 and 250 or 0
+    end
+    
+    if horizontalSpeed <= 1 then
+        return false -- Not moving fast enough
+    end
 
-	local moveDir = Common.Normalize(rotatedMoveIntent)
-	local currentVel = pLocal:EstimateAbsVelocity()
-	local horizontalSpeed = currentVel:Length()
+    -- Initialize simulation
+    local initialVelocity = moveDir * horizontalSpeed
+    local jumpPeakTicks = math.ceil(SJC.JUMP_FORCE / SJC.GRAVITY / globals.TickInterval())
+    local currentPos = pLocalPos
+    local currentVelocity = initialVelocity
+    
+    -- Reset simulation path for visualization
+    G.SmartJump.SimulationPath = { currentPos }
 
-	if horizontalSpeed <= 1 then
-		return false
-	end
+    -- Tick-by-tick simulation until we hit jumpable obstacle or reach peak time
+    for tick = 1, jumpPeakTicks do
+        local newPos, hitObstacle, newVelocity, canJump, minJumpTicks =
+            SimulateMovementTick(currentPos, currentVelocity, pLocal)
 
-	-- Set initial velocity: move intent direction with current speed
-	local initialVelocity = moveDir * horizontalSpeed
+        -- Stop simulation if no ground found (would be falling)
+        if not newPos then
+            DebugLog("SmartJump: Simulation stopped - no ground at tick %d", tick)
+            break
+        end
 
-	-- Calculate jump peak time in ticks
-	local jumpPeakTicks = math.ceil(0.34 / globals.TickInterval()) -- ~271/800 seconds
+        -- Store simulation step for visualization
+        table.insert(G.SmartJump.SimulationPath, newPos)
 
-	-- Initialize simulation path for visualization
-	G.SmartJump.SimulationPath = { pLocalPos }
+        -- Check if we hit a jumpable obstacle
+        if hitObstacle and canJump then
+            -- Only trigger if we are at least at the tick needed to clear the obstacle
+            if tick >= minJumpTicks then
+                G.SmartJump.PredPos = newPos
+                G.SmartJump.HitObstacle = true
+                DebugLog("SmartJump: Obstacle at tick %d, need >= %d -> JUMP", tick, minJumpTicks)
+                return true
+            else
+                DebugLog("SmartJump: Obstacle too early (tick %d < %d) -> WAIT", tick, minJumpTicks)
+                return false
+            end
+        end
 
-	local currentPos = pLocalPos
-	local currentVelocity = initialVelocity
-	local hitObstacle = false
+        -- Update simulation state for next tick
+        currentPos = newPos
+        currentVelocity = newVelocity
+    end
 
-	-- Tick-by-tick simulation until we hit jumpable obstacle or reach peak time
-	for tick = 1, jumpPeakTicks do
-		local newPos, wallHit, newVelocity, shouldJump, minJumpTicks =
-			SimulateMovementTick(currentPos, currentVelocity, pLocal)
-
-		-- Stop simulation if no ground found (would be falling)
-		if newPos == nil then
-			DebugLog("SmartJump: Simulation stopped - no ground at tick %d", tick)
-			break
-		end
-
-		-- Store simulation step for visualization
-		table.insert(G.SmartJump.SimulationPath, newPos)
-
-		-- Check if we hit jumpable obstacle
-		if wallHit and shouldJump then
-			hitObstacle = true
-
-			-- Late jump timing: jump when we have minimum ticks needed to clear obstacle
-			local remainingTicks = jumpPeakTicks - tick
-
-			if remainingTicks <= minJumpTicks then
-				-- Perfect late jump timing
-				G.SmartJump.PredPos = newPos
-				G.SmartJump.HitObstacle = true
-				DebugLog("SmartJump: Late jump at tick %d, minTicks: %d", tick, minJumpTicks)
-				return true
-			end
-		end
-
-		-- Update simulation state for next tick
-		currentPos = newPos
-		currentVelocity = newVelocity
-	end
-
-	-- Store final simulation results
-	if currentPos and hitObstacle ~= nil then
-		SJ.PredPos = currentPos
-		SJ.HitObstacle = hitObstacle
-	end
-
-	DebugLog("SmartJump: Simulation complete, no jumpable obstacle found")
-	return false
+    DebugLog("SmartJump: No obstacle within jump peak window")
+    return false
 end
-
--- Local references to state and constants
-local SJ = G.SmartJump
-local SJC = G.SmartJump.Constants
-local MenuSJ = G.Menu.SmartJump
 
 -- Main SmartJump execution with state machine (user's exact logic with improvements)
 function SmartJump.Main(cmd)
 	-- Early return if SmartJump is disabled
-	if not MenuSJ.Enable then
+	if not G.Menu.SmartJump.Enable then
 		-- Reset state when disabled
-		SJ.jumpState = STATE_IDLE
+		SJ.jumpState = SJC.STATE_IDLE
 		SJ.ShouldJump = false
 		SJ.ObstacleDetected = false
 		SJ.RequestEmergencyJump = false
@@ -335,9 +282,9 @@ function SmartJump.Main(cmd)
 	end
 
 	local pLocal = entities.GetLocalPlayer()
-	if not MenuSJ.Enable or not pLocal or not pLocal:IsAlive() or pLocal:IsDormant() then
+	if not pLocal or not pLocal:IsAlive() or pLocal:IsDormant() then
 		-- Reset state when player is invalid
-		SJ.jumpState = STATE_IDLE
+		SJ.jumpState = SJC.STATE_IDLE
 		SJ.ShouldJump = false
 		SJ.ObstacleDetected = false
 		SJ.RequestEmergencyJump = false
@@ -347,25 +294,23 @@ function SmartJump.Main(cmd)
 	-- Cache player state
 	local onGround = isPlayerOnGround(pLocal)
 	local ducking = isPlayerDucking(pLocal)
-	local viewOffset = pLocal:GetPropVector("m_vecViewOffset[0]").z
 
 	-- Initialize jump cooldown if not set
 	if not SJ.lastJumpTime then
-		G.SmartJump.lastJumpTime = 0
+		SJ.lastJumpTime = 0
 	end
 
 	-- Add cooldown to prevent spam jumping (30 ticks = 0.5 seconds)
 	local currentTick = globals.TickCount()
-	local jumpCooldown = currentTick - G.SmartJump.lastJumpTime < 30
 
 	-- Handle emergency jump request from stuck detection
 	local shouldJump = false
-	if G.RequestEmergencyJump and not jumpCooldown then
+	if G.RequestEmergencyJump then
 		shouldJump = true
 		G.RequestEmergencyJump = false
 		G.LastSmartJumpAttempt = globals.TickCount()
-		G.SmartJump.jumpState = STATE_PREPARE_JUMP
-		G.SmartJump.lastJumpTime = currentTick
+		SJ.jumpState = SJC.STATE_PREPARE_JUMP
+		SJ.lastJumpTime = currentTick
 		Log:Info("SmartJump: Processing emergency jump request")
 	end
 
@@ -385,12 +330,12 @@ function SmartJump.Main(cmd)
 	-- 3. Not in jump cooldown
 	-- 4. Not already in a jump state
 	-- 5. Actually detects an obstacle ahead
-	if onGround and ducking and hasMovementIntent and not jumpCooldown and G.SmartJump.jumpState == STATE_IDLE then
+	if onGround and ducking and hasMovementIntent and SJ.jumpState == SJC.STATE_IDLE then
 		-- Only trigger if SmartJumpDetection actually finds an obstacle
 		local obstacleDetected = SmartJumpDetection(cmd, pLocal)
 		if obstacleDetected then
-			G.SmartJump.jumpState = STATE_PREPARE_JUMP
-			G.SmartJump.lastJumpTime = currentTick
+			SJ.jumpState = SJC.STATE_PREPARE_JUMP
+			SJ.lastJumpTime = currentTick
 			DebugLog("SmartJump: Crouched movement with obstacle detected, initiating jump")
 		else
 			-- If no obstacle detected while crouched, just stay idle
@@ -399,69 +344,67 @@ function SmartJump.Main(cmd)
 	end
 
 	-- State machine for CTAP and jumping (user's exact logic)
-	if G.SmartJump.jumpState == STATE_IDLE then
+	if SJ.jumpState == SJC.STATE_IDLE then
 		-- STATE_IDLE: Waiting for jump commands
 		-- Only check for smart jump if we have movement intent and no cooldown
-		if onGround and hasMovementIntent and not jumpCooldown then
+		if onGround and hasMovementIntent then
 			local smartJumpDetected = SmartJumpDetection(cmd, pLocal)
 
 			if smartJumpDetected or shouldJump then
-				G.SmartJump.jumpState = STATE_PREPARE_JUMP
-				G.SmartJump.lastJumpTime = currentTick
+				SJ.jumpState = SJC.STATE_PREPARE_JUMP
+				SJ.lastJumpTime = currentTick
 				DebugLog("SmartJump: IDLE -> PREPARE_JUMP (obstacle detected)")
 			end
 		end
-	elseif G.SmartJump.jumpState == STATE_PREPARE_JUMP then
+	elseif SJ.jumpState == SJC.STATE_PREPARE_JUMP then
 		-- STATE_PREPARE_JUMP: Start crouching
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		cmd:SetButtons(cmd.buttons & ~IN_JUMP)
-		G.SmartJump.jumpState = STATE_CTAP
+		SJ.jumpState = SJC.STATE_CTAP
 		DebugLog("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
 		return true
-	elseif G.SmartJump.jumpState == STATE_CTAP then
+	elseif SJ.jumpState == SJC.STATE_CTAP then
 		-- STATE_CTAP: Uncrouch and jump
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 		cmd:SetButtons(cmd.buttons | IN_JUMP)
-		G.SmartJump.jumpState = STATE_ASCENDING
+		SJ.jumpState = SJC.STATE_ASCENDING
 		DebugLog("SmartJump: CTAP -> ASCENDING (unduck + jump)")
 		return true
-	elseif G.SmartJump.jumpState == STATE_ASCENDING then
+	elseif SJ.jumpState == SJC.STATE_ASCENDING then
 		-- STATE_ASCENDING: Player is moving upwards
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		local velocity = pLocal:EstimateAbsVelocity()
 		if velocity.z <= 0 then
-			G.SmartJump.jumpState = STATE_DESCENDING
+			SJ.jumpState = SJC.STATE_DESCENDING
 			DebugLog("SmartJump: ASCENDING -> DESCENDING (velocity.z <= 0)")
 		end
 		return true
-	elseif G.SmartJump.jumpState == STATE_DESCENDING then
+	elseif SJ.jumpState == SJC.STATE_DESCENDING then
 		-- STATE_DESCENDING: Player is falling down
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 
 		-- Use our own simulation for bhop detection, not library prediction
 		if hasMovementIntent then
 			-- Only bhop if there's still an obstacle and not in cooldown
-			if not jumpCooldown then
-				local bhopJump = SmartJumpDetection(cmd, pLocal)
-				if bhopJump then
-					cmd:SetButtons(cmd.buttons & ~IN_DUCK)
-					cmd:SetButtons(cmd.buttons | IN_JUMP)
-					G.SmartJump.jumpState = STATE_PREPARE_JUMP
-					G.SmartJump.lastJumpTime = currentTick
-					DebugLog("SmartJump: DESCENDING -> PREPARE_JUMP (bhop with obstacle)")
-					return true
-				end
+			local bhopJump = SmartJumpDetection(cmd, pLocal)
+			if bhopJump then
+				cmd:SetButtons(cmd.buttons & ~IN_DUCK)
+				cmd:SetButtons(cmd.buttons | IN_JUMP)
+				SJ.jumpState = SJC.STATE_PREPARE_JUMP
+				SJ.lastJumpTime = currentTick
+				DebugLog("SmartJump: DESCENDING -> PREPARE_JUMP (bhop with obstacle)")
+				return true
 			end
 
 			-- Check if landed using onGround flag
 			if onGround then
-				G.SmartJump.jumpState = STATE_IDLE
+				SJ.jumpState = SJC.STATE_IDLE
 				DebugLog("SmartJump: DESCENDING -> IDLE (landed)")
 			end
 		else
 			-- No movement intent, land and return to idle
 			if onGround then
-				G.SmartJump.jumpState = STATE_IDLE
+				SJ.jumpState = SJC.STATE_IDLE
 				DebugLog("SmartJump: DESCENDING -> IDLE (no movement intent)")
 			end
 		end
@@ -469,19 +412,19 @@ function SmartJump.Main(cmd)
 	end
 
 	-- Safety timeout to prevent getting stuck in any state
-	if not G.SmartJump.stateStartTime then
-		G.SmartJump.stateStartTime = globals.TickCount()
-	elseif globals.TickCount() - G.SmartJump.stateStartTime > 132 then -- 2 seconds timeout
-		Log:Warn("SmartJump: State timeout, resetting to IDLE from %s", G.SmartJump.jumpState)
-		G.SmartJump.jumpState = STATE_IDLE
-		G.SmartJump.stateStartTime = nil
+	if not SJ.stateStartTime then
+		SJ.stateStartTime = globals.TickCount()
+	elseif globals.TickCount() - SJ.stateStartTime > 132 then -- 2 seconds timeout
+		Log:Warn("SmartJump: State timeout, resetting to IDLE from %s", SJ.jumpState)
+		SJ.jumpState = SJC.STATE_IDLE
+		SJ.stateStartTime = nil
 	end
 
 	-- Reset state timer when state changes
-	local currentState = G.SmartJump.jumpState
-	if G.SmartJump.lastState ~= currentState then
-		G.SmartJump.stateStartTime = globals.TickCount()
-		G.SmartJump.lastState = currentState
+	local currentState = SJ.jumpState
+	if SJ.lastState ~= currentState then
+		SJ.stateStartTime = globals.TickCount()
+		SJ.lastState = currentState
 	end
 
 	G.ShouldJump = shouldJump
