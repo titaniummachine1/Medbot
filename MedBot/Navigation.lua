@@ -526,23 +526,8 @@ local function FastStop(pCmd, pLocal)
 	pCmd:SetSideMove(ndir.y * wishspeed)
 end
 
--- Function to make the player walk to a destination smoothly and stop at the destination
-function Navigation.WalkTo(pCmd, pLocal, pDestination)
-	local localPos = pLocal:GetAbsOrigin()
-	local distVector = pDestination - localPos
-	local dist = distVector:Length()
-	local currentSpeed = Navigation.GetMaxSpeed(pLocal)
-
-	local distancePerTick = math.max(10, math.min(currentSpeed / TICK_RATE, 450)) --in case we tracvel faster then we are close to target
-
-	if dist > distancePerTick then --if we are further away we walk normaly at max speed
-		local result = ComputeMove(pCmd, localPos, pDestination)
-		pCmd:SetForwardMove(result.x)
-		pCmd:SetSideMove(result.y)
-	else
-		FastStop(pCmd, pLocal)
-	end
-end
+-- WalkTo functionality has been moved to MovementController.walkTo
+-- Please use MovementController.walkTo directly
 
 ---@param pos Vector3|{ x:number, y:number, z:number }
 ---@return Node|nil

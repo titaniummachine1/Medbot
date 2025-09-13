@@ -54,39 +54,63 @@ local function computeMove(userCmd, a, b)
 	return Vector3(math.cos(yawDiff) * MAX_SPEED, math.sin(-yawDiff) * MAX_SPEED, 0)
 end
 
--- Predictive/no-overshoot WalkTo (superior implementation)
+--[[
+    Primary movement function with predictive movement and no-overshoot logic
+    @param cmd - User command to modify
+    @param player - Player entity
+    @param dest - Destination vector
+    @return boolean - True if movement was applied, false otherwise
+]]
 function MovementController.walkTo(cmd, player, dest)
-	if not (cmd and player and dest) then
-		return
+	-- Check if walking is enabled
+	if G and G.Menu and G.Menu.Main and G.Menu.Main.EnableWalking == false then
+		-- Clear movement commands if walking is disabled
+		if cmd then
+			cmd:SetForwardMove(0)
+			cmd:SetSideMove(0)
+			cmd:SetUpMove(0)
+			cmd:SetButtons(0)
+		end
+		return false
 	end
 
+	-- Validate inputs
+	if not (cmd and player and dest) then
+		return false
+	end
+
+	-- Get current position and validate
 	local pos = player:GetAbsOrigin()
 	if not pos then
-		return
+		return false
 	end
 
+	-- Get tick interval with fallback
 	local tick = globals.TickInterval()
 	if tick <= 0 then
-		tick = 1 / 66.67
+		tick = 1 / 66.67 -- Default to 66.67 tickrate if invalid
 	end
 
-	-- Current horizontal velocity (ignore Z)
+	-- Get current horizontal velocity
 	local vel = player:EstimateAbsVelocity() or Vector3(0, 0, 0)
-	vel.z = 0
+	vel.z = 0 -- Ignore vertical velocity for ground movement
 
-	-- Predict passive drag to next tick
-	local drag = math.max(0, 1 - getGroundFriction() * tick)
+	-- Predict movement with drag
+	local drag = math.max(0, 1 - (getGroundFriction() or 5.2) * tick) -- Default friction if nil
 	local velNext = vel * drag
 	local predicted = Vector3(pos.x + velNext.x * tick, pos.y + velNext.y * tick, pos.z)
 
-	-- Remaining displacement after coast
+	-- Calculate remaining distance to target after prediction
 	local need = dest - predicted
-	need.z = 0
+	need.z = 0 -- Keep movement horizontal
 	local dist = need:Length()
-	if dist < 1.5 then
+
+	-- Stop if we're close enough to the destination
+	local stopDistance = 1.5 -- Units to consider as "reached"
+	if dist < stopDistance then
 		cmd:SetForwardMove(0)
 		cmd:SetSideMove(0)
-		return
+		return true
 	end
 
 	-- Velocity we need at start of next tick to land on dest

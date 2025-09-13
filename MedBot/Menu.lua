@@ -16,7 +16,6 @@ local G = require("MedBot.Core.Globals")
 -- local Node = require("MedBot.Navigation.Node")  -- Temporarily disabled
 -- local Visuals = require("MedBot.Visuals")       -- Temporarily disabled
 
-
 -- Try loading TimMenu
 ---@type boolean, table
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
@@ -37,7 +36,20 @@ local function OnDrawMenu()
 		if G.Menu.Tab == "Main" then
 			-- Bot Control Section
 			TimMenu.BeginSector("Bot Control")
-			G.Menu.Main.Enable = TimMenu.Checkbox("Enable Bot", G.Menu.Main.Enable)
+			G.Menu.Main.Enable = TimMenu.Checkbox("Enable Pathfinding", G.Menu.Main.Enable)
+			TimMenu.Tooltip("Enables the main bot functionality")
+			TimMenu.NextLine()
+
+			-- Add Enable Walking toggle with proper default value handling
+			if G.Menu.Main.EnableWalking == nil then
+				G.Menu.Main.EnableWalking = true -- Default to true if not set
+			end
+			local newWalkingValue = TimMenu.Checkbox("Enable Walking", G.Menu.Main.EnableWalking)
+			-- Only update if value changed to avoid flickering
+			if newWalkingValue ~= G.Menu.Main.EnableWalking then
+				G.Menu.Main.EnableWalking = newWalkingValue
+			end
+			TimMenu.Tooltip("Enable/disable bot movement (pathfinding still works)")
 			TimMenu.NextLine()
 
 			G.Menu.Main.SelfHealTreshold =
@@ -57,13 +69,27 @@ local function OnDrawMenu()
 
 			-- Movement & Pathfinding Section
 			TimMenu.BeginSector("Movement & Pathfinding")
+			-- Store previous value to detect changes
+			local prevSkipNodes = G.Menu.Main.Skip_Nodes
 			G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
+			-- Only update if value changed to avoid flickering
+			if G.Menu.Main.Skip_Nodes ~= prevSkipNodes then
+				-- Clear path to force recalculation with new setting
+				if G.Navigation then
+					G.Navigation.path = {}
+				end
+			end
 			TimMenu.Tooltip("Allow skipping nodes when direct path is walkable (handles all optimization)")
 			TimMenu.NextLine()
 
 			-- Smart Jump (works independently of MedBot enable state)
 			G.Menu.SmartJump = G.Menu.SmartJump or {}
-			G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable ~= false)
+			G.Menu.SmartJump.Enable = G.Menu.SmartJump.Enable ~= false
+			local newSmartJumpValue = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
+			-- Only update if value changed to avoid flickering
+			if newSmartJumpValue ~= G.Menu.SmartJump.Enable then
+				G.Menu.SmartJump.Enable = newSmartJumpValue
+			end
 			TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
 			TimMenu.NextLine()
 

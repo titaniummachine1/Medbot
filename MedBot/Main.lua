@@ -22,7 +22,7 @@ local CommandHandler = require("MedBot.Bot.CommandHandler")
 local HealthLogic = require("MedBot.Bot.HealthLogic")
 
 --[[ Additional Systems ]]
-require("MedBot.Movement.SmartJump")
+require("MedBot.Bot.SmartJump")
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")
@@ -178,7 +178,7 @@ function handleMovingState(userCmd)
 	MovementController.walkTo(userCmd, G.pLocal.entity, currentNode.pos)
 
 	-- Execute SmartJump after walkTo to use same cmd with bot's movement intent
-	local SmartJump = require("MedBot.Movement.SmartJump")
+	local SmartJump = require("MedBot.Bot.SmartJump")
 	SmartJump.Main(userCmd)
 
 	-- Increment stuck counter

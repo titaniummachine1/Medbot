@@ -615,9 +615,56 @@ local function OnDraw()
 		end
 	end
 
-    -- Draw only the actual-followed path using door-aware waypoints, with a live target arrow
-    if G.Menu.Visuals.drawPath then
-        local wps = G.Navigation.waypoints
+    	-- Draw only the actual-followed path using door-aware waypoints, with a live target arrow
+    if G.Menu.Visuals.drawPath and G.Navigation.path and #G.Navigation.path > 0 then
+        -- Draw the full path with arrows
+        local prevPos = nil
+        local localPos = G.pLocal and G.pLocal.Origin
+        
+        -- Start with player position if we have it
+        if localPos then
+            prevPos = localPos
+        end
+        
+        -- Draw path segments
+        for i = G.Navigation.currentIndex or 1, #G.Navigation.path do
+            local node = G.Navigation.path[i]
+            if node then
+                local nodePos = node and node.pos  -- Use node position directly
+                if nodePos and prevPos then
+                    local screenStart = client.WorldToScreen(prevPos)
+                    local screenEnd = client.WorldToScreen(nodePos)
+                    
+                    if screenStart and screenEnd then
+                        -- Draw line segment
+                        draw.Color(0, 255, 0, 200)  -- Green path
+                        draw.Line(screenStart[1], screenStart[2], screenEnd[1], screenEnd[2])
+                        
+                        -- Draw arrow head
+                        local diff = nodePos - prevPos
+                        local length = math.sqrt(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z)
+                        local dir = length > 0 and Vector3(diff.x / length, diff.y / length, diff.z / length) or Vector3(0, 0, 0)
+                        local perp = Vector3(-dir.y, dir.x, 0) * 5  -- Perpendicular vector for arrow wings
+                        local arrowBase = nodePos - dir * 10  -- Move arrow base back a bit
+                        
+                        local baseScreen = client.WorldToScreen(arrowBase)
+                        local leftWing = client.WorldToScreen(arrowBase + perp)
+                        local rightWing = client.WorldToScreen(arrowBase - perp)
+                        
+                        if baseScreen and leftWing and rightWing then
+                            -- Draw triangle using lines
+                            draw.Line(screenEnd[1], screenEnd[2], leftWing[1], leftWing[2])
+                            draw.Line(leftWing[1], leftWing[2], rightWing[1], rightWing[2])
+                            draw.Line(rightWing[1], rightWing[2], screenEnd[1], screenEnd[2])
+                        end
+                    end
+                end
+                prevPos = nodePos
+            end
+        end
+        
+        -- Draw waypoints (if any)
+        local wps = G.Navigation.waypoints or {}
         if wps and #wps > 0 then
             -- Draw remaining route only from current waypoint onward to avoid residue arrows
             local startIdx = G.Navigation.currentWaypointIndex or 1
@@ -675,17 +722,48 @@ local function OnDraw()
         end
     end
 
-	-- Draw current node
-    if G.Menu.Visuals.drawCurrentNode and G.Navigation.path then
-                draw.Color(255, 0, 0, 255)
-
-		local currentNode = G.Navigation.path[G.Navigation.currentNodeIndex]
+	-- Draw current target node with improved visibility
+    if G.Menu.Visuals.drawCurrentNode and G.Navigation.path and G.Navigation.currentTargetNode then
+        -- Draw the target position
+        local targetPos = G.Navigation.currentTargetPos
+        if targetPos then
+            -- Draw a pulsing red sphere at the target position
+            local pulse = math.abs(math.sin(globals.RealTime() * 2)) * 0.5 + 0.5
+            draw.Color(255, 0, 0, 200 * pulse)
+            local screenPos = client.WorldToScreen(targetPos)
+            if screenPos then
+                -- Draw a simple cross for the target position
+                local size = 10
+                draw.Line(screenPos[1] - size, screenPos[2], screenPos[1] + size, screenPos[2])
+                draw.Line(screenPos[1], screenPos[2] - size, screenPos[1], screenPos[2] + size)
+            end
+            
+            -- Draw a line from player to target
+            local localPos = G.pLocal and G.pLocal.Origin
+            if localPos then
+                local targetScreen = client.WorldToScreen(targetPos)
+                local localScreen = client.WorldToScreen(localPos)
+                if targetScreen and localScreen then
+                    draw.Color(255, 255, 0, 150)  -- Yellow line
+                    draw.Line(
+                        localScreen[1], localScreen[2],
+                        targetScreen[1], targetScreen[2]
+                    )
+                end
+            end
+        end
+    end
+    
+    -- Draw current node in path (legacy, keeping for compatibility)
+    if G.Menu.Visuals.drawCurrentNode and G.Navigation.path and G.Navigation.currentIndex then
+        draw.Color(255, 0, 0, 150)
+        local currentNode = G.Navigation.path[G.Navigation.currentIndex]
 		local currentNodePos = currentNode.pos
 
         local screenPos = client.WorldToScreen(currentNodePos)
         if screenPos then
             Draw3DBox(20, currentNodePos)
-            draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentNodeIndex))
+            draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentIndex))
         end
     end
 
