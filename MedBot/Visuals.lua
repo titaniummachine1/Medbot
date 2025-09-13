@@ -614,151 +614,43 @@ local function OnDraw()
         end
     end
 
-    -- Draw only the actual-followed path using door-aware waypoints, with a live target arrow
-    if G.Menu.Visuals.drawPath and G.Navigation.path and #G.Navigation.path > 0 then
-        -- Draw the full path with arrows
-        local prevPos = nil
+    -- Draw only the door-based path with player-to-target arrow
+    if G.Menu.Visuals.drawPath and G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
+        local wps = G.Navigation.waypoints
         local localPos = G.pLocal and G.pLocal.Origin
-
-        -- Start with player position if we have it
-        if localPos then
-            prevPos = localPos
-        end
-
-        -- Draw path segments
-        for i = G.Navigation.currentIndex or 1, #G.Navigation.path do
-            local node = G.Navigation.path[i]
-            if node and node.pos then
-                local nodePos = node.pos
-                if nodePos and prevPos then
-                    local screenStart = client.WorldToScreen(prevPos)
-                    local screenEnd = client.WorldToScreen(nodePos)
-
-                    if screenStart and screenEnd then
-                        -- Draw line segment
-                        draw.Color(0, 255, 0, 200) -- Green path
-                        draw.Line(screenStart[1], screenStart[2], screenEnd[1], screenEnd[2])
-
-                        -- Draw arrow head using Common.Normalize
-                        local diff = nodePos - prevPos
-                        local dir = Common.Normalize(diff)
-                        local perp = Vector3(-dir.y, dir.x, 0) * 5 -- Perpendicular vector for arrow wings
-                        local arrowBase = nodePos - dir * 10       -- Move arrow base back a bit
-
-                        local baseScreen = client.WorldToScreen(arrowBase)
-                        local leftWing = client.WorldToScreen(arrowBase + perp)
-                        local rightWing = client.WorldToScreen(arrowBase - perp)
-
-                        if baseScreen and leftWing and rightWing then
-                            -- Draw arrow head using lines instead of Triangle
-                            draw.Line(screenEnd[1], screenEnd[2], leftWing[1], leftWing[2])  -- Left wing
-                            draw.Line(screenEnd[1], screenEnd[2], rightWing[1], rightWing[2]) -- Right wing
-                            draw.Line(leftWing[1], leftWing[2], rightWing[1], rightWing[2])   -- Base of arrow
-                        end
-                    end
-                end
-                prevPos = nodePos
-            end
-        end
-
-        -- Draw waypoints (if any)
-        local wps = G.Navigation.waypoints or {}
-        if wps and #wps > 0 then
-            -- Draw remaining route only from current waypoint onward to avoid residue arrows
-            local startIdx = G.Navigation.currentWaypointIndex or 1
-            if startIdx < 1 then startIdx = 1 end
-            for i = startIdx, #wps - 1 do
-                local a, b = wps[i], wps[i + 1]
-                local aPos = a.pos
-                local bPos = b.pos
-                if not aPos and a.kind == "door" and a.points and #a.points > 0 then
-                    aPos = a.points[math.ceil(#a.points / 2)]
-                end
-                if not bPos and b.kind == "door" and b.points and #b.points > 0 then
-                    bPos = b.points[math.ceil(#b.points / 2)]
-                end
-                local inRad = withinRadius(aPos or p) and withinRadius(bPos or p)
-                if aPos and bPos and (G.Menu.Visuals.ignorePathRadius or inRad) then
-                    draw.Color(255, 255, 255, 220) -- white route
-                    ArrowLine(aPos, bPos, 18, 12, false)
-                end
-            end
-            -- Current target indicator + box at the target
-            local tgt = G.Navigation.currentTargetPos
-            if tgt and (G.Menu.Visuals.ignorePathRadius or withinRadius(tgt)) then
-                -- Arrow color logic: white normal, red if stuck & not walkable, yellow if stuck & walkable
-                local arrowR, arrowG, arrowB = 255, 255, 255
-                if G.currentState == G.States.STUCK then
-                    local now = globals.TickCount()
-                    if not G._lastStuckWalkableTick or (now - G._lastStuckWalkableTick) > 15 then
-                        local me = entities.GetLocalPlayer()
-                        local mePos = me and me:GetAbsOrigin()
-                        local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-                        G._lastStuckWalkableResult = (mePos and isWalkable.Path(mePos, tgt, walkMode)) or false
-                        G._lastStuckWalkableTick = now
-                    end
-                    if G._lastStuckWalkableResult then
-                        arrowR, arrowG, arrowB = 255, 255, 0 -- yellow: stuck but walkable
-                    else
-                        arrowR, arrowG, arrowB = 255, 0, 0   -- red: stuck and blocked
-                    end
-                end
-                draw.Color(arrowR, arrowG, arrowB, 255)
-                local me = entities.GetLocalPlayer()
-                if me then
-                    local mePos = me:GetAbsOrigin()
-                    ArrowLine(mePos, tgt, 22, 16, false)
-                end
-                -- Also place a square at the target with same color
-                local s = client.WorldToScreen(tgt)
-                if s then
-                    draw.Color(arrowR, arrowG, arrowB, 255)
-                    draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
-                end
-            end
-            -- Omit extra squares; arrows indicate route; 3D boxes already mark agents
-        end
-    end
-
-    -- Draw current target node with improved visibility
-    if G.Menu.Visuals.drawCurrentNode and G.Navigation.path and G.Navigation.currentTargetNode then
-        -- Draw the target position
+        
+        -- Draw direct arrow from player to current target (the position we're walking to)
         local targetPos = G.Navigation.currentTargetPos
-        if targetPos then
-            -- Draw a pulsing red sphere at the target position
-            local pulse = math.abs(math.sin(globals.RealTime() * 2)) * 0.5 + 0.5
-            draw.Color(255, 0, 0, 200 * pulse)
-            local screenPos = client.WorldToScreen(targetPos)
-            if screenPos then
-                draw.Circle(screenPos[1], screenPos[2], 10, 12) -- Larger, pulsing circle
-            end
-
-            -- Draw a line from player to target
-            local localPos = G.pLocal and G.pLocal.Origin
-            if localPos then
-                local targetScreen = client.WorldToScreen(targetPos)
-                local localScreen = client.WorldToScreen(localPos)
-                if targetScreen and localScreen then
-                    draw.Color(255, 255, 0, 150) -- Yellow line
-                    draw.Line(
-                        localScreen[1], localScreen[2],
-                        targetScreen[1], targetScreen[2]
-                    )
+        if localPos and targetPos and withinRadius(targetPos) then
+            draw.Color(255, 255, 0, 220) -- Yellow arrow to current target
+            ArrowLine(localPos, targetPos, 18, 12, false)
+        end
+        
+        -- Draw path segments between waypoints
+        draw.Color(255, 255, 255, 220) -- White path
+        for i = 1, #wps - 1 do
+            local a, b = wps[i], wps[i + 1]
+            local aPos = a.pos or (a.points and a.points[math.ceil(#a.points / 2)])
+            local bPos = b.pos or (b.points and b.points[math.ceil(#b.points / 2)])
+            
+            if aPos and bPos and withinRadius(aPos) and withinRadius(bPos) then
+                local aScreen = client.WorldToScreen(aPos)
+                local bScreen = client.WorldToScreen(bPos)
+                if aScreen and bScreen then
+                    draw.Line(aScreen[1], aScreen[2], bScreen[1], bScreen[2])
                 end
             end
         end
-    end
-
-    -- Draw current node in path (legacy, keeping for compatibility)
-    if G.Menu.Visuals.drawCurrentNode and G.Navigation.path and G.Navigation.currentIndex then
-        draw.Color(255, 0, 0, 150)
-        local currentNode = G.Navigation.path[G.Navigation.currentIndex]
-        local currentNodePos = currentNode.pos
-
-        local screenPos = client.WorldToScreen(currentNodePos)
-        if screenPos then
-            Draw3DBox(20, currentNodePos)
-            draw.Text(screenPos[1], screenPos[2] + 40, tostring(G.Navigation.currentIndex))
+        
+        -- Highlight current target position
+        if targetPos and withinRadius(targetPos) then
+            local s = client.WorldToScreen(targetPos)
+            if s then
+                s[1] = math.floor(s[1])
+                s[2] = math.floor(s[2])
+                draw.Color(255, 0, 0, 255) -- Red target indicator
+                draw.FilledRect(s[1] - 5, s[2] - 5, s[1] + 5, s[2] + 5)
+            end
         end
     end
 
@@ -794,6 +686,32 @@ local function OnDraw()
             if jumpScreen and predScreen then
                 draw.Color(255, 255, 0, 180) -- Yellow jump arc
                 draw.Line(predScreen[1], predScreen[2], jumpScreen[1], jumpScreen[2])
+            end
+        end
+    end
+
+    -- Draw only the actual-followed path using door-aware waypoints, with a live target arrow
+    if G.Menu.Visuals.drawPath then
+        local wps = G.Navigation.waypoints
+        if wps and #wps > 0 then
+            -- Draw remaining route only from current waypoint onward to avoid residue arrows
+            local startIdx = G.Navigation.currentWaypointIndex or 1
+            if startIdx < 1 then startIdx = 1 end
+            for i = startIdx, #wps - 1 do
+                local a, b = wps[i], wps[i + 1]
+                local aPos = a.pos
+                local bPos = b.pos
+                if not aPos and a.kind == "door" and a.points and #a.points > 0 then
+                    aPos = a.points[math.ceil(#a.points / 2)]
+                end
+                if not bPos and b.kind == "door" and b.points and #b.points > 0 then
+                    bPos = b.points[math.ceil(#b.points / 2)]
+                end
+                local inRad = withinRadius(aPos or p) and withinRadius(bPos or p)
+                if aPos and bPos and (G.Menu.Visuals.ignorePathRadius or inRad) then
+                    draw.Color(255, 255, 255, 220) -- white route
+                    ArrowLine(aPos, bPos, 18, 12, false)
+                end
             end
         end
     end

@@ -106,69 +106,99 @@ function handleMovingState(userCmd)
 		return
 	end
 
-	local currentNode = G.Navigation.path[1]
+	-- Use waypoints for precise movement, fallback to path nodes
+	local targetPos
+	local targetId
+	
+	if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
+		local currentWaypoint = Navigation.GetCurrentWaypoint()
+		if currentWaypoint then
+			targetPos = currentWaypoint.pos
+			targetId = currentWaypoint.kind == "door" and currentWaypoint.toId or 
+					  currentWaypoint.kind == "center" and currentWaypoint.areaId or
+					  currentWaypoint.id
+		end
+	end
+	
+	-- Fallback to path node if no waypoint available
+	if not targetPos then
+		local currentNode = G.Navigation.path[1]
+		targetPos = currentNode.pos
+		targetId = currentNode.id
+	end
 
-	-- Throttled debug about current path/node
+	-- Throttled debug about current target
 	G.__lastMoveDebugTick = G.__lastMoveDebugTick or 0
 	local now = globals.TickCount()
 	if now - G.__lastMoveDebugTick > 15 then -- ~0.25s
 		local pathLen = #G.Navigation.path
-		local nodeId = currentNode and currentNode.id or -1
-		Log:Debug("MOVING: pathLen=%d firstNodeId=%s", pathLen, tostring(nodeId))
+		Log:Debug("MOVING: pathLen=%d targetId=%s", pathLen, tostring(targetId))
 		G.__lastMoveDebugTick = now
 	end
-	if not currentNode then
-		Log:Warn("Current node is nil, returning to IDLE state")
+	
+	if not targetPos then
+		Log:Warn("No target position available, returning to IDLE state")
 		G.currentState = G.States.IDLE
 		return
 	end
 
 	-- Store movement direction for SmartJump
 	local LocalOrigin = G.pLocal.Origin
-	local direction = currentNode.pos - LocalOrigin
+	local direction = targetPos - LocalOrigin
 	G.BotMovementDirection = direction:Length() > 0 and (direction / direction:Length()) or Vector3(0, 0, 0)
 	G.BotIsMoving = true
 
-	-- Try path optimization first
-	if PathOptimizer.optimize(LocalOrigin, G.Navigation.path, G.Navigation.goalPos) then
-		-- If optimization changed the path, use the new first node
-		currentNode = G.Navigation.path[1] or currentNode
-	end
+	-- Update current target position for visualization
+	G.Navigation.currentTargetPos = targetPos
 
 	-- Handle camera rotation
-	MovementController.handleCameraRotation(userCmd, currentNode.pos)
+	MovementController.handleCameraRotation(userCmd, targetPos)
 
-	-- Check if we've reached the current node
-	local horizontalDist = math.abs(LocalOrigin.x - currentNode.pos.x) + math.abs(LocalOrigin.y - currentNode.pos.y)
-	local verticalDist = math.abs(LocalOrigin.z - currentNode.pos.z)
+	-- Check if we've reached the current target
+	local horizontalDist = math.abs(LocalOrigin.x - targetPos.x) + math.abs(LocalOrigin.y - targetPos.y)
+	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
 
 	if (horizontalDist < G.Misc.NodeTouchDistance) and verticalDist <= G.Misc.NodeTouchHeight then
 		Log:Debug(
-			"Reached node id=%s horiz=%.1f vert=%.1f (touchDist=%d, touchH=%d)",
-			tostring(currentNode.id),
+			"Reached target id=%s horiz=%.1f vert=%.1f (touchDist=%d, touchH=%d)",
+			tostring(targetId),
 			horizontalDist,
 			verticalDist,
 			G.Misc.NodeTouchDistance,
 			G.Misc.NodeTouchHeight
 		)
-		Navigation.RemoveCurrentNode()
-		Navigation.ResetTickTimer()
-
-		if #G.Navigation.path == 0 then
-			Navigation.ClearPath()
-			Log:Info("Reached end of path")
-			G.currentState = G.States.IDLE
-			G.lastPathfindingTick = 0
+		
+		-- Advance to next waypoint or node
+		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
+			Navigation.AdvanceWaypoint()
+			-- If no more waypoints, we're done
+			if not Navigation.GetCurrentWaypoint() then
+				Navigation.ClearPath()
+				Log:Info("Reached end of waypoint path")
+				G.currentState = G.States.IDLE
+				G.lastPathfindingTick = 0
+			end
+		else
+			-- Fallback to node-based advancement
+			Navigation.RemoveCurrentNode()
+			Navigation.ResetTickTimer()
+			
+			if #G.Navigation.path == 0 then
+				Navigation.ClearPath()
+				Log:Info("Reached end of path")
+				G.currentState = G.States.IDLE
+				G.lastPathfindingTick = 0
+			end
 		end
 		return
 	end
 
 	-- Use superior movement controller
 	if now - (G.__lastWalkDebugTick or 0) > 15 then
-		local distVec = currentNode.pos - LocalOrigin
+		local distVec = targetPos - LocalOrigin
 		Log:Debug(
-			"Walking towards node id=%s dx=%.1f dy=%.1f dz=%.1f (Walking: %s)",
-			tostring(currentNode.id),
+			"Walking towards target id=%s dx=%.1f dy=%.1f dz=%.1f (Walking: %s)",
+			tostring(targetId),
 			distVec.x,
 			distVec.y,
 			distVec.z,
@@ -179,7 +209,7 @@ function handleMovingState(userCmd)
 
 	-- Only move if walking is enabled
 	if G.Menu.Main.EnableWalking then
-		MovementController.walkTo(userCmd, G.pLocal.entity, currentNode.pos)
+		MovementController.walkTo(userCmd, G.pLocal.entity, targetPos)
 	else
 		-- Reset movement if walking is disabled
 		userCmd:SetForwardMove(0)
