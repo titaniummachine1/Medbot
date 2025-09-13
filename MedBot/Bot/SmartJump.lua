@@ -87,7 +87,6 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 			-- We need h >= obstacleHeight, find minimum t
 			local minTicksNeeded = 0
 			local maxTicks = math.ceil(timeToPeak / tickInterval)
-			print(obstacleHeight)
 			-- Convert to seconds for physics calculation
 			for tick = 1, maxTicks do
 				local t = tick * tickInterval  -- Convert tick to seconds
@@ -203,10 +202,10 @@ local function SmartJumpDetection(cmd, pLocal)
 
 	-- Use minimum speed if we have movement intent but low velocity
 	if horizontalSpeed <= 1 then
-		horizontalSpeed = rotatedMoveIntent:Length() > 1 and 250 or 0
+		horizontalSpeed = rotatedMoveIntent:Length() > 1 and 450 or 0
 	end
 
-	if horizontalSpeed <= 1 then
+	if horizontalSpeed == 0 then
 		return false -- Not moving fast enough
 	end
 
@@ -232,18 +231,17 @@ local function SmartJumpDetection(cmd, pLocal)
 
 		-- Store simulation step for visualization
 		table.insert(G.SmartJump.SimulationPath, newPos)
-		print(tick, minJumpTicks)
 		-- Check if we hit a jumpable obstacle
 		if hitObstacle and canJump then
-			
-			-- Only trigger if we are at least at the tick needed to clear the obstacle
-			if tick >= minJumpTicks then
+			-- Only trigger if we are at the exact tick needed to clear the obstacle
+			-- or later, but not before
+			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
-				DebugLog("SmartJump: Obstacle at tick %d, need >= %d -> JUMP", tick, minJumpTicks)
+				DebugLog("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
 				return true
 			else
-				DebugLog("SmartJump: Obstacle too early (tick %d < %d) -> WAIT", tick, minJumpTicks)
+				DebugLog("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
 				return false
 			end
 		end
