@@ -353,7 +353,7 @@ function Navigation.BuildDoorWaypointsFromPath()
 
 							-- Skip center if direct path is shorter by meaningful margin
 							-- Also skip if both doors are in same area (always skip center for same area)
-							if directDist < viaCenterDist * 0.9 or (a.areaId and b.areaId and a.areaId == b.areaId) then
+							if directDist < viaCenterDist * 0.9 or (a.id and b.id and a.id == b.id) then
 								shouldSkipCenter = true
 							end
 						end

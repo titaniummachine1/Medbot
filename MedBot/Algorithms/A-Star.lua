@@ -38,6 +38,39 @@ local function heuristicCost(nodeA, nodeB)
 	return (nodeA.pos - nodeB.pos):Length()
 end
 
+---Check if direct door-to-door movement is safe (not a sharp corner)
+---@param prev Node Previous door node
+---@param curr Node Current area center node
+---@param next Node Next door node
+---@return boolean True if movement is safe
+local function isSafeDoorToDoorMovement(prev, curr, next)
+	if not (prev and curr and next and prev.pos and curr.pos and next.pos) then
+		return false
+	end
+
+	-- Calculate movement vectors
+	local toCenter = curr.pos - prev.pos
+	local fromCenter = next.pos - curr.pos
+
+	-- Normalize vectors
+	local toCenterNorm = toCenter:Length() > 0 and (toCenter / toCenter:Length()) or Vector3(0, 0, 0)
+	local fromCenterNorm = fromCenter:Length() > 0 and (fromCenter / fromCenter:Length()) or Vector3(0, 0, 0)
+
+	-- Calculate dot product to determine angle
+	local dotProduct = toCenterNorm.x * fromCenterNorm.x
+		+ toCenterNorm.y * fromCenterNorm.y
+		+ toCenterNorm.z * fromCenterNorm.z
+
+	-- Convert to angle (dot product = cos(angle))
+	local angle = math.acos(math.max(-1, math.min(1, dotProduct)))
+	local angleDegrees = angle * 180 / math.pi
+
+	-- Only allow skipping if angle is not too sharp (less than 135 degrees = more than 45 degree turn)
+	-- This prevents cutting corners through walls
+	local maxSafeAngle = 135 -- degrees
+	return angleDegrees < maxSafeAngle
+end
+
 ---Reconstructs the path from the cameFrom map
 ---@param cameFrom table<Node, Node> Map of nodes to their predecessors
 ---@param startNode Node Starting node of the path
@@ -50,7 +83,15 @@ local function reconstructPath(cameFrom, startNode, goalNode)
 	-- Reconstruct path in reverse (from goal to start)
 	while current and current ~= startNode do
 		table.insert(path, 1, current)
-		current = cameFrom[current]
+		local cameFromData = cameFrom[current]
+		if cameFromData and cameFromData.node then
+			current = cameFromData.node
+		elseif cameFrom[current] then
+			current = cameFrom[current] -- fallback for old format
+		else
+			print("A* Error: No path found - cameFrom data missing for node " .. (current.id or "unknown"))
+			return nil
+		end
 	end
 
 	-- If we couldn't reconstruct the path, return nil
@@ -74,41 +115,10 @@ local function reconstructPath(cameFrom, startNode, goalNode)
 		local next = path[i + 1]
 		local prev = optimizedPath[#optimizedPath]
 
-		-- Skip intermediate area center if:
-		-- 1. Previous and next are both doors
-		-- 2. They belong to the same area (areaId matches)
-		-- 3. Current node is an area center (not a door)
-		if
-			prev
-			and next
-			and prev.isDoor
-			and next.isDoor
-			and prev.areaId
-			and next.areaId
-			and prev.areaId == next.areaId
-			and curr
-			and not curr.isDoor
-		then
-			table.insert(optimizedPath, next)
-			i = i + 2 -- Skip the area center in between
-		-- Also skip area center if going from door directly to next door (even different areas)
-		elseif prev and next and prev.isDoor and next.isDoor and curr and not curr.isDoor then
-			-- Check if skipping center would be beneficial
-			local directDist = (prev.pos - next.pos):Length()
-			local viaCenterDist = (prev.pos - curr.pos):Length() + (curr.pos - next.pos):Length()
-
-			-- Skip center if direct path is significantly shorter
-			if directDist < viaCenterDist * 0.8 then
-				table.insert(optimizedPath, next)
-				i = i + 2 -- Skip the area center
-			else
-				table.insert(optimizedPath, curr)
-				i = i + 1
-			end
-		else
-			table.insert(optimizedPath, curr)
-			i = i + 1
-		end
+		-- Since A* now naturally finds optimal door positions, we don't need complex optimization
+		-- Just add the current node to the path
+		table.insert(optimizedPath, curr)
+		i = i + 1
 	end
 
 	return optimizedPath
@@ -177,6 +187,9 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun, maxIterations
 		-- Goal reached -> reconstruct path
 		if current.id == goalNode.id then
 			local path = reconstructPath(cameFrom, startNode, current)
+			if not path then
+				print("A* Error: Path reconstruction failed from " .. startNode.id .. " to " .. goalNode.id)
+			end
 			-- Clean up before returning
 			for node in pairs(openSetLookup) do
 				openSetLookup[node] = nil
@@ -228,7 +241,7 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun, maxIterations
 
 				-- Found a better path?
 				if not gScore[nextNode] or tentativeGScore < gScore[nextNode] then
-					cameFrom[nextNode] = current
+					cameFrom[nextNode] = { node = current, doorPos = neighborData.doorPos }
 					gScore[nextNode] = tentativeGScore
 					fScore[nextNode] = tentativeGScore + heuristicCost(nextNode, goalNode)
 

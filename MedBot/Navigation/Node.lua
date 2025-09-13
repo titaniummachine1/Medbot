@@ -130,13 +130,16 @@ function Node.RemoveConnection(nodeA, nodeB)
 	end
 end
 
--- Pathfinding adjacency - optimized with door registry lookup
+-- Pathfinding adjacency - simple door rules
 function Node.GetAdjacentNodesSimple(node, nodes)
 	local neighbors = {}
 
 	if not node.c then
 		return neighbors
 	end
+
+	-- Determine if current node is a door (has doorPos)
+	local currentNodeIsDoor = node.doorPos ~= nil
 
 	for dirId, dir in pairs(node.c) do
 		if dir.connections then
@@ -148,11 +151,52 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 					-- Check if this connection is a door
 					local isDoor = connection.isDoor == true or targetNode.isDoor == true
 
-					table.insert(neighbors, {
-						node = targetNode,
-						cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
-						isDoor = isDoor,
-					})
+					if isDoor and type(connection) == "table" then
+						-- Door connection - add all door positions (left, middle, right)
+						if connection.left then
+							table.insert(neighbors, {
+								node = targetNode,
+								cost = (node.pos - connection.left):Length()
+									+ (ConnectionUtils.GetCost(connection) or 0),
+								isDoor = true,
+								doorPos = connection.left,
+							})
+						end
+
+						if connection.middle then
+							table.insert(neighbors, {
+								node = targetNode,
+								cost = (node.pos - connection.middle):Length()
+									+ (ConnectionUtils.GetCost(connection) or 0),
+								isDoor = true,
+								doorPos = connection.middle,
+							})
+						end
+
+						if connection.right then
+							table.insert(neighbors, {
+								node = targetNode,
+								cost = (node.pos - connection.right):Length()
+									+ (ConnectionUtils.GetCost(connection) or 0),
+								isDoor = true,
+								doorPos = connection.right,
+							})
+						end
+
+						-- Also add connection to area center as fallback
+						table.insert(neighbors, {
+							node = targetNode,
+							cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
+							isDoor = false,
+						})
+					else
+						-- Regular connection - add normal connection to area center
+						table.insert(neighbors, {
+							node = targetNode,
+							cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
+							isDoor = false,
+						})
+					end
 				end
 			end
 		end
