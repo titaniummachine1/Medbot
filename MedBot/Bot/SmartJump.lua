@@ -142,15 +142,16 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
     local targetPos = startPos + (velocity * deltaTime)
 
     -- Step-up trace
-    local uptrace = engine.TraceHull(startPos, startPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-    local stepposstart = uptrace.endpos
-
-    local downtrace = engine.TraceHull(targetPos, targetPos + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-    local steppostarget = downtrace.endpos
+	local uptrace = engine.TraceHull(targetPos + stepVector, targetPos, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+    local downpostarget = uptrace.endpos
 
     -- Forward collision check
-    local wallTrace = engine.TraceHull(stepposstart, steppostarget, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
-    targetPos = wallTrace.endpos
+    local wallTrace = engine.TraceHull(startPos + stepVector, downpostarget, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+    if wallTrace.fraction ~= 0 then
+		targetPos = wallTrace.endpos
+	else --stop movement on wall
+		targetPos = startPos
+	end
 
     -- Snap down to ground
     local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
