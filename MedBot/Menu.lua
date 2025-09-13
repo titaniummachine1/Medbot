@@ -40,9 +40,10 @@ local function OnDrawMenu()
 			TimMenu.Tooltip("Enables the main bot functionality")
 			TimMenu.NextLine()
 
-			-- Add Enable Walking toggle with proper default value handling
+			-- Add Enable Walking toggle
+			-- Initialize EnableWalking to true if not set
 			if G.Menu.Main.EnableWalking == nil then
-				G.Menu.Main.EnableWalking = true -- Default to true if not set
+				G.Menu.Main.EnableWalking = true
 			end
 			local newWalkingValue = TimMenu.Checkbox("Enable Walking", G.Menu.Main.EnableWalking)
 			-- Only update if value changed to avoid flickering
@@ -83,19 +84,12 @@ local function OnDrawMenu()
 			TimMenu.NextLine()
 
 			-- Smart Jump (works independently of MedBot enable state)
-			G.Menu.SmartJump = G.Menu.SmartJump or {}
-			G.Menu.SmartJump.Enable = G.Menu.SmartJump.Enable ~= false
-			local newSmartJumpValue = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
-			-- Only update if value changed to avoid flickering
-			if newSmartJumpValue ~= G.Menu.SmartJump.Enable then
-				G.Menu.SmartJump.Enable = newSmartJumpValue
+			local newEnable = TimMenu.Checkbox("Smart Jump", G.SmartJump.Enable)
+			if newEnable ~= G.SmartJump.Enable then
+				G.SmartJump.Enable = newEnable
+				print("SmartJump " .. (newEnable and "enabled" or "disabled"))
 			end
 			TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
-			TimMenu.NextLine()
-
-			G.Menu.SmartJump.Debug = G.Menu.SmartJump.Debug or false
-			G.Menu.SmartJump.Debug = TimMenu.Checkbox("Smart Jump Debug", G.Menu.SmartJump.Debug)
-			TimMenu.Tooltip("Print Smart Jump debug logs to console")
 			TimMenu.NextLine()
 
 			-- Path optimisation mode for following nodes

@@ -22,7 +22,7 @@ local CommandHandler = require("MedBot.Bot.CommandHandler")
 local HealthLogic = require("MedBot.Bot.HealthLogic")
 
 --[[ Additional Systems ]]
-require("MedBot.Bot.SmartJump")
+local SmartJump = require("MedBot.Bot.SmartJump")
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")
@@ -167,18 +167,26 @@ function handleMovingState(userCmd)
 	if now - (G.__lastWalkDebugTick or 0) > 15 then
 		local distVec = currentNode.pos - LocalOrigin
 		Log:Debug(
-			"Walking towards node id=%s dx=%.1f dy=%.1f dz=%.1f",
+			"Walking towards node id=%s dx=%.1f dy=%.1f dz=%.1f (Walking: %s)",
 			tostring(currentNode.id),
 			distVec.x,
 			distVec.y,
-			distVec.z
+			distVec.z,
+			G.Menu.Main.EnableWalking and "ON" or "OFF"
 		)
 		G.__lastWalkDebugTick = now
 	end
-	MovementController.walkTo(userCmd, G.pLocal.entity, currentNode.pos)
+
+	-- Only move if walking is enabled
+	if G.Menu.Main.EnableWalking then
+		MovementController.walkTo(userCmd, G.pLocal.entity, currentNode.pos)
+	else
+		-- Reset movement if walking is disabled
+		userCmd:SetForwardMove(0)
+		userCmd:SetSideMove(0)
+	end
 
 	-- Execute SmartJump after walkTo to use same cmd with bot's movement intent
-	local SmartJump = require("MedBot.Bot.SmartJump")
 	SmartJump.Main(userCmd)
 
 	-- Increment stuck counter

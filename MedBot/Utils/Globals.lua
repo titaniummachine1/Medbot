@@ -50,12 +50,47 @@ G.Navigation = {
 	navMeshUpdated = false, -- Set when navmesh is rebuilt
 }
 
--- SmartJump integration
-G.ShouldJump = false -- Set by SmartJump module when jump should be performed
-G.LastSmartJumpAttempt = 0 -- Track last time SmartJump was attempted
-G.LastEmergencyJump = 0 -- Track last emergency jump time
-G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
-G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
+-- SmartJump configuration
+G.Menu.SmartJump = {
+	Enable = true,
+	Debug = false,
+}
+
+-- SmartJump runtime state and constants
+G.SmartJump = G.SmartJump or {
+    -- Constants (must be defined first)
+    Constants = {
+        GRAVITY = 800, -- Gravity per second squared
+        JUMP_FORCE = 277, -- Initial vertical boost for a duck jump
+        MAX_JUMP_HEIGHT = Vector3(0, 0, 72), -- Maximum jump height vector
+        MAX_WALKABLE_ANGLE = 45, -- Maximum angle considered walkable
+
+        -- State definitions
+        STATE_IDLE = "STATE_IDLE",
+        STATE_PREPARE_JUMP = "STATE_PREPARE_JUMP",
+        STATE_CTAP = "STATE_CTAP",
+        STATE_ASCENDING = "STATE_ASCENDING",
+        STATE_DESCENDING = "STATE_DESCENDING"
+    },
+    
+    -- Runtime state
+    jumpState = "STATE_IDLE",
+    ShouldJump = false,
+    LastSmartJumpAttempt = 0,
+    LastEmergencyJump = 0,
+    ObstacleDetected = false,
+    RequestEmergencyJump = false,
+    
+    -- Movement state
+    SimulationPath = {},
+    PredPos = nil,
+    JumpPeekPos = nil,
+    HitObstacle = false,
+    lastAngle = nil,
+    stateStartTime = 0,
+    lastState = nil,
+    lastJumpTime = 0
+}
 
 -- Bot movement tracking (for SmartJump integration)
 G.BotIsMoving = false -- Track if bot is actively moving

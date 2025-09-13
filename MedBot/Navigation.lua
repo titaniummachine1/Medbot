@@ -526,9 +526,6 @@ local function FastStop(pCmd, pLocal)
 	pCmd:SetSideMove(ndir.y * wishspeed)
 end
 
--- WalkTo functionality has been moved to MovementController.walkTo
--- Please use MovementController.walkTo directly
-
 ---@param pos Vector3|{ x:number, y:number, z:number }
 ---@return Node|nil
 function Navigation.GetClosestNode(pos)

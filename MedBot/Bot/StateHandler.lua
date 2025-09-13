@@ -9,7 +9,7 @@ local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
 local ISWalkable = require("MedBot.Navigation.ISWalkable")
-local SmartJump = require("MedBot.Movement.SmartJump")
+local SmartJump = require("MedBot.Bot.SmartJump")
 
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
@@ -27,43 +27,39 @@ end
 
 function StateHandler.handleIdleState()
 	G.BotIsMoving = false
-    
-    -- Ensure navigation is ready before any goal work
-    if not G.Navigation.nodes or not next(G.Navigation.nodes) then
-        Log:Debug("No navigation nodes available, staying in IDLE state")
-        return
-    end
 
-    -- Use WorkManager's simple cooldown pattern instead of complex priority system
-    if not WorkManager.attemptWork(5, "goal_search") then
-        return -- Still on cooldown
-    end
+	-- Ensure navigation is ready before any goal work
+	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
+		Log:Debug("No navigation nodes available, staying in IDLE state")
+		return
+	end
 
-    -- Check for immediate goals 
-    local goalNode, goalPos = GoalFinder.findGoal("Objective")
+	-- Use WorkManager's simple cooldown pattern instead of complex priority system
+	if not WorkManager.attemptWork(5, "goal_search") then
+		return -- Still on cooldown
+	end
+
+	-- Check for immediate goals
+	local goalNode, goalPos = GoalFinder.findGoal("Objective")
 	if goalNode and goalPos then
 		local distance = (G.pLocal.Origin - goalPos):Length()
 
 		-- Only use direct-walk shortcut outside CTF and for short hops
-        local mapName = engine.GetMapName():lower()
-        local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
-        if allowDirectWalk then
-            local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-            walkMode = "Aggressive" -- short hops favor aggressive checks
-            if ISWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
-                Log:Info(
-                    "Direct-walk (short hop) with %s, moving immediately (dist: %.1f)",
-                    walkMode,
-                    distance
-                )
-                G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-                G.Navigation.goalPos = goalPos
-                G.Navigation.goalNodeId = goalNode.id
-                G.currentState = G.States.MOVING
-                G.lastPathfindingTick = globals.TickCount()
-                return
-            end
-        end
+		local mapName = engine.GetMapName():lower()
+		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
+		if allowDirectWalk then
+			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+			walkMode = "Aggressive" -- short hops favor aggressive checks
+			if ISWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
+				Log:Info("Direct-walk (short hop) with %s, moving immediately (dist: %.1f)", walkMode, distance)
+				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+				G.Navigation.goalPos = goalPos
+				G.Navigation.goalNodeId = goalNode.id
+				G.currentState = G.States.MOVING
+				G.lastPathfindingTick = globals.TickCount()
+				return
+			end
+		end
 
 		-- Check if goal has changed significantly from current path
 		if G.Navigation.goalPos then
@@ -75,8 +71,8 @@ function StateHandler.handleIdleState()
 		end
 	end
 
-    -- Prevent pathfinding spam by limiting frequency
-    local currentTick = globals.TickCount()
+	-- Prevent pathfinding spam by limiting frequency
+	local currentTick = globals.TickCount()
 	if not G.lastPathfindingTick then
 		G.lastPathfindingTick = 0
 	end
@@ -86,7 +82,7 @@ function StateHandler.handleIdleState()
 		return
 	end
 
-    -- (nodes were already checked above)
+	-- (nodes were already checked above)
 
 	local startNode = Navigation.GetClosestNode(G.pLocal.Origin)
 	if not startNode then
@@ -94,18 +90,18 @@ function StateHandler.handleIdleState()
 		return
 	end
 
-    if not goalNode then
-        goalNode, goalPos = GoalFinder.findGoal("Objective")
-    end
-    if not goalNode then
-        -- Throttle warn to avoid log spam
-        G.lastNoGoalWarnTick = G.lastNoGoalWarnTick or 0
-        if currentTick - G.lastNoGoalWarnTick > 60 then
-            Log:Warn("Could not find goal node")
-            G.lastNoGoalWarnTick = currentTick
-        end
-        return
-    end
+	if not goalNode then
+		goalNode, goalPos = GoalFinder.findGoal("Objective")
+	end
+	if not goalNode then
+		-- Throttle warn to avoid log spam
+		G.lastNoGoalWarnTick = G.lastNoGoalWarnTick or 0
+		if currentTick - G.lastNoGoalWarnTick > 60 then
+			Log:Warn("Could not find goal node")
+			G.lastNoGoalWarnTick = currentTick
+		end
+		return
+	end
 
 	G.Navigation.goalPos = goalPos
 	G.Navigation.goalNodeId = goalNode and goalNode.id or nil
@@ -115,7 +111,7 @@ function StateHandler.handleIdleState()
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
 		local mapName = engine.GetMapName():lower()
 
-		-- Use aggressive mode for CTF intel objectives  
+		-- Use aggressive mode for CTF intel objectives
 		if mapName:find("ctf_") then
 			local pLocal = G.pLocal.entity
 			local myItem = pLocal:GetPropInt("m_hItem")
@@ -284,11 +280,11 @@ function StateHandler.handleStuckState(userCmd)
 	else
 		-- Try SmartJump for emergency unstuck after being stuck for a while
 		if stuckDuration > 66 and stuckDuration < 132 then -- Between 1-2 seconds
-			if SmartJump.Execute(userCmd) then
+			if SmartJump.Main(userCmd) then
 				Log:Info("Emergency SmartJump executed while stuck")
 			end
 		end
-		
+
 		-- Only switch back to MOVING if we've been stuck for at least 0.5 seconds
 		if stuckDuration > 33 then
 			G.Navigation.stuckStartTick = nil

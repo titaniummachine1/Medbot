@@ -71,50 +71,50 @@ end
 local UP_VECTOR = Vector3(0, 0, 1)
 
 local function ArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
-	if not (start_pos and end_pos) then
-		return
-	end
+    if not (start_pos and end_pos) then
+        return
+    end
 
-	-- If invert is true, swap start_pos and end_pos
-	if invert then
-		start_pos, end_pos = end_pos, start_pos
-	end
+    -- If invert is true, swap start_pos and end_pos
+    if invert then
+        start_pos, end_pos = end_pos, start_pos
+    end
 
-	-- Calculate direction from start to end
-	local direction = end_pos - start_pos
-	local direction_length = direction:Length()
-	if direction_length == 0 then
-		return
-	end
+    -- Calculate direction from start to end
+    local direction = end_pos - start_pos
+    local direction_length = direction:Length()
+    if direction_length == 0 then
+        return
+    end
 
-	-- Normalize the direction vector
-	local normalized_direction = direction / direction_length
+    -- Normalize the direction vector safely
+    local normalized_direction = direction / direction_length
 
-	-- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
-	local arrow_base = end_pos - normalized_direction * arrowhead_length
+    -- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
+    local arrow_base = end_pos - normalized_direction * arrowhead_length
 
-	-- Calculate the perpendicular vector for the arrow width
-	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
+    -- Calculate the perpendicular vector for the arrow width
+    local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
 
-	-- Convert world positions to screen positions
-	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-	local w2s_arrow_base = client.WorldToScreen(arrow_base)
-	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
-	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
+    -- Convert world positions to screen positions
+    local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
+    local w2s_arrow_base = client.WorldToScreen(arrow_base)
+    local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
+    local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
 
-	if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
-		return
-	end
+    if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
+        return
+    end
 
-	-- Draw the line from start to the base of the arrow (not all the way to the end)
-	draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
+    -- Draw the line from start to the base of the arrow (not all the way to the end)
+    draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
 
-	-- Draw the sides of the arrowhead
-	draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
-	draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
+    -- Draw the sides of the arrowhead
+    draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
+    draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
 
-	-- Optionally, draw the base of the arrowhead to close it
-	draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
+    -- Optionally, draw the base of the arrowhead to close it
+    draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
 end
 
 -- 1×1 white texture for filled polygons
@@ -122,25 +122,25 @@ local white_texture_fill = draw.CreateTextureRGBA(string.char(0xff, 0xff, 0xff, 
 
 -- fillPolygon(vertices: {{x,y}}, r,g,b,a): filled convex polygon
 local function fillPolygon(vertices, r, g, b, a)
-	draw.Color(r, g, b, a)
-	local n = #vertices
-	local cords, rev = {}, {}
-	local sum = 0
-	local v1x, v1y = vertices[1][1], vertices[1][2]
-	local function cross(a, b)
-		return (b[1] - a[1]) * (v1y - a[2]) - (b[2] - a[2]) * (v1x - a[1])
-	end
-	for i, v in ipairs(vertices) do
-		cords[i] = { v[1], v[2], 0, 0 }
-		rev[n - i + 1] = cords[i]
-		local nxt = vertices[i % n + 1]
-		sum = sum + cross(v, nxt)
-	end
-	draw.TexturedPolygon(white_texture_fill, (sum < 0 and rev or cords), true)
+    draw.Color(r, g, b, a)
+    local n = #vertices
+    local cords, rev = {}, {}
+    local sum = 0
+    local v1x, v1y = vertices[1][1], vertices[1][2]
+    local function cross(a, b)
+        return (b[1] - a[1]) * (v1y - a[2]) - (b[2] - a[2]) * (v1x - a[1])
+    end
+    for i, v in ipairs(vertices) do
+        cords[i] = { v[1], v[2], 0, 0 }
+        rev[n - i + 1] = cords[i]
+        local nxt = vertices[i % n + 1]
+        sum = sum + cross(v, nxt)
+    end
+    draw.TexturedPolygon(white_texture_fill, (sum < 0 and rev or cords), true)
 end
 
 -- Easy color configuration for area rendering
-local AREA_FILL_COLOR = { 55, 255, 155, 12 } -- r, g, b, a for filled area
+local AREA_FILL_COLOR = { 55, 255, 155, 12 }     -- r, g, b, a for filled area
 local AREA_OUTLINE_COLOR = { 255, 255, 255, 77 } -- r, g, b, a for area outline
 
 -- Convert world position to chunk cell
@@ -228,9 +228,8 @@ end
 
 
 local function OnDraw()
-
-        draw.SetFont(Fonts.Verdana)
-	draw.Color(255, 0, 0, 255)
+    draw.SetFont(Fonts.Verdana)
+    draw.Color(255, 0, 0, 255)
 
     local me = entities.GetLocalPlayer()
     if not me then
@@ -241,17 +240,17 @@ local function OnDraw()
         return
     end
 
-        local currentY = 120
-	-- Draw memory usage if enabled in config
-	if G.Menu.Visuals.memoryUsage then
-		draw.SetFont(Fonts.Verdana) -- Ensure font is set before drawing text
-		draw.Color(255, 255, 255, 200)
-		-- Get current memory usage directly for real-time display
-		local currentMemKB = collectgarbage("count")
-		local memMB = currentMemKB / 1024
-		draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
-		currentY = currentY + 20
-	end
+    local currentY = 120
+    -- Draw memory usage if enabled in config
+    if G.Menu.Visuals.memoryUsage then
+        draw.SetFont(Fonts.Verdana) -- Ensure font is set before drawing text
+        draw.Color(255, 255, 255, 200)
+        -- Get current memory usage directly for real-time display
+        local currentMemKB = collectgarbage("count")
+        local memMB = currentMemKB / 1024
+        draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
+        currentY = currentY + 20
+    end
     -- Collect visible nodes using chunk grid and Manhattan render radius
     Visuals.MaybeRebuildGrid()
     collectVisible(me)
@@ -261,23 +260,23 @@ local function OnDraw()
         -- Inline distance check for bundle compatibility
         return (pos - p):Length() <= renderRadius
     end
-        local visibleNodes = {}
-        for i = 1, visCount do
-            -- local nodeA = Node.GetNodeByID(connection.areaID) -- Temporarily disabled
-            -- local nodeB = Node.GetNodeByID(connection.targetAreaID) -- Temporarily disabled
-            local nodeA, nodeB = nil, nil
-            local id = visBuf[i]
-            local node = G.Navigation.nodes[id]
-            if node then
-                -- Use withinRadius for consistent distance culling
-                if withinRadius(node.pos) then
-                    local scr = client.WorldToScreen(node.pos)
-                    if scr then
-                        visibleNodes[id] = { node = node, screen = scr }
-                    end
+    local visibleNodes = {}
+    for i = 1, visCount do
+        -- local nodeA = Node.GetNodeByID(connection.areaID) -- Temporarily disabled
+        -- local nodeB = Node.GetNodeByID(connection.targetAreaID) -- Temporarily disabled
+        local nodeA, nodeB = nil, nil
+        local id = visBuf[i]
+        local node = G.Navigation.nodes[id]
+        if node then
+            -- Use withinRadius for consistent distance culling
+            if withinRadius(node.pos) then
+                local scr = client.WorldToScreen(node.pos)
+                if scr then
+                    visibleNodes[id] = { node = node, screen = scr }
                 end
             end
         end
+    end
     G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
     if G.Navigation.currentNodeIndex == nil then
         return
@@ -308,12 +307,12 @@ local function OnDraw()
 
     -- Show connections between nav nodes (colored by directionality)
     if G.Menu.Visuals.showConnections then
-		for id, entry in pairs(visibleNodes) do
-			local node = entry.node
+        for id, entry in pairs(visibleNodes) do
+            local node = entry.node
             if not withinRadius(node.pos) then goto continue_node end
-			for dir = 1, 4 do
-				local cDir = node.c[dir]
-				if cDir and cDir.connections then
+            for dir = 1, 4 do
+                local cDir = node.c[dir]
+                if cDir and cDir.connections then
                     for _, conn in ipairs(cDir.connections) do
                         local nid = (type(conn) == "table") and conn.node or conn
                         local otherNode = G.Navigation.nodes and G.Navigation.nodes[nid]
@@ -324,42 +323,42 @@ local function OnDraw()
                             local s1 = client.WorldToScreen(pos1)
                             local s2 = client.WorldToScreen(pos2)
                             if s1 and s2 then
-							-- determine if other->id exists in its connections
-							local bidir = false
-                            
-							for d2 = 1, 4 do
-								local otherCDir = otherNode.c[d2]
-								if otherCDir and otherCDir.connections then
-                                    for _, backConn in ipairs(otherCDir.connections) do
-                                        local backId = (type(backConn) == "table") and backConn.node or backConn
-                                        if backId == id then
-											bidir = true
-											break
-										end
-									end
-									if bidir then
-										break
-									end
-								end
-							end
-							-- yellow for two-way, red for one-way
+                                -- determine if other->id exists in its connections
+                                local bidir = false
+
+                                for d2 = 1, 4 do
+                                    local otherCDir = otherNode.c[d2]
+                                    if otherCDir and otherCDir.connections then
+                                        for _, backConn in ipairs(otherCDir.connections) do
+                                            local backId = (type(backConn) == "table") and backConn.node or backConn
+                                            if backId == id then
+                                                bidir = true
+                                                break
+                                            end
+                                        end
+                                        if bidir then
+                                            break
+                                        end
+                                    end
+                                end
+                                -- yellow for two-way, red for one-way
                                 if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
                                 draw.Line(s1[1], s1[2], s2[1], s2[2])
                             end
                             ::continue_conn::
                         end
-					end
-				end
-			end
+                    end
+                end
+            end
             ::continue_node::
-		end
-	end
+        end
+    end
 
-    -- Draw corner connections from node-level data (if enabled) 
+    -- Draw corner connections from node-level data (if enabled)
     if G.Menu.Visuals.showCornerConnections then
         local wallCornerCount = 0
         local allCornerCount = 0
-        
+
         for id, entry in pairs(visibleNodes) do
             local node = entry.node
             -- Draw all corners (green for inside corners)
@@ -370,13 +369,13 @@ local function OnDraw()
                         local cornerScreen = client.WorldToScreen(cornerPoint)
                         if cornerScreen then
                             draw.Color(0, 255, 0, 200) -- Green for inside corners
-                            draw.FilledRect(cornerScreen[1] - 2, cornerScreen[2] - 2, 
-                                          cornerScreen[1] + 2, cornerScreen[2] + 2)
+                            draw.FilledRect(cornerScreen[1] - 2, cornerScreen[2] - 2,
+                                cornerScreen[1] + 2, cornerScreen[2] + 2)
                         end
                     end
                 end
             end
-            
+
             -- Draw wall corners (orange squares)
             if node.wallCorners then
                 for _, cornerPoint in ipairs(node.wallCorners) do
@@ -385,14 +384,14 @@ local function OnDraw()
                         local cornerScreen = client.WorldToScreen(cornerPoint)
                         if cornerScreen then
                             draw.Color(255, 165, 0, 200) -- Orange for wall corners
-                            draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3, 
-                                          cornerScreen[1] + 3, cornerScreen[2] + 3)
+                            draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3,
+                                cornerScreen[1] + 3, cornerScreen[2] + 3)
                         end
                     end
                 end
             end
         end
-        
+
         -- Debug output in top-left corner
         if wallCornerCount > 0 or allCornerCount > 0 then
             draw.Color(255, 255, 255, 255)
@@ -445,224 +444,223 @@ local function OnDraw()
         end
     end
 
-	-- Fill and outline areas using fixed corners from Navigation
+    -- Fill and outline areas using fixed corners from Navigation
     if G.Menu.Visuals.showAreas then
-		for id, entry in pairs(visibleNodes) do
-			local node = entry.node
-			-- Collect the four corner vectors from the node
-			local worldCorners = { node.nw, node.ne, node.se, node.sw }
-			local scr = {}
-			local ok = true
-			for i, corner in ipairs(worldCorners) do
-				local s = client.WorldToScreen(corner)
-				if not s then
-					ok = false
-					break
-				end
-				scr[i] = { s[1], s[2] }
-			end
-			if ok then
-				-- filled polygon
-				fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
-				-- outline
-				draw.Color(table.unpack(AREA_OUTLINE_COLOR))
-				for i = 1, 4 do
-					local a = scr[i]
-					local b = scr[i % 4 + 1]
-					draw.Line(a[1], a[2], b[1], b[2])
-				end
-			end
-		end
-	end
+        for id, entry in pairs(visibleNodes) do
+            local node = entry.node
+            -- Collect the four corner vectors from the node
+            local worldCorners = { node.nw, node.ne, node.se, node.sw }
+            local scr = {}
+            local ok = true
+            for i, corner in ipairs(worldCorners) do
+                local s = client.WorldToScreen(corner)
+                if not s then
+                    ok = false
+                    break
+                end
+                scr[i] = { s[1], s[2] }
+            end
+            if ok then
+                -- filled polygon
+                fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
+                -- outline
+                draw.Color(table.unpack(AREA_OUTLINE_COLOR))
+                for i = 1, 4 do
+                    local a = scr[i]
+                    local b = scr[i % 4 + 1]
+                    draw.Line(a[1], a[2], b[1], b[2])
+                end
+            end
+        end
+    end
 
     -- Fine points removed
-        if false then
-                -- Track drawn inter-area connections to avoid duplicates
-                local drawnInterConnections = {}
-                local drawnIntraConnections = {}
+    if false then
+        -- Track drawn inter-area connections to avoid duplicates
+        local drawnInterConnections = {}
+        local drawnIntraConnections = {}
 
-		for id, entry in pairs(visibleNodes) do
-			local points = Node.GetAreaPoints(id)
-			if points then
-				-- First pass: draw connections if enabled
-				for _, point in ipairs(points) do
-					local screenPos = client.WorldToScreen(point.pos)
-					if screenPos then
-						for _, neighbor in ipairs(point.neighbors) do
-							local neighborScreenPos = client.WorldToScreen(neighbor.point.pos)
-							if neighborScreenPos then
-								if neighbor.isInterArea and G.Menu.Visuals.showInterConnections then
-									-- Orange for inter-area connections
-									local connectionKey = string.format(
-										"%d_%d-%d_%d",
-										point.parentArea,
-										point.id,
-										neighbor.point.parentArea,
-										neighbor.point.id
-									)
-									if not drawnInterConnections[connectionKey] then
-										draw.Color(255, 165, 0, 180) -- Orange for inter-area connections
-										draw.Line(
-											screenPos[1],
-											screenPos[2],
-											neighborScreenPos[1],
-											neighborScreenPos[2]
-										)
-										drawnInterConnections[connectionKey] = true
-									end
-								elseif not neighbor.isInterArea then
-									-- Intra-area connections with different colors based on type
-									local connectionKey = string.format(
-										"%d_%d-%d_%d",
-										math.min(point.id, neighbor.point.id),
-										point.parentArea,
-										math.max(point.id, neighbor.point.id),
-										neighbor.point.parentArea
-									)
-									if not drawnIntraConnections[connectionKey] then
-										if
-											point.isEdge
-											and neighbor.point.isEdge
-											and G.Menu.Visuals.showEdgeConnections
-										then
-											draw.Color(0, 150, 255, 140) -- Bright blue for edge-to-edge connections
-											draw.Line(
-												screenPos[1],
-												screenPos[2],
-												neighborScreenPos[1],
-												neighborScreenPos[2]
-											)
-											drawnIntraConnections[connectionKey] = true
-										elseif G.Menu.Visuals.showIntraConnections then
-											draw.Color(0, 100, 200, 60) -- Blue for regular intra-area connections
-											draw.Line(
-												screenPos[1],
-												screenPos[2],
-												neighborScreenPos[1],
-												neighborScreenPos[2]
-											)
-											drawnIntraConnections[connectionKey] = true
-										end
-									end
-								end
-							end
-						end
-					end
-				end
+        for id, entry in pairs(visibleNodes) do
+            local points = Node.GetAreaPoints(id)
+            if points then
+                -- First pass: draw connections if enabled
+                for _, point in ipairs(points) do
+                    local screenPos = client.WorldToScreen(point.pos)
+                    if screenPos then
+                        for _, neighbor in ipairs(point.neighbors) do
+                            local neighborScreenPos = client.WorldToScreen(neighbor.point.pos)
+                            if neighborScreenPos then
+                                if neighbor.isInterArea and G.Menu.Visuals.showInterConnections then
+                                    -- Orange for inter-area connections
+                                    local connectionKey = string.format(
+                                        "%d_%d-%d_%d",
+                                        point.parentArea,
+                                        point.id,
+                                        neighbor.point.parentArea,
+                                        neighbor.point.id
+                                    )
+                                    if not drawnInterConnections[connectionKey] then
+                                        draw.Color(255, 165, 0, 180) -- Orange for inter-area connections
+                                        draw.Line(
+                                            screenPos[1],
+                                            screenPos[2],
+                                            neighborScreenPos[1],
+                                            neighborScreenPos[2]
+                                        )
+                                        drawnInterConnections[connectionKey] = true
+                                    end
+                                elseif not neighbor.isInterArea then
+                                    -- Intra-area connections with different colors based on type
+                                    local connectionKey = string.format(
+                                        "%d_%d-%d_%d",
+                                        math.min(point.id, neighbor.point.id),
+                                        point.parentArea,
+                                        math.max(point.id, neighbor.point.id),
+                                        neighbor.point.parentArea
+                                    )
+                                    if not drawnIntraConnections[connectionKey] then
+                                        if
+                                            point.isEdge
+                                            and neighbor.point.isEdge
+                                            and G.Menu.Visuals.showEdgeConnections
+                                        then
+                                            draw.Color(0, 150, 255, 140) -- Bright blue for edge-to-edge connections
+                                            draw.Line(
+                                                screenPos[1],
+                                                screenPos[2],
+                                                neighborScreenPos[1],
+                                                neighborScreenPos[2]
+                                            )
+                                            drawnIntraConnections[connectionKey] = true
+                                        elseif G.Menu.Visuals.showIntraConnections then
+                                            draw.Color(0, 100, 200, 60) -- Blue for regular intra-area connections
+                                            draw.Line(
+                                                screenPos[1],
+                                                screenPos[2],
+                                                neighborScreenPos[1],
+                                                neighborScreenPos[2]
+                                            )
+                                            drawnIntraConnections[connectionKey] = true
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
 
-				-- Second pass: draw points (so they appear on top of lines)
-				for _, point in ipairs(points) do
-					local screenPos = client.WorldToScreen(point.pos)
-					if screenPos then
-						-- Color-code points: yellow for edge points, blue for regular points
-						if point.isEdge then
-							draw.Color(255, 255, 0, 220) -- Yellow for edge points
-							draw.FilledRect(screenPos[1] - 2, screenPos[2] - 2, screenPos[1] + 2, screenPos[2] + 2)
-						else
-							draw.Color(0, 150, 255, 180) -- Light blue for regular points
-							draw.FilledRect(screenPos[1] - 1, screenPos[2] - 1, screenPos[1] + 1, screenPos[2] + 1)
-						end
-					end
-				end
-			end
-		end
+                -- Second pass: draw points (so they appear on top of lines)
+                for _, point in ipairs(points) do
+                    local screenPos = client.WorldToScreen(point.pos)
+                    if screenPos then
+                        -- Color-code points: yellow for edge points, blue for regular points
+                        if point.isEdge then
+                            draw.Color(255, 255, 0, 220) -- Yellow for edge points
+                            draw.FilledRect(screenPos[1] - 2, screenPos[2] - 2, screenPos[1] + 2, screenPos[2] + 2)
+                        else
+                            draw.Color(0, 150, 255, 180) -- Light blue for regular points
+                            draw.FilledRect(screenPos[1] - 1, screenPos[2] - 1, screenPos[1] + 1, screenPos[2] + 1)
+                        end
+                    end
+                end
+            end
+        end
 
-		-- Show fine point statistics for areas with points
-		local finePointStats = {}
-		for id, entry in pairs(visibleNodes) do
-			local points = Node.GetAreaPoints(id)
-			if points and #points > 1 then -- Only count areas with multiple points
-				local edgeCount = 0
-				local interConnections = 0
-				local intraConnections = 0
-				local isolatedPoints = 0
-				for _, point in ipairs(points) do
-					if point.isEdge then
-						edgeCount = edgeCount + 1
-					end
-					if #point.neighbors == 0 then
-						isolatedPoints = isolatedPoints + 1
-					end
-					for _, neighbor in ipairs(point.neighbors) do
-						if neighbor.isInterArea then
-							interConnections = interConnections + 1
-						else
-							intraConnections = intraConnections + 1
-						end
-					end
-				end
-				table.insert(finePointStats, {
-					id = id,
-					totalPoints = #points,
-					edgePoints = edgeCount,
-					interConnections = interConnections,
-					intraConnections = intraConnections,
-					isolatedPoints = isolatedPoints,
-				})
-			end
-		end
-	end
+        -- Show fine point statistics for areas with points
+        local finePointStats = {}
+        for id, entry in pairs(visibleNodes) do
+            local points = Node.GetAreaPoints(id)
+            if points and #points > 1 then -- Only count areas with multiple points
+                local edgeCount = 0
+                local interConnections = 0
+                local intraConnections = 0
+                local isolatedPoints = 0
+                for _, point in ipairs(points) do
+                    if point.isEdge then
+                        edgeCount = edgeCount + 1
+                    end
+                    if #point.neighbors == 0 then
+                        isolatedPoints = isolatedPoints + 1
+                    end
+                    for _, neighbor in ipairs(point.neighbors) do
+                        if neighbor.isInterArea then
+                            interConnections = interConnections + 1
+                        else
+                            intraConnections = intraConnections + 1
+                        end
+                    end
+                end
+                table.insert(finePointStats, {
+                    id = id,
+                    totalPoints = #points,
+                    edgePoints = edgeCount,
+                    interConnections = interConnections,
+                    intraConnections = intraConnections,
+                    isolatedPoints = isolatedPoints,
+                })
+            end
+        end
+    end
 
-	-- Draw all nodes
+    -- Draw all nodes
     if G.Menu.Visuals.drawNodes then
-		draw.Color(0, 255, 0, 255)
-		for id, entry in pairs(visibleNodes) do
-			local s = entry.screen
-			draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
-			if G.Menu.Visuals.drawNodeIDs then
-				draw.Text(s[1], s[2] + 10, tostring(id))
-			end
-		end
-	end
+        draw.Color(0, 255, 0, 255)
+        for id, entry in pairs(visibleNodes) do
+            local s = entry.screen
+            draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
+            if G.Menu.Visuals.drawNodeIDs then
+                draw.Text(s[1], s[2] + 10, tostring(id))
+            end
+        end
+    end
 
-    	-- Draw only the actual-followed path using door-aware waypoints, with a live target arrow
+    -- Draw only the actual-followed path using door-aware waypoints, with a live target arrow
     if G.Menu.Visuals.drawPath and G.Navigation.path and #G.Navigation.path > 0 then
         -- Draw the full path with arrows
         local prevPos = nil
         local localPos = G.pLocal and G.pLocal.Origin
-        
+
         -- Start with player position if we have it
         if localPos then
             prevPos = localPos
         end
-        
+
         -- Draw path segments
         for i = G.Navigation.currentIndex or 1, #G.Navigation.path do
             local node = G.Navigation.path[i]
-            if node then
-                local nodePos = node and node.pos  -- Use node position directly
+            if node and node.pos then
+                local nodePos = node.pos
                 if nodePos and prevPos then
                     local screenStart = client.WorldToScreen(prevPos)
                     local screenEnd = client.WorldToScreen(nodePos)
-                    
+
                     if screenStart and screenEnd then
                         -- Draw line segment
-                        draw.Color(0, 255, 0, 200)  -- Green path
+                        draw.Color(0, 255, 0, 200) -- Green path
                         draw.Line(screenStart[1], screenStart[2], screenEnd[1], screenEnd[2])
-                        
-                        -- Draw arrow head
+
+                        -- Draw arrow head using Common.Normalize
                         local diff = nodePos - prevPos
-                        local length = math.sqrt(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z)
-                        local dir = length > 0 and Vector3(diff.x / length, diff.y / length, diff.z / length) or Vector3(0, 0, 0)
-                        local perp = Vector3(-dir.y, dir.x, 0) * 5  -- Perpendicular vector for arrow wings
-                        local arrowBase = nodePos - dir * 10  -- Move arrow base back a bit
-                        
+                        local dir = Common.Normalize(diff)
+                        local perp = Vector3(-dir.y, dir.x, 0) * 5 -- Perpendicular vector for arrow wings
+                        local arrowBase = nodePos - dir * 10       -- Move arrow base back a bit
+
                         local baseScreen = client.WorldToScreen(arrowBase)
                         local leftWing = client.WorldToScreen(arrowBase + perp)
                         local rightWing = client.WorldToScreen(arrowBase - perp)
-                        
+
                         if baseScreen and leftWing and rightWing then
-                            -- Draw triangle using lines
-                            draw.Line(screenEnd[1], screenEnd[2], leftWing[1], leftWing[2])
-                            draw.Line(leftWing[1], leftWing[2], rightWing[1], rightWing[2])
-                            draw.Line(rightWing[1], rightWing[2], screenEnd[1], screenEnd[2])
+                            -- Draw arrow head using lines instead of Triangle
+                            draw.Line(screenEnd[1], screenEnd[2], leftWing[1], leftWing[2])  -- Left wing
+                            draw.Line(screenEnd[1], screenEnd[2], rightWing[1], rightWing[2]) -- Right wing
+                            draw.Line(leftWing[1], leftWing[2], rightWing[1], rightWing[2])   -- Base of arrow
                         end
                     end
                 end
                 prevPos = nodePos
             end
         end
-        
+
         -- Draw waypoints (if any)
         local wps = G.Navigation.waypoints or {}
         if wps and #wps > 0 then
@@ -702,7 +700,7 @@ local function OnDraw()
                     if G._lastStuckWalkableResult then
                         arrowR, arrowG, arrowB = 255, 255, 0 -- yellow: stuck but walkable
                     else
-                        arrowR, arrowG, arrowB = 255, 0, 0 -- red: stuck and blocked
+                        arrowR, arrowG, arrowB = 255, 0, 0   -- red: stuck and blocked
                     end
                 end
                 draw.Color(arrowR, arrowG, arrowB, 255)
@@ -722,7 +720,7 @@ local function OnDraw()
         end
     end
 
-	-- Draw current target node with improved visibility
+    -- Draw current target node with improved visibility
     if G.Menu.Visuals.drawCurrentNode and G.Navigation.path and G.Navigation.currentTargetNode then
         -- Draw the target position
         local targetPos = G.Navigation.currentTargetPos
@@ -732,19 +730,16 @@ local function OnDraw()
             draw.Color(255, 0, 0, 200 * pulse)
             local screenPos = client.WorldToScreen(targetPos)
             if screenPos then
-                -- Draw a simple cross for the target position
-                local size = 10
-                draw.Line(screenPos[1] - size, screenPos[2], screenPos[1] + size, screenPos[2])
-                draw.Line(screenPos[1], screenPos[2] - size, screenPos[1], screenPos[2] + size)
+                draw.Circle(screenPos[1], screenPos[2], 10, 12) -- Larger, pulsing circle
             end
-            
+
             -- Draw a line from player to target
             local localPos = G.pLocal and G.pLocal.Origin
             if localPos then
                 local targetScreen = client.WorldToScreen(targetPos)
                 local localScreen = client.WorldToScreen(localPos)
                 if targetScreen and localScreen then
-                    draw.Color(255, 255, 0, 150)  -- Yellow line
+                    draw.Color(255, 255, 0, 150) -- Yellow line
                     draw.Line(
                         localScreen[1], localScreen[2],
                         targetScreen[1], targetScreen[2]
@@ -753,12 +748,12 @@ local function OnDraw()
             end
         end
     end
-    
+
     -- Draw current node in path (legacy, keeping for compatibility)
     if G.Menu.Visuals.drawCurrentNode and G.Navigation.path and G.Navigation.currentIndex then
         draw.Color(255, 0, 0, 150)
         local currentNode = G.Navigation.path[G.Navigation.currentIndex]
-		local currentNodePos = currentNode.pos
+        local currentNodePos = currentNode.pos
 
         local screenPos = client.WorldToScreen(currentNodePos)
         if screenPos then
@@ -774,12 +769,12 @@ local function OnDraw()
         for i = 1, pathCount - 1 do
             local startPos = G.SmartJump.SimulationPath[i]
             local endPos = G.SmartJump.SimulationPath[i + 1]
-            
+
             -- Guard clause: ensure positions are valid Vector3 objects
             if startPos and endPos then
                 local startScreen = client.WorldToScreen(startPos)
                 local endScreen = client.WorldToScreen(endPos)
-                
+
                 if startScreen and endScreen then
                     -- Color gradient like AutoPeek (brighter at end)
                     local brightness = math.floor(100 + (155 * (i / pathCount)))
@@ -788,14 +783,14 @@ local function OnDraw()
                 end
             end
         end
-        
+
         -- Draw jump landing position if available (lines only, no boxes)
         if G.SmartJump and G.SmartJump.JumpPeekPos and G.SmartJump.PredPos then
             local jumpPos = G.SmartJump.JumpPeekPos
             local predPos = G.SmartJump.PredPos
             local jumpScreen = client.WorldToScreen(jumpPos)
             local predScreen = client.WorldToScreen(predPos)
-            
+
             if jumpScreen and predScreen then
                 draw.Color(255, 255, 0, 180) -- Yellow jump arc
                 draw.Line(predScreen[1], predScreen[2], jumpScreen[1], jumpScreen[2])
@@ -805,7 +800,7 @@ local function OnDraw()
 end
 
 --[[ Callbacks ]]
-callbacks.Unregister("Draw", "MCT_Draw") -- unregister the "Draw" callback
+callbacks.Unregister("Draw", "MCT_Draw")       -- unregister the "Draw" callback
 callbacks.Register("Draw", "MCT_Draw", OnDraw) -- Register the "Draw" callback
 
 return Visuals

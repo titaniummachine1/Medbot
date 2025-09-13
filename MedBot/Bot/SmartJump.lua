@@ -3,10 +3,20 @@
 -- Detects when the player should jump to clear obstacles
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Utils.Globals")
-local Prediction = require("MedBot.Deprecated.Prediction")
 
 local Log = Common.Log.new("SmartJump")
 Log.Level = 0 -- Default log level
+
+-- Alias for easier access to SmartJump state and constants
+local SJ = G.SmartJump
+local SJC = G.SmartJump.Constants
+
+-- Backwards compatibility for code that uses STATE_* directly
+local STATE_IDLE = SJC.STATE_IDLE
+local STATE_PREPARE_JUMP = SJC.STATE_PREPARE_JUMP
+local STATE_CTAP = SJC.STATE_CTAP
+local STATE_ASCENDING = SJC.STATE_ASCENDING
+local STATE_DESCENDING = SJC.STATE_DESCENDING
 
 -- Utility wrapper to respect debug toggle
 local function DebugLog(...)
@@ -18,75 +28,21 @@ end
 -- SmartJump module
 local SmartJump = {}
 
--- Constants
-local GRAVITY = 800 -- Gravity per second squared
-local JUMP_FORCE = 277 -- Initial vertical boost for a duck jump
-local MAX_JUMP_HEIGHT = Vector3(0, 0, 72) -- Maximum jump height vector
 -- Dynamic hitbox calculation using entity bounds
 local function GetPlayerHitbox(player)
 	local mins = player:GetMins()
 	local maxs = player:GetMaxs()
 	return { mins, maxs }
 end
-local MAX_WALKABLE_ANGLE = 45 -- Maximum angle considered walkable
 
--- State Definitions (matching user's exact logic)
-local STATE_IDLE = "STATE_IDLE"
-local STATE_PREPARE_JUMP = "STATE_PREPARE_JUMP"
-local STATE_CTAP = "STATE_CTAP"
-local STATE_ASCENDING = "STATE_ASCENDING"
-local STATE_DESCENDING = "STATE_DESCENDING"
+-- State definitions from global constants
+local STATE_IDLE = SJC.STATE_IDLE
+local STATE_PREPARE_JUMP = SJC.STATE_PREPARE_JUMP
+local STATE_CTAP = SJC.STATE_CTAP
+local STATE_ASCENDING = SJC.STATE_ASCENDING
+local STATE_DESCENDING = SJC.STATE_DESCENDING
 
--- Initialize SmartJump's own menu settings and state
-if not G.Menu.SmartJump then
-	G.Menu.SmartJump = {}
-end
-if G.Menu.SmartJump.Enable == nil then
-	G.Menu.SmartJump.Enable = true -- Default to enabled
-end
-if G.Menu.SmartJump.Debug == nil then
-	G.Menu.SmartJump.Debug = false -- Disable debug logs by default
-end
-
--- Initialize jump state (ensure all fields exist)
-if not G.SmartJump then
-	G.SmartJump = {}
-end
-if not G.SmartJump.jumpState then
-	G.SmartJump.jumpState = STATE_IDLE
-end
-if not G.SmartJump.SimulationPath then
-	G.SmartJump.SimulationPath = {}
-end
-if not G.SmartJump.PredPos then
-	G.SmartJump.PredPos = nil
-end
-if not G.SmartJump.JumpPeekPos then
-	G.SmartJump.JumpPeekPos = nil
-end
-if not G.SmartJump.HitObstacle then
-	G.SmartJump.HitObstacle = false
-end
-if not G.SmartJump.lastAngle then
-	G.SmartJump.lastAngle = nil
-end
-if not G.SmartJump.stateStartTime then
-	G.SmartJump.stateStartTime = 0
-end
-if not G.SmartJump.lastState then
-	G.SmartJump.lastState = nil
-end
-if not G.SmartJump.lastJumpTime then
-	G.SmartJump.lastJumpTime = 0
-end
-
--- Visual debug variables initialized above
-
--- Function to normalize a vector
-local function NormalizeVector(vector)
-	local length = vector:Length()
-	return length == 0 and nil or vector / length
-end
+-- Use Common.Normalize for vector normalization
 
 -- Rotate vector by yaw angle
 local function RotateVectorByYaw(vector, yaw)
@@ -99,7 +55,7 @@ end
 local function isSurfaceWalkable(normal)
 	local vUp = Vector3(0, 0, 1)
 	local angle = math.deg(math.acos(normal:Dot(vUp)))
-	return angle < MAX_WALKABLE_ANGLE
+	return angle < 55
 end
 
 -- Helper function to check if the player is on the ground
@@ -115,8 +71,8 @@ end
 
 -- Function to calculate the jump peak (user's exact logic)
 local function GetJumpPeak(horizontalVelocityVector, startPos)
-	-- Calculate the time to reach the jump peak
-	local timeToPeak = JUMP_FORCE / GRAVITY
+	-- Use constants from global scope
+	local timeToPeak = SJC.JUMP_FORCE / SJC.GRAVITY
 
 	-- Calculate horizontal velocity length
 	local horizontalVelocity = horizontalVelocityVector:Length()
@@ -125,10 +81,10 @@ local function GetJumpPeak(horizontalVelocityVector, startPos)
 	local distanceTravelled = horizontalVelocity * timeToPeak
 
 	-- Calculate peak position vector
-	local peakPosVector = startPos + NormalizeVector(horizontalVelocityVector) * distanceTravelled
+	local peakPosVector = startPos + Common.Normalize(horizontalVelocityVector) * distanceTravelled
 
 	-- Calculate direction to peak position
-	local directionToPeak = NormalizeVector(peakPosVector - startPos)
+	local directionToPeak = Common.Normalize(peakPosVector - startPos)
 
 	return peakPosVector, directionToPeak
 end
@@ -141,7 +97,7 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 
 	-- Move 1 unit forward from hit point
 	local checkPos = hitPos + moveDirection * 1
-	local abovePos = checkPos + Vector3(0, 0, 72)
+	local abovePos = checkPos + SJC.MAX_JUMP_HEIGHT
 
 	-- Trace down to find obstacle height
 	local trace = engine.TraceHull(abovePos, checkPos, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
@@ -190,12 +146,17 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 end
 
 -- Ground-only movement simulation following swing prediction pattern
+-- Local references to state and constants
+local SJ = G.SmartJump
+local SJC = G.SmartJump.Constants
+local MenuSJ = G.Menu.SmartJump
+
 local function SimulateMovementTick(startPos, velocity, pLocal)
 	local upVector = Vector3(0, 0, 1)
 	local stepVector = Vector3(0, 0, 18)
 	local hitbox = GetPlayerHitbox(pLocal)
 	local deltaTime = globals.TickInterval()
-	local moveDirection = NormalizeVector(velocity)
+	local moveDirection = Common.Normalize(velocity)
 	local shouldJump = false
 	local minJumpTicks = 0
 
@@ -290,7 +251,7 @@ local function SmartJumpDetection(cmd, pLocal)
 		return false
 	end
 
-	local moveDir = NormalizeVector(rotatedMoveIntent)
+	local moveDir = Common.Normalize(rotatedMoveIntent)
 	local currentVel = pLocal:EstimateAbsVelocity()
 	local horizontalSpeed = currentVel:Length()
 
@@ -347,32 +308,39 @@ local function SmartJumpDetection(cmd, pLocal)
 	end
 
 	-- Store final simulation results
-	G.SmartJump.PredPos = currentPos
-	G.SmartJump.HitObstacle = hitObstacle
+	if currentPos and hitObstacle ~= nil then
+		SJ.PredPos = currentPos
+		SJ.HitObstacle = hitObstacle
+	end
 
 	DebugLog("SmartJump: Simulation complete, no jumpable obstacle found")
 	return false
 end
 
+-- Local references to state and constants
+local SJ = G.SmartJump
+local SJC = G.SmartJump.Constants
+local MenuSJ = G.Menu.SmartJump
+
 -- Main SmartJump execution with state machine (user's exact logic with improvements)
 function SmartJump.Main(cmd)
-	local pLocal = entities.GetLocalPlayer()
-
-	if not pLocal or not pLocal:IsAlive() then
-		-- Reset state when player is invalid
-		G.SmartJump.jumpState = STATE_IDLE
-		G.ShouldJump = false
-		G.ObstacleDetected = false
-		G.RequestEmergencyJump = false
-		return false
+	-- Early return if SmartJump is disabled
+	if not MenuSJ.Enable then
+		-- Reset state when disabled
+		SJ.jumpState = STATE_IDLE
+		SJ.ShouldJump = false
+		SJ.ObstacleDetected = false
+		SJ.RequestEmergencyJump = false
+		return
 	end
 
-	-- Check SmartJump's own enable setting
-	if not G.Menu.SmartJump.Enable then
-		G.SmartJump.jumpState = STATE_IDLE
-		G.ShouldJump = false
-		G.ObstacleDetected = false
-		G.RequestEmergencyJump = false
+	local pLocal = entities.GetLocalPlayer()
+	if not MenuSJ.Enable or not pLocal or not pLocal:IsAlive() or pLocal:IsDormant() then
+		-- Reset state when player is invalid
+		SJ.jumpState = STATE_IDLE
+		SJ.ShouldJump = false
+		SJ.ObstacleDetected = false
+		SJ.RequestEmergencyJump = false
 		return false
 	end
 
@@ -382,7 +350,7 @@ function SmartJump.Main(cmd)
 	local viewOffset = pLocal:GetPropVector("m_vecViewOffset[0]").z
 
 	-- Initialize jump cooldown if not set
-	if not G.SmartJump.lastJumpTime then
+	if not SJ.lastJumpTime then
 		G.SmartJump.lastJumpTime = 0
 	end
 
@@ -520,11 +488,6 @@ function SmartJump.Main(cmd)
 	return shouldJump
 end
 
--- Simplified version that matches Movement.lua usage pattern
-function SmartJump.Execute(cmd)
-	return SmartJump.Main(cmd)
-end
-
 -- Check if emergency jump should be performed
 function SmartJump.ShouldEmergencyJump(currentTick, stuckTicks)
 	local timeSinceLastSmartJump = currentTick - (G.LastSmartJumpAttempt or 0)
@@ -553,10 +516,6 @@ local function OnCreateMoveStandalone(cmd)
 		return
 	end
 
-	if not G.Menu.SmartJump.Enable then
-		return
-	end
-
 	-- Run SmartJump state machine
 	SmartJump.Main(cmd)
 
@@ -567,7 +526,7 @@ end
 -- Visual debugging (matching user's exact visual logic)
 local function OnDrawSmartJump()
 	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not G.Menu.SmartJump.Enable then
+	if not pLocal or not G.Menu.SmartJump or not G.Menu.SmartJump.Enable then
 		return
 	end
 

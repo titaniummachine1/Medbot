@@ -59,12 +59,15 @@ G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
 
 -- SmartJump state table
 G.SmartJump = {
+	Enable = true,
 	SimulationPath = {},
 	PredPos = nil,
 	HitObstacle = false,
 	JumpPeekPos = nil,
 	stateStartTime = 0,
 	lastState = nil,
+	jumpState = "STATE_IDLE", -- Added missing jumpState initialization
+	lastJumpTime = 0, -- Added missing lastJumpTime
 }
 
 -- Bot movement tracking (for SmartJump integration)
