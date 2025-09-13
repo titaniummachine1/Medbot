@@ -18,6 +18,7 @@ defaultconfig = {
 		WalkableMode = "Smooth", -- "Smooth" uses 18-unit steps, "Aggressive" allows 72-unit jumps
 		CleanupConnections = true, -- Cleanup invalid connections during map load (disable to prevent crashes)
 		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
+		Duck_Grab = false, --only for testing rn
 		-- Hierarchical pathfinding removed
 	},
 	Visuals = {
