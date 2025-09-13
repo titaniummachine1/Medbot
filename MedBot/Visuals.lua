@@ -361,20 +361,6 @@ local function OnDraw()
 
         for id, entry in pairs(visibleNodes) do
             local node = entry.node
-            -- Draw all corners (green for inside corners)
-            if node.allCorners then
-                for _, cornerPoint in ipairs(node.allCorners) do
-                    allCornerCount = allCornerCount + 1
-                    if withinRadius(cornerPoint) then
-                        local cornerScreen = client.WorldToScreen(cornerPoint)
-                        if cornerScreen then
-                            draw.Color(0, 255, 0, 200) -- Green for inside corners
-                            draw.FilledRect(cornerScreen[1] - 2, cornerScreen[2] - 2,
-                                cornerScreen[1] + 2, cornerScreen[2] + 2)
-                        end
-                    end
-                end
-            end
 
             -- Draw wall corners (orange squares)
             if node.wallCorners then
@@ -549,20 +535,20 @@ local function OnDraw()
                     end
                 end
 
-                -- Second pass: draw points (so they appear on top of lines)
-                for _, point in ipairs(points) do
-                    local screenPos = client.WorldToScreen(point.pos)
-                    if screenPos then
-                        -- Color-code points: yellow for edge points, blue for regular points
-                        if point.isEdge then
-                            draw.Color(255, 255, 0, 220) -- Yellow for edge points
-                            draw.FilledRect(screenPos[1] - 2, screenPos[2] - 2, screenPos[1] + 2, screenPos[2] + 2)
-                        else
-                            draw.Color(0, 150, 255, 180) -- Light blue for regular points
-                            draw.FilledRect(screenPos[1] - 1, screenPos[2] - 1, screenPos[1] + 1, screenPos[2] + 1)
-                        end
-                    end
-                end
+                -- Second pass: draw points (so they appear on top of lines) - REMOVED: Using wall corners only
+                -- for _, point in ipairs(points) do
+                --     local screenPos = client.WorldToScreen(point.pos)
+                --     if screenPos then
+                --         -- Color-code points: yellow for edge points, blue for regular points
+                --         if point.isEdge then
+                --             draw.Color(255, 255, 0, 220) -- Yellow for edge points
+                --             draw.FilledRect(screenPos[1] - 2, screenPos[2] - 2, screenPos[1] + 2, screenPos[2] + 2)
+                --         else
+                --             draw.Color(0, 150, 255, 180) -- Light blue for regular points
+                --             draw.FilledRect(screenPos[1] - 1, screenPos[2] - 1, screenPos[1] + 1, screenPos[2] + 1)
+                --         end
+                --     end
+                -- end
             end
         end
 

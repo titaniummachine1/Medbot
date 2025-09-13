@@ -12,14 +12,16 @@ local Log = Common.Log.new("WallCornerDetector")
 -- Group neighbors by 4 directions for an area
 local function groupNeighborsByDirection(area, nodes)
 	local neighbors = {
-		north = {},  -- dirY = -1
-		south = {},  -- dirY = 1  
-		east = {},   -- dirX = 1
-		west = {}    -- dirX = -1
+		north = {}, -- dirY = -1
+		south = {}, -- dirY = 1
+		east = {}, -- dirX = 1
+		west = {}, -- dirX = -1
 	}
-	
-	if not area.c then return neighbors end
-	
+
+	if not area.c then
+		return neighbors
+	end
+
 	for dirId, dir in pairs(area.c) do
 		if dir.connections then
 			for _, connection in ipairs(dir.connections) do
@@ -29,7 +31,7 @@ local function groupNeighborsByDirection(area, nodes)
 					-- Determine direction from area to neighbor
 					local dx = neighbor.pos.x - area.pos.x
 					local dy = neighbor.pos.y - area.pos.y
-					
+
 					if math.abs(dx) >= math.abs(dy) then
 						if dx > 0 then
 							table.insert(neighbors.east, neighbor)
@@ -47,7 +49,7 @@ local function groupNeighborsByDirection(area, nodes)
 			end
 		end
 	end
-	
+
 	return neighbors
 end
 
@@ -56,51 +58,77 @@ local function getDirectionCorners(area, direction)
 	if not (area.nw and area.ne and area.se and area.sw) then
 		return nil, nil
 	end
-	
-	if direction == "north" then return area.nw, area.ne end
-	if direction == "south" then return area.se, area.sw end  
-	if direction == "east" then return area.ne, area.se end
-	if direction == "west" then return area.sw, area.nw end
-	
+
+	if direction == "north" then
+		return area.nw, area.ne
+	end
+	if direction == "south" then
+		return area.se, area.sw
+	end
+	if direction == "east" then
+		return area.ne, area.se
+	end
+	if direction == "west" then
+		return area.sw, area.nw
+	end
+
 	return nil, nil
 end
 
--- Check if point lies on neighbor's border edge facing our area
+-- Calculate distance from point to line segment (2D, ignores Z) using Common module
+local function pointToLineSegmentDistance(point, lineStart, lineEnd)
+	local dx = lineEnd.x - lineStart.x
+	local dy = lineEnd.y - lineStart.y
+	local length = math.sqrt(dx * dx + dy * dy)
+
+	if length == 0 then
+		-- Line segment is a point - use Common.Distance2D
+		local point2D = Vector3(point.x, point.y, 0)
+		local start2D = Vector3(lineStart.x, lineStart.y, 0)
+		return Common.Distance2D(point2D, start2D)
+	end
+
+	-- Calculate projection parameter
+	local t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (length * length)
+
+	-- Clamp t to [0, 1] to stay within segment bounds
+	t = math.max(0, math.min(1, t))
+
+	-- Calculate closest point on line segment
+	local closestX = lineStart.x + t * dx
+	local closestY = lineStart.y + t * dy
+
+	-- Use Common.Distance2D for final distance calculation (ignore Z)
+	local point2D = Vector3(point.x, point.y, 0)
+	local closest2D = Vector3(closestX, closestY, 0)
+	return Common.Distance2D(point2D, closest2D)
+end
+
+-- Check if point is within 18 units of any neighbor's border edge (LENIENT - ignores Z completely)
 local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
 		return false
 	end
-	
-	local tolerance = 1.0 -- Small tolerance for misaligned borders
-	
-	if direction == "north" then
-		-- Check if point lies on neighbor's south edge
-		local edge1, edge2 = neighbor.se, neighbor.sw
-		-- Check if point.y matches edge Y and point.x is between edge X coords
-		return math.abs(point.y - edge1.y) < tolerance and 
-		       point.x >= math.min(edge1.x, edge2.x) - tolerance and
-		       point.x <= math.max(edge1.x, edge2.x) + tolerance
-	elseif direction == "south" then
-		-- Check if point lies on neighbor's north edge  
-		local edge1, edge2 = neighbor.nw, neighbor.ne
-		return math.abs(point.y - edge1.y) < tolerance and
-		       point.x >= math.min(edge1.x, edge2.x) - tolerance and
-		       point.x <= math.max(edge1.x, edge2.x) + tolerance
-	elseif direction == "east" then
-		-- Check if point lies on neighbor's west edge
-		local edge1, edge2 = neighbor.sw, neighbor.nw  
-		return math.abs(point.x - edge1.x) < tolerance and
-		       point.y >= math.min(edge1.y, edge2.y) - tolerance and
-		       point.y <= math.max(edge1.y, edge2.y) + tolerance
-	elseif direction == "west" then
-		-- Check if point lies on neighbor's east edge
-		local edge1, edge2 = neighbor.ne, neighbor.se
-		return math.abs(point.x - edge1.x) < tolerance and
-		       point.y >= math.min(edge1.y, edge2.y) - tolerance and
-		       point.y <= math.max(edge1.y, edge2.y) + tolerance
+
+	local maxDistance = 18.0 -- Allow up to 18 units distance for lenient detection
+
+	-- Get all border edges of the neighbor (ignoring direction for more comprehensive detection)
+	local edges = {
+		{ neighbor.nw, neighbor.ne }, -- North edge
+		{ neighbor.ne, neighbor.se }, -- East edge
+		{ neighbor.se, neighbor.sw }, -- South edge
+		{ neighbor.sw, neighbor.nw }, -- West edge
+	}
+
+	-- Check distance to each edge
+	for _, edge in ipairs(edges) do
+		local distance = pointToLineSegmentDistance(point, edge[1], edge[2])
+		if distance <= maxDistance then
+			return true -- Point is close enough to this border edge
+		end
 	end
-	
-	return false
+
+	return false -- Point is too far from all border edges
 end
 
 -- Count how many neighbor borders a corner lies on
@@ -116,51 +144,64 @@ end
 
 function WallCornerDetector.DetectWallCorners()
 	local nodes = G.Navigation.nodes
-	if not nodes then 
+	if not nodes then
 		Log:Warn("No nodes available for wall corner detection")
-		return 
+		return
 	end
-	
+
 	local wallCornerCount = 0
 	local allCornerCount = 0
 	local nodeCount = 0
-	
+
 	for nodeId, area in pairs(nodes) do
 		nodeCount = nodeCount + 1
 		if area.nw and area.ne and area.se and area.sw then
 			-- Initialize wall corner storage on node
 			area.wallCorners = {}
 			area.allCorners = {}
-			
+
 			local neighbors = groupNeighborsByDirection(area, nodes)
-			
+
 			-- Debug: log neighbor counts for first few nodes
 			if nodeCount <= 3 then
 				local totalNeighbors = #neighbors.north + #neighbors.south + #neighbors.east + #neighbors.west
-				Log:Debug("Node %s has %d neighbors (N:%d S:%d E:%d W:%d)", 
-					tostring(nodeId), totalNeighbors, #neighbors.north, #neighbors.south, #neighbors.east, #neighbors.west)
+				Log:Debug(
+					"Node %s has %d neighbors (N:%d S:%d E:%d W:%d)",
+					tostring(nodeId),
+					totalNeighbors,
+					#neighbors.north,
+					#neighbors.south,
+					#neighbors.east,
+					#neighbors.west
+				)
 			end
-			
+
 			-- Check all 4 directions
 			for direction, dirNeighbors in pairs(neighbors) do
 				local corner1, corner2 = getDirectionCorners(area, direction)
 				if corner1 and corner2 then
 					-- Check both corners of this direction
-					for _, corner in ipairs({corner1, corner2}) do
+					for _, corner in ipairs({ corner1, corner2 }) do
 						table.insert(area.allCorners, corner)
 						allCornerCount = allCornerCount + 1
-						
+
 						local borderCount = countNeighborBorders(corner, dirNeighbors, direction)
-						
+
 						-- Debug: log border counts for first few corners
 						if allCornerCount <= 10 then
-							Log:Debug("Corner at (%.1f,%.1f,%.1f) in direction %s has %d border contacts", 
-								corner.x, corner.y, corner.z, direction, borderCount)
+							Log:Debug(
+								"Corner at (%.1f,%.1f,%.1f) in direction %s has %d border contacts",
+								corner.x,
+								corner.y,
+								corner.z,
+								direction,
+								borderCount
+							)
 						end
-						
+
 						-- Wall corner classification based on proximity scoring:
 						-- 0 = outside corner (no neighbor borders touched) - DRAW AS ORANGE
-						-- 1 = wall corner (exactly 1 neighbor border touched) 
+						-- 1 = wall corner (exactly 1 neighbor border touched)
 						-- 2 = inside corner (exactly 2 neighbor borders touched)
 						-- 3+ = inner corner (3+ neighbor borders touched - inside corner)
 						local cornerType = "unknown"
@@ -175,7 +216,7 @@ function WallCornerDetector.DetectWallCorners()
 						elseif borderCount >= 3 then
 							cornerType = "inner"
 						end
-						
+
 						-- Store corner classification for debugging
 						if not area.cornerTypes then
 							area.cornerTypes = {}
@@ -184,20 +225,24 @@ function WallCornerDetector.DetectWallCorners()
 							pos = corner,
 							type = cornerType,
 							borderCount = borderCount,
-							direction = direction
+							direction = direction,
 						})
 					end
 				end
 			end
 		end
 	end
-	
-	Log:Info("Processed %d nodes, detected %d wall corners out of %d total corners", 
-		nodeCount, wallCornerCount, allCornerCount)
-	
+
+	Log:Info(
+		"Processed %d nodes, detected %d wall corners out of %d total corners",
+		nodeCount,
+		wallCornerCount,
+		allCornerCount
+	)
+
 	-- Console output for immediate visibility
 	print("WallCornerDetector: " .. wallCornerCount .. " wall corners found")
-	
+
 	-- Debug: log first few nodes with wall corners
 	local debugCount = 0
 	for nodeId, area in pairs(nodes) do
