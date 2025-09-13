@@ -38,39 +38,6 @@ local function heuristicCost(nodeA, nodeB)
 	return (nodeA.pos - nodeB.pos):Length()
 end
 
----Check if direct door-to-door movement is safe (not a sharp corner)
----@param prev Node Previous door node
----@param curr Node Current area center node
----@param next Node Next door node
----@return boolean True if movement is safe
-local function isSafeDoorToDoorMovement(prev, curr, next)
-	if not (prev and curr and next and prev.pos and curr.pos and next.pos) then
-		return false
-	end
-
-	-- Calculate movement vectors
-	local toCenter = curr.pos - prev.pos
-	local fromCenter = next.pos - curr.pos
-
-	-- Normalize vectors
-	local toCenterNorm = toCenter:Length() > 0 and (toCenter / toCenter:Length()) or Vector3(0, 0, 0)
-	local fromCenterNorm = fromCenter:Length() > 0 and (fromCenter / fromCenter:Length()) or Vector3(0, 0, 0)
-
-	-- Calculate dot product to determine angle
-	local dotProduct = toCenterNorm.x * fromCenterNorm.x
-		+ toCenterNorm.y * fromCenterNorm.y
-		+ toCenterNorm.z * fromCenterNorm.z
-
-	-- Convert to angle (dot product = cos(angle))
-	local angle = math.acos(math.max(-1, math.min(1, dotProduct)))
-	local angleDegrees = angle * 180 / math.pi
-
-	-- Only allow skipping if angle is not too sharp (less than 135 degrees = more than 45 degree turn)
-	-- This prevents cutting corners through walls
-	local maxSafeAngle = 135 -- degrees
-	return angleDegrees < maxSafeAngle
-end
-
 ---Reconstructs the path from the cameFrom map
 ---@param cameFrom table<Node, Node> Map of nodes to their predecessors
 ---@param startNode Node Starting node of the path
@@ -129,9 +96,8 @@ end
 ---@param goalNode Node Target node
 ---@param nodes NodeMap Lookup table of all nodes by ID
 ---@param adjacentFun fun(node: Node, nodes: NodeMap): NeighborDataArray Function to get adjacent nodes
----@param maxIterations? number Maximum iterations to prevent infinite loops (default: 10000)
 ---@return Node[]|nil path Array of nodes representing the path, or nil if no path exists
-function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun, maxIterations)
+function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 	-- Input validation
 	if not startNode or not goalNode or not nodes or not adjacentFun then
 		return nil
@@ -140,10 +106,6 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun, maxIterations
 	if not startNode.id or not goalNode.id then
 		return nil
 	end
-
-	-- Set default max iterations if not provided
-	maxIterations = maxIterations or 10000
-	local iterations = 0
 
 	-- Priority queue based on fScore
 	local openSet = Heap.new(function(a, b)
@@ -168,13 +130,6 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun, maxIterations
 	openSetLookup[startNode] = true
 
 	while not openSet:empty() do
-		-- Early termination check
-		iterations = iterations + 1
-		if iterations > maxIterations then
-			print("A* Warning: Maximum iterations reached (" .. maxIterations .. "), terminating search")
-			break
-		end
-
 		local currentEntry = openSet:pop()
 		local current = currentEntry.node
 		openSetLookup[current] = nil -- no longer in open set

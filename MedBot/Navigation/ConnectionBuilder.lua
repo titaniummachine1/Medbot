@@ -92,123 +92,78 @@ local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
 	local Common = require("MedBot.Core.Common")
 	local WALL_CLEARANCE = 24
 
-	-- Store original positions for fallback
-	local originalLeft = overlapLeft
-	local originalRight = overlapRight
-	local leftClamped = overlapLeft
-	local rightClamped = overlapRight
+	-- Determine the door's axis (X or Y) based on which coordinate varies more
+	local doorVector = overlapRight - overlapLeft
+	local isXAxisDoor = math.abs(doorVector.x) > math.abs(doorVector.y)
 
-	-- Collect all wall corners that are too close to either door endpoint
-	local closeCorners = {}
+	-- Store original positions
+	local clampedLeft = overlapLeft
+	local clampedRight = overlapRight
 
-	-- Check wall corners from both areas involved in the connection
+	-- Check wall corners from both areas
 	for _, area in ipairs({ areaA, areaB }) do
 		if area.wallCorners then
 			for _, wallCorner in ipairs(area.wallCorners) do
-				-- Check distance to both door endpoints
-				local leftDist2D = Common.Distance2D(Vector3(leftClamped.x, leftClamped.y, 0), Vector3(wallCorner.x, wallCorner.y, 0))
-				local rightDist2D = Common.Distance2D(Vector3(rightClamped.x, rightClamped.y, 0), Vector3(wallCorner.x, wallCorner.y, 0))
-
-				if leftDist2D < WALL_CLEARANCE or rightDist2D < WALL_CLEARANCE then
-					table.insert(closeCorners, {
-						corner = wallCorner,
-						leftDist = leftDist2D,
-						rightDist = rightDist2D
-					})
-				end
-			end
-		end
-	end
-
-	-- If no corners are too close, return original positions
-	if #closeCorners == 0 then
-		return originalLeft, originalRight
-	end
-
-	-- For each close corner, calculate safe positions
-	local safeLeft = leftClamped
-	local safeRight = rightClamped
-
-	for _, cornerData in ipairs(closeCorners) do
-		local wallCorner = cornerData.corner
-
-		-- Handle left endpoint
-		if cornerData.leftDist < WALL_CLEARANCE then
-			-- Calculate direction away from corner in the door's axis
-			local doorAxis = (overlapRight - overlapLeft)
-			local cornerToLeft = Vector3(leftClamped.x - wallCorner.x, leftClamped.y - wallCorner.y, 0)
-
-			-- Project corner-to-left vector onto door axis to get movement direction
-			local axisLength = doorAxis:Length2D()
-			if axisLength > 0 then
-				local axisUnit = Vector3(doorAxis.x / axisLength, doorAxis.y / axisLength, 0)
-				local projection = (cornerToLeft.x * axisUnit.x + cornerToLeft.y * axisUnit.y)
-
-				-- Move left endpoint along axis to maintain door geometry
-				local moveDistance = WALL_CLEARANCE - cornerData.leftDist
-				if projection < 0 then -- Corner is on the "left" side, move left endpoint left
-					safeLeft = Vector3(
-						safeLeft.x - axisUnit.x * moveDistance,
-						safeLeft.y - axisUnit.y * moveDistance,
-						safeLeft.z
-					)
-				end
-			end
-		end
-
-		-- Handle right endpoint
-		if cornerData.rightDist < WALL_CLEARANCE then
-			-- Calculate direction away from corner in the door's axis
-			local doorAxis = (overlapLeft - overlapRight) -- Reverse for right endpoint
-			local cornerToRight = Vector3(rightClamped.x - wallCorner.x, rightClamped.y - wallCorner.y, 0)
-
-			-- Project corner-to-right vector onto door axis
-			local axisLength = doorAxis:Length2D()
-			if axisLength > 0 then
-				local axisUnit = Vector3(doorAxis.x / axisLength, doorAxis.y / axisLength, 0)
-				local projection = (cornerToRight.x * axisUnit.x + cornerToRight.y * axisUnit.y)
-
-				-- Move right endpoint along axis to maintain door geometry
-				local moveDistance = WALL_CLEARANCE - cornerData.rightDist
-				if projection < 0 then -- Corner is on the "right" side, move right endpoint right
-					safeRight = Vector3(
-						safeRight.x - axisUnit.x * moveDistance,
-						safeRight.y - axisUnit.y * moveDistance,
-						safeRight.z
-					)
-				end
-			end
-		end
-	end
-
-	-- Ensure clamped positions stay within original overlap bounds
-	local overlapCenter = (originalLeft + originalRight) / 2
-	local overlapHalfWidth = (originalRight - originalLeft):Length2D() / 2
-
-	-- Keep doors within reasonable bounds of original overlap
-	local maxDisplacement = overlapHalfWidth * 0.5 -- Allow 50% extension
-
-	local function clampToBounds(pos, originalPos)
-		local displacement = (pos - originalPos):Length2D()
-		if displacement > maxDisplacement then
-			local dir = pos - originalPos
-			local dirLength = dir:Length2D()
-			if dirLength > 0 then
-				dir = Vector3(dir.x / dirLength, dir.y / dirLength, 0)
-				return Vector3(
-					originalPos.x + dir.x * maxDisplacement,
-					originalPos.y + dir.y * maxDisplacement,
-					pos.z
+				-- Calculate 2D distance to both door endpoints
+				local leftDist2D = Common.Distance2D(
+					Vector3(clampedLeft.x, clampedLeft.y, 0),
+					Vector3(wallCorner.x, wallCorner.y, 0)
 				)
+				local rightDist2D = Common.Distance2D(
+					Vector3(clampedRight.x, clampedRight.y, 0),
+					Vector3(wallCorner.x, wallCorner.y, 0)
+				)
+
+				-- Only clamp if corner is too close to either endpoint
+				if leftDist2D < WALL_CLEARANCE or rightDist2D < WALL_CLEARANCE then
+					if isXAxisDoor then
+						-- Door is horizontal (varies on X-axis), clamp on X-axis
+						if wallCorner.x < clampedLeft.x and leftDist2D < WALL_CLEARANCE then
+							-- Corner is to the left of door's left endpoint, move left endpoint right
+							clampedLeft = Vector3(
+								wallCorner.x + WALL_CLEARANCE,
+								clampedLeft.y,
+								clampedLeft.z
+							)
+						elseif wallCorner.x > clampedRight.x and rightDist2D < WALL_CLEARANCE then
+							-- Corner is to the right of door's right endpoint, move right endpoint left
+							clampedRight = Vector3(
+								wallCorner.x - WALL_CLEARANCE,
+								clampedRight.y,
+								clampedRight.z
+							)
+						end
+					else
+						-- Door is vertical (varies on Y-axis), clamp on Y-axis
+						if wallCorner.y < clampedLeft.y and leftDist2D < WALL_CLEARANCE then
+							-- Corner is below door's left endpoint, move left endpoint up
+							clampedLeft = Vector3(
+								clampedLeft.x,
+								wallCorner.y + WALL_CLEARANCE,
+								clampedLeft.z
+							)
+						elseif wallCorner.y > clampedRight.y and rightDist2D < WALL_CLEARANCE then
+							-- Corner is above door's right endpoint, move right endpoint down
+							clampedRight = Vector3(
+								clampedRight.x,
+								wallCorner.y - WALL_CLEARANCE,
+								clampedRight.z
+							)
+						end
+					end
+				end
 			end
 		end
-		return pos
 	end
 
-	safeLeft = clampToBounds(safeLeft, originalLeft)
-	safeRight = clampToBounds(safeRight, originalRight)
+	-- Ensure doors don't get too small after clamping
+	local finalWidth = (clampedRight - clampedLeft):Length2D()
+	if finalWidth < HITBOX_WIDTH then
+		-- If door became too small, revert to original positions
+		return overlapLeft, overlapRight
+	end
 
-	return safeLeft, safeRight
+	return clampedLeft, clampedRight
 end
 
 -- Determine which area owns the door based on edge heights
