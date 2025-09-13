@@ -25,12 +25,16 @@ function Node.Setup()
 	NavLoader.LoadNavFile()
 	ConnectionBuilder.NormalizeConnections()
 	-- AccessibilityChecker.PruneInvalidConnections(G.Navigation.nodes) -- DISABLED: Uses area centers not edges
-	ConnectionBuilder.BuildDoorsForConnections()
 
+	-- CRITICAL: Detect wall corners BEFORE building doors so clamping can work!
 	local WallCornerDetector = require("MedBot.Navigation.WallCornerDetector")
 	WallCornerDetector.DetectWallCorners()
+	Log:Info("Wall corners detected: " .. (G.Navigation.nodes and #G.Navigation.nodes or 0) .. " nodes processed")
 
-	Log:Info("Navigation setup complete")
+	ConnectionBuilder.BuildDoorsForConnections()
+	Log:Info("Doors built with wall corner clamping applied")
+
+	Log:Info("Navigation setup complete - wall corners and doors processed")
 end
 
 function Node.ResetSetup()
