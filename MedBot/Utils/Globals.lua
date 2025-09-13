@@ -61,7 +61,7 @@ G.SmartJump = G.SmartJump or {
     -- Constants (must be defined first)
     Constants = {
         GRAVITY = 800, -- Gravity per second squared
-        JUMP_FORCE = 277, -- Initial vertical boost for a duck jump
+        JUMP_FORCE = 271, -- Initial vertical boost for a duck jump
         MAX_JUMP_HEIGHT = Vector3(0, 0, 72), -- Maximum jump height vector
         MAX_WALKABLE_ANGLE = 45, -- Maximum angle considered walkable
 

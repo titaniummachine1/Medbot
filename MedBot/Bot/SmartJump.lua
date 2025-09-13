@@ -85,17 +85,24 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 
 			-- Height at time t: h = jumpVel*t - 0.5*gravity*t^2
 			-- We need h >= obstacleHeight, find minimum t
-			local minTimeNeeded = 0
-			for t = 1, timeToPeak, tickInterval do
+			local minTicksNeeded = 0
+			local maxTicks = math.ceil(timeToPeak / tickInterval)
+			print(obstacleHeight)
+			-- Convert to seconds for physics calculation
+			for tick = 1, maxTicks do
+				local t = tick * tickInterval  -- Convert tick to seconds
+				-- Calculate height at time t (in units)
+				-- jumpVel is in units/s, gravity in units/s²
 				local height = jumpVel * t - 0.5 * gravity * t * t
 				if height >= obstacleHeight then
-					minTimeNeeded = t
+					minTicksNeeded = tick
 					break
 				end
 			end
 
-			-- Convert to ticks and add safety margin
-			local minTicksNeeded = math.ceil(minTimeNeeded / tickInterval)
+			-- minTimeNeeded is already in ticks from our loop
+			-- Add a small safety margin (1 tick) to ensure we clear the obstacle
+			local minTicksNeeded = math.max(1, minTicksNeeded + 1)
 
 			G.SmartJump.JumpPeekPos = trace.endpos
 			return true, minTicksNeeded
@@ -125,7 +132,7 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 	local downpostarget = uptrace.endpos
 
 	-- Forward collision check
-	local wallTrace = engine.TraceHull(downpstartPos, downpostarget , hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	local wallTrace = engine.TraceHull(downpstartPos, downpostarget, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 	if wallTrace.fraction ~= 0 then
 		targetPos = wallTrace.endpos
 	else --stop movement on wall
