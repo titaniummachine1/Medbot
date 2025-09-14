@@ -215,15 +215,27 @@ function isWalkable.Path(startPos, goalPos, overrideMode)
 		local distanceToGoal = (currentPos - goalPos):Length()
 		local direction = lastDirection
 
-		-- Calculate next position
-		local NextPos = lastPos + direction * distanceToGoal
+		-- Calculate next position with incremental steps instead of full distance
+		-- This allows gradual progress even if full path has obstacles
+		local stepDistance = math.min(distanceToGoal, MIN_STEP_SIZE * 2) -- Max 2 step sizes per iteration
+		local NextPos = lastPos + direction * stepDistance
 
 		-- Forward collision check
 		local wallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, NextPos + STEP_HEIGHT_Vector)
 		currentPos = wallTrace.endpos
 
 		if wallTrace.fraction == 0 then
-			return false -- Path is blocked by a wall - immediately fail
+			-- Instead of immediately failing, try to navigate around the obstacle
+			-- by taking a smaller step or adjusting direction
+			local smallerStep = stepDistance * 0.5
+			local alternativePos = lastPos + direction * smallerStep
+			local altWallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, alternativePos + STEP_HEIGHT_Vector)
+
+			if altWallTrace.fraction == 0 then
+				return false -- Still blocked after smaller step - truly unwalkable
+			else
+				currentPos = altWallTrace.endpos -- Use the smaller step that worked
+			end
 		end
 
 		-- Ground collision with segmentation

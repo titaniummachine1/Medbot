@@ -74,22 +74,17 @@ Common.JSON = JSON
 
 -- Vector helpers
 function Common.Normalize(vec)
-	assert(vec, "Common.Normalize: vector parameter is required")
-	assert(type(vec) == "userdata" or (type(vec) == "table" and vec.x and vec.y and vec.z), 
-		"Common.Normalize: parameter must be a Vector3")
-	local len = vec:Length()
-	assert(len > 0, "Common.Normalize: cannot normalize zero-length vector")
-	return vec / len
+	return vec / vec:Length()
 end
-
--- Simple normalize alias for less code (global function)
-normalize = Common.Normalize
 
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
 function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
 	assert(start_pos and end_pos, "Common.DrawArrowLine: start_pos and end_pos are required")
-	assert(arrowhead_length and arrowhead_width, "Common.DrawArrowLine: arrowhead_length and arrowhead_width are required")
-	
+	assert(
+		arrowhead_length and arrowhead_width,
+		"Common.DrawArrowLine: arrowhead_length and arrowhead_width are required"
+	)
+
 	-- If invert is true, swap start_pos and end_pos
 	if invert then
 		start_pos, end_pos = end_pos, start_pos
@@ -152,14 +147,14 @@ function Common.GetPlayerHull()
 		-- Fallback to hardcoded values if no player
 		return {
 			Min = Vector3(-24, -24, 0),
-			Max = Vector3(24, 24, 82)
+			Max = Vector3(24, 24, 82),
 		}
 	end
 
 	-- Get dynamic hull size from player
 	return {
 		Min = pLocal:GetPropVector("m_vecMins") or Vector3(-24, -24, 0),
-		Max = pLocal:GetPropVector("m_vecMaxs") or Vector3(24, 24, 82)
+		Max = pLocal:GetPropVector("m_vecMaxs") or Vector3(24, 24, 82),
 	}
 end
 
@@ -221,9 +216,18 @@ function Common.Drawing.Draw3DBox(size, pos)
 	}
 
 	local linesToDraw = {
-		{ 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 },
-		{ 5, 6 }, { 6, 7 }, { 7, 8 }, { 8, 5 },
-		{ 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },
+		{ 1, 2 },
+		{ 2, 3 },
+		{ 3, 4 },
+		{ 4, 1 },
+		{ 5, 6 },
+		{ 6, 7 },
+		{ 7, 8 },
+		{ 8, 5 },
+		{ 1, 5 },
+		{ 2, 6 },
+		{ 3, 7 },
+		{ 4, 8 },
 	}
 
 	local screenPositions = {}
@@ -247,7 +251,7 @@ end
 Common.Dynamic = {
 	LastUpdate = 0,
 	UpdateInterval = 1.0, -- Update every second
-	Values = {}
+	Values = {},
 }
 
 function Common.Dynamic.Update()
@@ -288,7 +292,7 @@ end
 
 function Common.Dynamic.GetTickInterval()
 	Common.Dynamic.Update()
-	return Common.Dynamic.Values.TickInterval or (1/66.67)
+	return Common.Dynamic.Values.TickInterval or (1 / 66.67)
 end
 
 function Common.Dynamic.GetHullMin()
@@ -307,11 +311,11 @@ Common.Cache = {}
 function Common.Cache.GetOrCompute(key, computeFunc, ttl)
 	local currentTime = globals.RealTime()
 	local cached = Common.Cache[key]
-	
+
 	if cached and (currentTime - cached.time) < (ttl or 1.0) then
 		return cached.value
 	end
-	
+
 	local value = computeFunc()
 	Common.Cache[key] = { value = value, time = currentTime }
 	return value
@@ -328,7 +332,7 @@ end
 
 function Common.Math.DistanceSquared(a, b)
 	local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
-	return dx*dx + dy*dy + dz*dz
+	return dx * dx + dy * dy + dz * dz
 end
 
 return Common
