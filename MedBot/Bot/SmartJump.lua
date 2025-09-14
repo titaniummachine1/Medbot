@@ -59,25 +59,32 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 
 	local checkPos = hitPos + moveDirection * 1
 	local abovePos = checkPos + SJC.MAX_JUMP_HEIGHT
+
+	-- Perform the trace and get detailed results
 	local trace = engine.TraceHull(abovePos, checkPos, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 
 	if isSurfaceWalkable(trace.plane) then
-		local obstacleHeight = 72 * (1 - trace.fraction)
-		print(obstacleHeight)
+		-- FIXED: Calculate obstacle height from actual trace distance, not hardcoded 72
+		local traceLength = (abovePos - checkPos):Length()
+		local obstacleHeight = traceLength * (1 - trace.fraction)
+
+		-- Debug output for troubleshooting
+		local jumpMaxHeight = (SJC.JUMP_FORCE ^ 2) / (2 * SJC.GRAVITY)
 
 		if obstacleHeight > 18 then
 			G.SmartJump.LastObstacleHeight = hitPos.z + obstacleHeight
 			local jumpVel = SJC.JUMP_FORCE
 			local gravity = SJC.GRAVITY
-			local tickInterval = globals.TickInterval()
-			local timeToPeak = jumpVel / gravity
-			local minTicksNeeded = 0
-			local maxTicks = math.ceil(timeToPeak / tickInterval)
 
+			-- FIXED: Use exact physics equation instead of iteration
+			-- Quadratic formula: height = jumpVel*t - 0.5*gravity*t^2
+			-- Solve for t: t = (jumpVel - sqrt(jumpVel^2 - 2*gravity*obstacleHeight)) / gravity
 			local discriminant = jumpVel ^ 2 - 2 * gravity * obstacleHeight
+			local minTicksNeeded = 0
+
 			if discriminant >= 0 then
 				local t = (jumpVel - math.sqrt(discriminant)) / gravity
-				print(t)
+				local tickInterval = globals.TickInterval()
 				minTicksNeeded = math.ceil(t / tickInterval)
 			end
 
@@ -134,7 +141,6 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 
 	if hitObstacle then
 		canJump, minJumpTicks = CheckJumpable(targetPos, moveDirection, hitbox)
-		print(minJumpTicks)
 		local wallNormal = wallTrace.plane
 		local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
 
