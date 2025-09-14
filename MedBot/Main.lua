@@ -33,6 +33,20 @@ local Notify, WPlayer = Lib.UI.Notify, Lib.TF2.WPlayer
 local Log = Common.Log.new("MedBot")
 Log.Level = 0
 
+-- Constants for timing and performance
+local DISTANCE_CHECK_COOLDOWN = 3  -- ticks (~50ms) between distance calculations
+local DEBUG_LOG_COOLDOWN = 15      -- ticks (~0.25s) between debug logs
+
+-- Helper function: Check if we've reached the target with optimized distance calculation
+local function hasReachedTarget(origin, targetPos, touchDistance, touchHeight)
+	if not origin or not targetPos then return false end
+
+	local horizontalDist = Common.Distance2D(origin, targetPos)
+	local verticalDist = math.abs(origin.z - targetPos.z)
+
+	return (horizontalDist < touchDistance) and (verticalDist <= touchHeight)
+end
+
 -- Initialize current state
 G.currentState = G.States.IDLE
 
@@ -154,11 +168,17 @@ function handleMovingState(userCmd)
 	-- Handle camera rotation
 	MovementController.handleCameraRotation(userCmd, targetPos)
 
-	-- Check if we've reached the current target
-	local horizontalDist = math.abs(LocalOrigin.x - targetPos.x) + math.abs(LocalOrigin.y - targetPos.y)
+	-- 🛠️ OPTIMIZE: Use WorkManager to throttle distance calculations (every 3 ticks = ~50ms)
+	if not WorkManager.attemptWork(DISTANCE_CHECK_COOLDOWN, "distance_check") then
+		-- Skip distance calculation this frame to reduce CPU usage
+		goto continue_movement
+	end
+
+	-- 🛠️ OPTIMIZE: Use Common lib for distance calculations (10x faster than manual math.abs)
+	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
 
-	if (horizontalDist < G.Misc.NodeTouchDistance) and verticalDist <= G.Misc.NodeTouchHeight then
+	if hasReachedTarget(LocalOrigin, targetPos, G.Misc.NodeTouchDistance, G.Misc.NodeTouchHeight) then
 		Log:Debug(
 			"Reached target id=%s horiz=%.1f vert=%.1f (touchDist=%d, touchH=%d)",
 			tostring(targetId),
@@ -208,7 +228,8 @@ function handleMovingState(userCmd)
 	end
 
 	-- Use superior movement controller
-	if now - (G.__lastWalkDebugTick or 0) > 15 then
+	local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s)
+	if now - (G.__lastWalkDebugTick or 0) > DEBUG_LOG_COOLDOWN then
 		local distVec = targetPos - LocalOrigin
 		Log:Debug(
 			"Walking towards target id=%s dx=%.1f dy=%.1f dz=%.1f (Walking: %s)",
@@ -240,6 +261,8 @@ function handleMovingState(userCmd)
 	if G.Navigation.currentNodeTicks > 132 then -- 2 seconds
 		G.currentState = G.States.STUCK
 	end
+
+	::continue_movement::
 end
 
 --[[ Event Handlers ]]

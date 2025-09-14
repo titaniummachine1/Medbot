@@ -12,49 +12,20 @@ local WorkManager = require("MedBot.WorkManager")
 local Log = Common.Log.new("PathOptimizer")
 local PathOptimizer = {}
 
--- Skip entire path if goal is directly reachable
-function PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path)
-	-- Check menu setting first
-	if not G.Menu.Main.Skip_Nodes then
+-- Simplified path optimization - single predictable algorithm
+function PathOptimizer.optimize(origin, path, goalPos)
+	-- Early exit if optimization disabled or invalid path
+	if not G.Menu.Main.Skip_Nodes or not path or #path <= 1 then
 		return false
 	end
 
-	local DEADZONE = 24 -- units
-	if not goalPos or not origin then
-		return false
-	end
-	local dist = Common.Distance3D(goalPos, origin)
-	if dist < DEADZONE then
-		Navigation.ClearPath()
-		G.currentState = G.States.IDLE
-		G.lastPathfindingTick = 0
-		return true
-	end
-	-- Only skip if we have a multi-node path AND goal is directly reachable
-	-- Never skip on CTF maps to avoid beelining to the wrong flag area
-	local mapName = engine.GetMapName():lower()
-	if path and #path > 1 and not mapName:find("ctf_") then
-		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if ISWalkable.PathCached(origin, goalPos, walkMode) then
-			Navigation.ClearPath()
-			-- Set a direct path with just the goal as the node
-			G.Navigation.path = { { pos = goalPos } }
-			G.lastPathfindingTick = 0
-			Log:Info("Cleared complex path, moving directly to goal with %s mode (distance: %.1f)", walkMode, dist)
-			return true
-		end
-	end
-	return false
-end
-
--- Skip if next node is closer to player than current node and walkable
-function PathOptimizer.skipIfNextCloserAndWalkable(origin, path)
-	-- Check menu setting first
-	if not G.Menu.Main.Skip_Nodes then
+	-- Use work manager to throttle optimization attempts
+	if not WorkManager.attemptWork(5, "path_optimize") then -- 5 tick cooldown (~83ms)
 		return false
 	end
 
-	if not path or #path < 2 then
+	-- Only optimize if we have at least 3 nodes (current + next + goal)
+	if #path < 3 then
 		return false
 	end
 
@@ -65,68 +36,21 @@ function PathOptimizer.skipIfNextCloserAndWalkable(origin, path)
 		return false
 	end
 
-	-- Check distances
-	local distCurrent = Common.Distance3D(currentNode.pos, origin)
-	local distNext = Common.Distance3D(nextNode.pos, origin)
+	-- Simple optimization: skip current node if next is closer and walkable
+	local distToCurrent = Common.Distance3D(origin, currentNode.pos)
+	local distToNext = Common.Distance3D(origin, nextNode.pos)
 
-	-- Only skip if next node is actually closer than current node
-	if distNext >= distCurrent then
-		return false
-	end
-
-	-- Check if we can walk directly to the next node
-	local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-	if ISWalkable.PathCached(origin, nextNode.pos, walkMode) then
-		Log:Debug(
-			"Next node %d is closer (%.1f < %.1f) and walkable, skipping current node %d",
-			nextNode.id or 0,
-			distNext,
-			distCurrent,
-			currentNode.id or 0
-		)
-
-		-- Skip to next node
-		Navigation.RemoveCurrentNode()
-		Navigation.ResetTickTimer()
-		return true
-	end
-
-	return false
-end
-
--- Optimize path by trying different skip strategies with work manager
-function PathOptimizer.optimize(origin, path, goalPos)
-	-- DEBUG: Log current menu state
-	Log:Debug("PathOptimizer.optimize called - Skip_Nodes = %s", tostring(G.Menu.Main.Skip_Nodes))
-
-	if not G.Menu.Main.Skip_Nodes or not path or #path <= 1 then
-		Log:Debug("PathOptimizer.optimize: Skipping optimization (menu disabled or invalid path)")
-		return false
-	end
-
-	Log:Debug("PathOptimizer.optimize: Starting optimization (menu enabled)")
-
-	-- Try to skip directly to the goal if we have a complex path
-	if goalPos and #path > 1 then
-		if PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path) then
-			Log:Debug("PathOptimizer.optimize: Skipped to goal")
+	-- Only skip if next node is significantly closer (at least 20% closer)
+	if distToNext < (distToCurrent * 0.8) then
+		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+		if ISWalkable.PathCached(origin, nextNode.pos, walkMode) then
+			Navigation.RemoveCurrentNode()
+			Navigation.ResetTickTimer()
+			Log:Debug("Skipped node - next closer by %.1f units", distToCurrent - distToNext)
 			return true
 		end
 	end
 
-	-- Use work manager for node skipping cooldown (same as unstuck logic)
-	if not WorkManager.attemptWork(3, "node_skip") then -- 3 tick cooldown (~50ms)
-		Log:Debug("PathOptimizer.optimize: Work manager blocked")
-		return false
-	end
-
-	-- Try the simple algorithm: skip if next node is closer and walkable
-	if PathOptimizer.skipIfNextCloserAndWalkable(origin, path) then
-		Log:Debug("PathOptimizer.optimize: Skipped to closer node")
-		return true
-	end
-
-	Log:Debug("PathOptimizer.optimize: No optimization performed")
 	return false
 end
 

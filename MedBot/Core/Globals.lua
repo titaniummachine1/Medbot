@@ -134,6 +134,46 @@ function G.CleanupMemory()
 		G.Navigation.currentNodeTicks = 0
 	end
 
+	-- 🛠️ FIX MEMORY LEAKS: Clean up debug timestamps and temporary variables
+	local cleanupThreshold = 300 -- 5 seconds worth of ticks
+	local keysToRemove = {}
+
+	-- Find debug timestamps and temporary variables to clean up
+	for key, value in pairs(G) do
+		-- Clean up debug timestamps (keys ending with "Tick" that are numbers)
+		if type(key) == "string" and key:find("Tick") and type(value) == "number" then
+			if currentTick - value > cleanupThreshold then
+				table.insert(keysToRemove, key)
+			end
+		end
+
+		-- Clean up temporary debug variables (starting with "__" or containing "Debug")
+		if type(key) == "string" and (key:sub(1, 2) == "__" or key:find("Debug")) then
+			if type(value) == "number" and currentTick - value > cleanupThreshold then
+				table.insert(keysToRemove, key)
+			elseif type(value) ~= "number" then
+				-- Clean up non-numeric debug variables immediately
+				table.insert(keysToRemove, key)
+			end
+		end
+
+		-- Clean up temporary cache variables that might accumulate
+		if type(key) == "string" and key:find("Cache") and type(value) == "table" then
+			if value.tick and currentTick - value.tick > cleanupThreshold then
+				table.insert(keysToRemove, key)
+			end
+		end
+	end
+
+	-- Remove the identified keys
+	for _, key in ipairs(keysToRemove) do
+		G[key] = nil
+	end
+
+	if #keysToRemove > 0 then
+		print(string.format("Cleaned up %d debug/temporary variables from G table", #keysToRemove))
+	end
+
 	-- Force garbage collection if memory usage is high
 	local memBefore = memUsage
 	if memUsage > 1024 * 1024 then -- More than 1GB
