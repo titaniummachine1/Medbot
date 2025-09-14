@@ -154,8 +154,6 @@ end
 local function Normalize(vec)
 	return vec / vec:Length()
 end
-
--- Calculate horizontal Manhattan distance between two points
 local function getHorizontalManhattanDistance(point1, point2)
 	return math.abs(point1.x - point2.x) + math.abs(point1.y - point2.y)
 end
@@ -170,7 +168,7 @@ end
 
 -- Adjust the direction vector to align with the surface normal
 local function adjustDirectionToSurface(direction, surfaceNormal)
-	direction = Normalize(direction)
+	direction = normalize(direction)
 	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
 
 	-- Check if the surface is within the maximum allowed angle for adjustment
@@ -184,7 +182,7 @@ local function adjustDirectionToSurface(direction, surfaceNormal)
 	direction.z = direction.z - surfaceNormal.z * dotProduct
 
 	-- Normalize the direction after adjustment
-	return Normalize(direction)
+	return normalize(direction)
 end
 
 -- Main function to check walkability

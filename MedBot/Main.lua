@@ -109,17 +109,17 @@ function handleMovingState(userCmd)
 	-- Use waypoints for precise movement, fallback to path nodes
 	local targetPos
 	local targetId
-	
+
 	if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
 		local currentWaypoint = Navigation.GetCurrentWaypoint()
 		if currentWaypoint then
 			targetPos = currentWaypoint.pos
-			targetId = currentWaypoint.kind == "door" and currentWaypoint.toId or 
-					  currentWaypoint.kind == "center" and currentWaypoint.areaId or
-					  currentWaypoint.id
+			targetId = currentWaypoint.kind == "door" and currentWaypoint.toId
+				or currentWaypoint.kind == "center" and currentWaypoint.areaId
+				or currentWaypoint.id
 		end
 	end
-	
+
 	-- Fallback to path node if no waypoint available
 	if not targetPos then
 		local currentNode = G.Navigation.path[1]
@@ -135,7 +135,7 @@ function handleMovingState(userCmd)
 		Log:Debug("MOVING: pathLen=%d targetId=%s", pathLen, tostring(targetId))
 		G.__lastMoveDebugTick = now
 	end
-	
+
 	if not targetPos then
 		Log:Warn("No target position available, returning to IDLE state")
 		G.currentState = G.States.IDLE
@@ -167,7 +167,7 @@ function handleMovingState(userCmd)
 			G.Misc.NodeTouchDistance,
 			G.Misc.NodeTouchHeight
 		)
-		
+
 		-- Advance to next waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
 			Navigation.AdvanceWaypoint()
@@ -182,7 +182,7 @@ function handleMovingState(userCmd)
 			-- Fallback to node-based advancement
 			Navigation.RemoveCurrentNode()
 			Navigation.ResetTickTimer()
-			
+
 			if #G.Navigation.path == 0 then
 				Navigation.ClearPath()
 				Log:Info("Reached end of path")
