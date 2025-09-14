@@ -54,7 +54,7 @@ local function computeMove(userCmd, a, b)
 	return Vector3(math.cos(yawDiff) * MAX_SPEED, math.sin(-yawDiff) * MAX_SPEED, 0)
 end
 
--- Predictive/no-overshoot WalkTo (superior implementation)
+-- Predictive/no-overshoot WalkTo (simplified back to working method)
 function MovementController.walkTo(cmd, player, dest)
 	if not (cmd and player and dest) then
 		return
@@ -103,12 +103,9 @@ function MovementController.walkTo(cmd, player, dest)
 	local accelDir = deltaV / deltaLen
 	local accelLen = math.min(deltaLen, aMax)
 
-	-- wishspeed proportional to allowed Δv
+	-- Simple wishspeed proportional to allowed Δv (original working method)
 	local wishSpeed = math.max(MAX_SPEED * (accelLen / aMax), 20)
 
-	-- Overshoot guard
-	local maxNoOvershoot = dist / tick
-	wishSpeed = math.min(wishSpeed, maxNoOvershoot)
 	if wishSpeed < 5 then
 		wishSpeed = 0
 	end
