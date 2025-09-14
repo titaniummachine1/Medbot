@@ -106,4 +106,21 @@ function WorkManager.processWorks()
 	end
 end
 
+--- Clears work by identifier
+--- @param identifier string The identifier of the work to clear
+function WorkManager.clearWork(identifier)
+	if WorkManager.works[identifier] then
+		WorkManager.works[identifier] = nil
+		-- Remove from sorted identifiers list
+		for i = #WorkManager.sortedIdentifiers, 1, -1 do
+			if WorkManager.sortedIdentifiers[i] == identifier then
+				table.remove(WorkManager.sortedIdentifiers, i)
+				break
+			end
+		end
+		return true
+	end
+	return false
+end
+
 return WorkManager
