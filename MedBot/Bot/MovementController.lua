@@ -61,51 +61,10 @@ function MovementController.walkTo(cmd, player, dest)
 	end
 
 	local localPos = player:GetAbsOrigin()
-	local distVector = dest - localPos
-	local dist = distVector:Length()
-	local currentSpeed = MAX_SPEED
 
-	local distancePerTick = math.max(10, math.min(currentSpeed / 66, 450)) -- prevent overshooting when close
-
-	if dist > distancePerTick then -- if far away, walk at max speed
-		local result = computeMove(cmd, localPos, dest)
-		cmd:SetForwardMove(result.x)
-		cmd:SetSideMove(result.y)
-	else -- if close, use fast stop for smooth stopping
-		MovementController.fastStop(cmd, player)
-	end
-end
-
--- Fast stop function for smooth stopping
-function MovementController.fastStop(cmd, player)
-	local velocity = player:GetVelocity()
-	velocity.z = 0
-	local speed = velocity:Length2D()
-
-	if speed < 1 then
-		cmd:SetForwardMove(0)
-		cmd:SetSideMove(0)
-		return
-	end
-
-	local accel = 5.5
-	local maxSpeed = MAX_SPEED
-	local playerSurfaceFriction = 1.0
-	local max_accelspeed = accel * (1 / TICK_RATE) * maxSpeed * playerSurfaceFriction
-
-	local wishspeed
-	if speed - max_accelspeed <= -1 then
-		wishspeed = max_accelspeed / (speed / (accel * (1 / TICK_RATE)))
-	else
-		wishspeed = max_accelspeed
-	end
-
-	local ndir = (velocity * -1):Angles()
-	ndir.y = cmd:GetViewAngles().y - ndir.y
-	ndir = ndir:ToVector()
-
-	cmd:SetForwardMove(ndir.x * wishspeed)
-	cmd:SetSideMove(ndir.y * wishspeed)
+	local result = computeMove(cmd, localPos, dest)
+	cmd:SetForwardMove(result.x)
+	cmd:SetSideMove(result.y)
 end
 
 -- Handle camera rotation if LookingAhead is enabled

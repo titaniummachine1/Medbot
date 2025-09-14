@@ -1,5 +1,5 @@
 local Common = require("MedBot.Core.Common")
-local G = require("MedBot.Utils.Globals")
+local G = require("MedBot.Core.Globals")
 local Log = Common.Log.new("SmartJump")
 
 Log.Level = 0
