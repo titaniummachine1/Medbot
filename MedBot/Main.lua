@@ -34,12 +34,14 @@ local Log = Common.Log.new("MedBot")
 Log.Level = 0
 
 -- Constants for timing and performance
-local DISTANCE_CHECK_COOLDOWN = 3  -- ticks (~50ms) between distance calculations
-local DEBUG_LOG_COOLDOWN = 15      -- ticks (~0.25s) between debug logs
+local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
+local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
 
 -- Helper function: Check if we've reached the target with optimized distance calculation
 local function hasReachedTarget(origin, targetPos, touchDistance, touchHeight)
-	if not origin or not targetPos then return false end
+	if not origin or not targetPos then
+		return false
+	end
 
 	local horizontalDist = Common.Distance2D(origin, targetPos)
 	local verticalDist = math.abs(origin.z - targetPos.z)
@@ -200,7 +202,11 @@ function handleMovingState(userCmd)
 			end
 		else
 			-- Fallback to node-based advancement
-			Log:Debug("Main.lua node advancement - Skip_Nodes = %s, path length = %d", tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
+			Log:Debug(
+				"Main.lua node advancement - Skip_Nodes = %s, path length = %d",
+				tostring(G.Menu.Main.Skip_Nodes),
+				#G.Navigation.path
+			)
 			if G.Menu.Main.Skip_Nodes then
 				-- Only skip nodes if Skip Nodes is enabled
 				Log:Debug("Main.lua: Removing current node (Skip Nodes enabled)")
@@ -296,7 +302,11 @@ local function onGameEvent(event)
 	if eventName == "ctf_flag_captured" then
 		local cappingTeam = event:GetInt("capping_team")
 		local cappingTeamScore = event:GetInt("capping_team_score")
-		Log:Info("CTF Flag captured by team %d (score: %d) - repathing due to objective change", cappingTeam, cappingTeamScore)
+		Log:Info(
+			"CTF Flag captured by team %d (score: %d) - repathing due to objective change",
+			cappingTeam,
+			cappingTeamScore
+		)
 
 		-- Force bot to repath and reconsider target
 		if G.currentState == G.States.MOVING or G.currentState == G.States.IDLE then

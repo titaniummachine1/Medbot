@@ -54,70 +54,58 @@ local function computeMove(userCmd, a, b)
 	return Vector3(math.cos(yawDiff) * MAX_SPEED, math.sin(-yawDiff) * MAX_SPEED, 0)
 end
 
--- Predictive/no-overshoot WalkTo (simplified back to working method)
+-- Simple WalkTo that works wonders (from old Navigation.lua)
 function MovementController.walkTo(cmd, player, dest)
 	if not (cmd and player and dest) then
 		return
 	end
 
-	local pos = player:GetAbsOrigin()
-	if not pos then
-		return
+	local localPos = player:GetAbsOrigin()
+	local distVector = dest - localPos
+	local dist = distVector:Length()
+	local currentSpeed = MAX_SPEED
+
+	local distancePerTick = math.max(10, math.min(currentSpeed / 66, 450)) -- prevent overshooting when close
+
+	if dist > distancePerTick then -- if far away, walk at max speed
+		local result = computeMove(cmd, localPos, dest)
+		cmd:SetForwardMove(result.x)
+		cmd:SetSideMove(result.y)
+	else -- if close, use fast stop for smooth stopping
+		MovementController.fastStop(cmd, player)
 	end
+end
 
-	local tick = globals.TickInterval()
-	if tick <= 0 then
-		tick = 1 / 66.67
-	end
+-- Fast stop function for smooth stopping
+function MovementController.fastStop(cmd, player)
+	local velocity = player:GetVelocity()
+	velocity.z = 0
+	local speed = velocity:Length2D()
 
-	-- Current horizontal velocity (ignore Z)
-	local vel = player:EstimateAbsVelocity() or Vector3(0, 0, 0)
-	vel.z = 0
-
-	-- Predict passive drag to next tick
-	local drag = math.max(0, 1 - getGroundFriction() * tick)
-	local velNext = vel * drag
-	local predicted = Vector3(pos.x + velNext.x * tick, pos.y + velNext.y * tick, pos.z)
-
-	-- Remaining displacement after coast
-	local need = dest - predicted
-	need.z = 0
-	local dist = need:Length()
-	if dist < 1.5 then
+	if speed < 1 then
 		cmd:SetForwardMove(0)
 		cmd:SetSideMove(0)
 		return
 	end
 
-	-- Velocity we need at start of next tick to land on dest
-	local deltaV = (need / tick) - velNext
-	local deltaLen = deltaV:Length()
-	if deltaLen < 0.1 then
-		cmd:SetForwardMove(0)
-		cmd:SetSideMove(0)
-		return
+	local accel = 5.5
+	local maxSpeed = MAX_SPEED
+	local playerSurfaceFriction = 1.0
+	local max_accelspeed = accel * (1 / TICK_RATE) * maxSpeed * playerSurfaceFriction
+
+	local wishspeed
+	if speed - max_accelspeed <= -1 then
+		wishspeed = max_accelspeed / (speed / (accel * (1 / TICK_RATE)))
+	else
+		wishspeed = max_accelspeed
 	end
 
-	-- Accel clamp from sv_accelerate
-	local aMax = getGroundMaxDeltaV(player, tick)
-	local accelDir = deltaV / deltaLen
-	local accelLen = math.min(deltaLen, aMax)
+	local ndir = (velocity * -1):Angles()
+	ndir.y = cmd:GetViewAngles().y - ndir.y
+	ndir = ndir:ToVector()
 
-	-- Simple wishspeed proportional to allowed Δv (original working method)
-	local wishSpeed = math.max(MAX_SPEED * (accelLen / aMax), 20)
-
-	if wishSpeed < 5 then
-		wishSpeed = 0
-	end
-
-	-- Convert accelDir into local move inputs
-	local dirEnd = pos + accelDir
-	local moveVec = computeMove(cmd, pos, dirEnd)
-	local fwd = (moveVec.x / MAX_SPEED) * wishSpeed
-	local side = (moveVec.y / MAX_SPEED) * wishSpeed
-
-	cmd:SetForwardMove(fwd)
-	cmd:SetSideMove(side)
+	cmd:SetForwardMove(ndir.x * wishspeed)
+	cmd:SetSideMove(ndir.y * wishspeed)
 end
 
 -- Handle camera rotation if LookingAhead is enabled
