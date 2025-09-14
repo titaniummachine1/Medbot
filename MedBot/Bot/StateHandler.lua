@@ -184,6 +184,54 @@ end
 function StateHandler.handleStuckState(userCmd)
 	local currentTick = globals.TickCount()
 
+	-- Check velocity and path walkability for unstuck
+	local pLocal = G.pLocal.entity
+	if pLocal then
+		local velocity = pLocal:EstimateAbsVelocity()
+		local speed2D = velocity and math.sqrt(velocity.x^2 + velocity.y^2) or 0
+
+		-- If velocity drops below 50, check if path is walkable
+		if speed2D < 50 then
+			local path = G.Navigation.path
+			if path and #path >= 1 then
+				local currentNode = path[1]
+				if currentNode and currentNode.pos then
+					local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+					local origin = G.pLocal.Origin
+
+					-- Check if we can walk to current target
+					if not ISWalkable.Path(origin, currentNode.pos, walkMode) then
+						Log:Warn("Velocity < 50 (%.1f) and path to current node is unwalkable - adding 100 cost penalty", speed2D)
+
+						-- Find the connection and add 100 cost
+						if #path >= 2 then
+							local prevNode = #path >= 2 and path[#path - 1] or nil
+							local currNode = path[#path - 1]
+							local nextNode = path[#path]
+
+							if prevNode and currNode and nextNode then
+								-- Add cost to the connection we're trying to traverse
+								local connection = Navigation.GetConnectionEntry(currNode, nextNode)
+								if connection then
+									connection.cost = (connection.cost or 1) + 100
+									Log:Info("Added 100 cost penalty to connection %d -> %d (new cost: %d)",
+										currNode.id, nextNode.id, connection.cost)
+								end
+							end
+						end
+
+						-- Force immediate repath
+						G.currentState = G.States.PATHFINDING
+						G.lastPathfindingTick = 0
+						G.Navigation.stuckStartTick = nil
+						return
+					end
+				end
+			end
+		end
+	end
+
+	-- Rest of the existing stuck logic for circuit breaker...
 	-- Initialize stuck timer if not set
 	if not G.Navigation.stuckStartTick then
 		G.Navigation.stuckStartTick = currentTick

@@ -7,6 +7,7 @@ local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Navigation = require("MedBot.Navigation")
 local ISWalkable = require("MedBot.Navigation.ISWalkable")
+local WorkManager = require("MedBot.WorkManager")
 
 local Log = Common.Log.new("PathOptimizer")
 local PathOptimizer = {}
@@ -41,44 +42,32 @@ function PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path)
     return false
 end
 
--- Skip if next node is closer to the player than the current node
-function PathOptimizer.skipIfCloser(origin, path)
+-- Skip if next node is walkable (simplified with work manager cooldown)
+function PathOptimizer.skipIfNextWalkable(origin, path)
     if not path or #path < 2 then
         return false
     end
-    local curNode, nextNode = path[1], path[2]
-    if not (curNode and nextNode and curNode.pos and nextNode.pos) then
-        return false
-    end
-    local distCur = (curNode.pos - origin):Length()
-    local distNext = (nextNode.pos - origin):Length()
-    if distNext < distCur then
-        Navigation.RemoveCurrentNode()
-        Navigation.ResetTickTimer()
-        return true
-    end
-    return false
-end
 
--- Skip if we can walk directly to the node after next
-function PathOptimizer.skipIfWalkable(origin, path)
-    if not path or #path < 3 then
+    local nextNode = path[2]
+    if not nextNode or not nextNode.pos then
         return false
     end
-    local candidate = path[3]
+
+    -- Check if we can walk directly to the next node
     local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-    if #path == 3 then
-        walkMode = "Aggressive"
-    end
-    if candidate and candidate.pos and ISWalkable.Path(origin, candidate.pos, walkMode) then
+    if ISWalkable.Path(origin, nextNode.pos, walkMode) then
+        Log:Debug("Next node %d is walkable, skipping current node", nextNode.id or 0)
+
+        -- Skip to next node
         Navigation.RemoveCurrentNode()
         Navigation.ResetTickTimer()
         return true
     end
+
     return false
 end
 
--- Optimize path by trying different skip strategies
+-- Optimize path by trying different skip strategies with work manager
 function PathOptimizer.optimize(origin, path, goalPos)
     if not G.Menu.Main.Skip_Nodes or not path or #path <= 1 then
         return false
@@ -91,19 +80,14 @@ function PathOptimizer.optimize(origin, path, goalPos)
         end
     end
 
-    -- Only run the heavier skip checks every few ticks to reduce CPU
-    local now = globals.TickCount()
-    if not G.lastNodeSkipTick then
-        G.lastNodeSkipTick = 0
+    -- Use work manager for node skipping cooldown (same as unstuck logic)
+    if not WorkManager.attemptWork(3, "node_skip") then -- 3 tick cooldown (~50ms)
+        return false
     end
-    if (now - G.lastNodeSkipTick) >= 3 then -- run every 3 ticks (~50 ms)
-        G.lastNodeSkipTick = now
-        -- Skip only when safe with door semantics
-        if PathOptimizer.skipIfCloser(origin, path) then
-            return true
-        elseif PathOptimizer.skipIfWalkable(origin, path) then
-            return true
-        end
+
+    -- Skip to next node if it's walkable
+    if PathOptimizer.skipIfNextWalkable(origin, path) then
+        return true
     end
 
     return false

@@ -6,6 +6,44 @@ local Heap = require("MedBot.Algorithms.Heap")
 local Common = require("MedBot.Core.Common")
 local Log = Common.Log.new("AStar")
 
+-- Memory Pooling System for GC Optimization
+local tablePool = {}
+local poolSize = 0
+local maxPoolSize = 1000
+
+local function getPooledTable()
+	local t = table.remove(tablePool)
+	if t then
+		poolSize = poolSize - 1
+		return t
+	end
+	return {}
+end
+
+local function releaseTable(t)
+	if not t then
+		return
+	end
+
+	-- Clear the table
+	for k in pairs(t) do
+		t[k] = nil
+	end
+
+	-- Add to pool if not full
+	if poolSize < maxPoolSize then
+		table.insert(tablePool, t)
+		poolSize = poolSize + 1
+	end
+end
+
+-- Batch release for efficiency
+local function releaseTables(...)
+	for i = 1, select("#", ...) do
+		releaseTable(select(i, ...))
+	end
+end
+
 -- Type definitions for A* pathfinding
 
 ---@class Vector3
@@ -31,12 +69,12 @@ local AStar = {}
 ---@alias NodeMap table<integer, Node>
 ---@alias NeighborDataArray NeighborData[]
 
----Calculate heuristic cost between two nodes
+---Calculate heuristic cost between two nodes (simplified back to distance)
 ---@param nodeA Node Starting node
 ---@param nodeB Node Target node
 ---@return number Heuristic cost estimate
 local function heuristicCost(nodeA, nodeB)
-	-- Use actual distance as heuristic
+	-- Simple distance-based heuristic (admissible)
 	return (nodeA.pos - nodeB.pos):Length()
 end
 
@@ -46,6 +84,9 @@ end
 ---@param goalNode Node Goal node of the path
 ---@return Node[]|nil Array of nodes representing the path, or nil if no valid path
 local function reconstructPath(cameFrom, startNode, goalNode)
+	-- Track best path found for early termination
+	local bestPathFound = nil
+	local bestPathCost = math.huge
 	local path = {}
 	local current = goalNode
 
@@ -93,6 +134,79 @@ local function reconstructPath(cameFrom, startNode, goalNode)
 	return optimizedPath
 end
 
+-- Path Smoothing: Remove unnecessary waypoints and straighten zigzag paths
+local function smoothPath(rawPath)
+	if not rawPath or #rawPath < 3 then
+		return rawPath
+	end
+
+	local smoothed = { rawPath[1] } -- Always keep start
+	local i = 2
+
+	while i < #rawPath do
+		local current = rawPath[i]
+		local lastKept = smoothed[#smoothed]
+
+		-- Look ahead to see if we can skip waypoints
+		local canSkip = true
+		for j = i + 1, #rawPath do
+			local future = rawPath[j]
+
+			-- Check if the direct path from lastKept to future is walkable
+			-- For now, use a simple distance-based check to avoid navmesh issues
+			local directDist = (lastKept.pos - future.pos):Length()
+			local waypointDist = 0
+
+			-- Calculate total distance through waypoints
+			for k = i, j - 1 do
+				waypointDist = waypointDist + (rawPath[k].pos - rawPath[k + 1].pos):Length()
+			end
+
+			-- If direct path is significantly shorter, we can skip waypoints
+			if directDist < waypointDist * 0.8 then
+				-- Check for obstacles (simplified - just check if any waypoint has special properties)
+				local hasObstacle = false
+				for k = i, j - 1 do
+					if rawPath[k].isDoor then
+						hasObstacle = true
+						break
+					end
+				end
+
+				if not hasObstacle then
+					i = j - 1 -- Skip to this future waypoint
+					canSkip = false
+					break
+				end
+			end
+		end
+
+		if canSkip then
+			-- Add current waypoint to smoothed path
+			table.insert(smoothed, current)
+		end
+		i = i + 1
+	end
+
+	-- Always keep the goal
+	if #smoothed > 0 and smoothed[#smoothed] ~= rawPath[#rawPath] then
+		table.insert(smoothed, rawPath[#rawPath])
+	end
+
+	Log:Debug("Path smoothed: " .. #rawPath .. " -> " .. #smoothed .. " waypoints")
+	return smoothed
+end
+
+-- Apply path smoothing to the reconstructed path
+local function reconstructAndSmoothPath(cameFrom, startNode, goalNode)
+	local rawPath = reconstructPath(cameFrom, startNode, goalNode)
+	if not rawPath then
+		return nil
+	end
+
+	return smoothPath(rawPath)
+end
+
 ---Find the shortest path between two nodes using A* algorithm
 ---@param startNode Node Starting node
 ---@param goalNode Node Target node
@@ -114,16 +228,12 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 		return a.fScore < b.fScore
 	end)
 
-	---@type table<Node, boolean>
-	local openSetLookup = {} -- Tracks which nodes are currently in openSet
-	---@type table<Node, boolean>
-	local closedSet = {}
-	---@type table<Node, number>
-	local gScore = {}
-	---@type table<Node, number>
-	local fScore = {}
-	---@type table<Node, Node>
-	local cameFrom = {}
+	-- Use pooled tables for memory efficiency
+	local openSetLookup = getPooledTable() -- Tracks which nodes are currently in openSet
+	local closedSet = getPooledTable()
+	local gScore = getPooledTable()
+	local fScore = getPooledTable()
+	local cameFrom = getPooledTable()
 
 	-- Initialize start node
 	gScore[startNode] = 0
@@ -143,9 +253,9 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 
 		-- Goal reached -> reconstruct path
 		if current.id == goalNode.id then
-			local path = reconstructPath(cameFrom, startNode, current)
+			local path = reconstructAndSmoothPath(cameFrom, startNode, current)
 			if not path then
-				print("A* Error: Path reconstruction failed from " .. startNode.id .. " to " .. goalNode.id)
+				print(string.format("A* Error: Path reconstruction failed from %s to %s", startNode.id, goalNode.id))
 			end
 			-- Clean up before returning
 			for node in pairs(openSetLookup) do
@@ -163,6 +273,7 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 			for node in pairs(cameFrom) do
 				cameFrom[node] = nil
 			end
+			releaseTables(openSetLookup, closedSet, gScore, fScore, cameFrom)
 			return path
 		end
 
@@ -253,6 +364,7 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 	for node in pairs(cameFrom) do
 		cameFrom[node] = nil
 	end
+	releaseTables(openSetLookup, closedSet, gScore, fScore, cameFrom)
 
 	-- No path found
 	return nil
