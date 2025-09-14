@@ -307,76 +307,22 @@ function Navigation.BuildDoorWaypointsFromPath()
 				doorPoint = Node.GetDoorTargetPoint(a, b)
 			end
 
-			if doorPoint then
-				-- Check if we should skip area center for direct door-to-door navigation
-				local shouldSkipCenter = false
-				if i < #path - 1 then -- Not the last edge
-					local nextArea = path[i + 2]
-					if nextArea then
-						local nextEntry = Node.GetConnectionEntry(b, nextArea)
-						local nextDoorPoint = nil
+		if doorPoint then
+			-- Add door waypoint
+			table.insert(G.Navigation.waypoints, {
+				kind = "door",
+				fromId = a.id,
+				toId = b.id,
+				pos = doorPoint,
+			})
 
-						if nextEntry and (nextEntry.left or nextEntry.middle or nextEntry.right) then
-							-- Choose optimal next door position based on distance to current door
-							local nextDoorPositions = {}
-							if nextEntry.left then
-								table.insert(nextDoorPositions, nextEntry.left)
-							end
-							if nextEntry.middle then
-								table.insert(nextDoorPositions, nextEntry.middle)
-							end
-							if nextEntry.right then
-								table.insert(nextDoorPositions, nextEntry.right)
-							end
-
-							if #nextDoorPositions > 0 then
-								local bestNextPos = nextDoorPositions[1]
-								local bestNextDist = (nextDoorPositions[1] - doorPoint):Length()
-
-								for j = 2, #nextDoorPositions do
-									local dist = (nextDoorPositions[j] - doorPoint):Length()
-									if dist < bestNextDist then
-										bestNextPos = nextDoorPositions[j]
-										bestNextDist = dist
-									end
-								end
-								nextDoorPoint = bestNextPos
-							end
-						else
-							nextDoorPoint = Node.GetDoorTargetPoint(b, nextArea)
-						end
-
-						if nextDoorPoint then
-							-- Compare distances: door->center->nextDoor vs door->nextDoor
-							local viaCenterDist = (doorPoint - b.pos):Length() + (b.pos - nextDoorPoint):Length()
-							local directDist = (doorPoint - nextDoorPoint):Length()
-
-							-- Skip center if direct path is shorter by meaningful margin
-							-- Also skip if both doors are in same area (always skip center for same area)
-							if directDist < viaCenterDist * 0.9 or (a.id and b.id and a.id == b.id) then
-								shouldSkipCenter = true
-							end
-						end
-					end
-				end
-
-				-- Add door waypoint
-				table.insert(G.Navigation.waypoints, {
-					kind = "door",
-					fromId = a.id,
-					toId = b.id,
-					pos = doorPoint,
-				})
-
-				-- Add center waypoint only if not skipping
-				if not shouldSkipCenter then
-					table.insert(G.Navigation.waypoints, {
-						pos = b.pos,
-						kind = "center",
-						areaId = b.id,
-					})
-				end
-			end
+			-- Always add center waypoint (don't do optimization here - let PathOptimizer handle it)
+			table.insert(G.Navigation.waypoints, {
+				pos = b.pos,
+				kind = "center",
+				areaId = b.id,
+			})
+		end
 		end
 	end
 
@@ -592,6 +538,9 @@ function Navigation.FindPath(startNode, goalNode)
 		pcall(setmetatable, G.Navigation.path, { __mode = "v" })
 		-- Refresh waypoints to reflect current door usage
 		Navigation.BuildDoorWaypointsFromPath()
+		-- Apply PathOptimizer for menu-controlled optimization
+		local PathOptimizer = require("MedBot.Bot.PathOptimizer")
+		PathOptimizer.optimize(G.pLocal.Origin, G.Navigation.path, goalNode.pos)
 		-- Reset traversed-node history for new path
 		G.Navigation.pathHistory = {}
 	end
