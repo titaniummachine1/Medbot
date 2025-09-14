@@ -112,6 +112,9 @@ function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_wi
 
 	-- Only draw if all screen positions are valid
 	if w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2 then
+		-- Set color before drawing
+		draw.Color(255, 255, 255, 255) -- White for arrows
+
 		-- Draw the line from start to the base of the arrow (not all the way to the end)
 		draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
 

@@ -51,7 +51,7 @@ function StateHandler.handleIdleState()
 		if allowDirectWalk then
 			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
 			walkMode = "Aggressive" -- short hops favor aggressive checks
-			if ISWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
+			if ISWalkable.PathCached(G.pLocal.Origin, goalPos, walkMode) then
 				Log:Info("Direct-walk (short hop) with %s, moving immediately (dist: %.1f)", walkMode, distance)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.Navigation.goalPos = goalPos
@@ -122,7 +122,7 @@ function StateHandler.handleIdleState()
 			end
 		end
 
-		if goalPos and ISWalkable.Path(G.pLocal.Origin, goalPos, walkMode) then
+		if goalPos and ISWalkable.PathCached(G.pLocal.Origin, goalPos, walkMode) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick
@@ -201,31 +201,45 @@ function StateHandler.handleStuckState(userCmd)
 					local origin = G.pLocal.Origin
 
 					-- Check if we can walk to current target
-					if not ISWalkable.Path(origin, currentNode.pos, walkMode) then
-						Log:Warn("Velocity < 50 (%.1f) and path to current node is unwalkable - adding 100 cost penalty", speed2D)
+					if not ISWalkable.PathCached(origin, currentNode.pos, walkMode) then
+						Log:Warn("Velocity < 50 (%.1f) and path to current node is unwalkable - attempting gradual movement", speed2D)
 
-						-- Find the connection and add 100 cost
+						-- Instead of immediately repathing, allow bot to continue moving toward target
+						-- Add small cost penalty but don't stop movement entirely
 						if #path >= 2 then
 							local prevNode = #path >= 2 and path[#path - 1] or nil
 							local currNode = path[#path - 1]
 							local nextNode = path[#path]
 
 							if prevNode and currNode and nextNode then
-								-- Add cost to the connection we're trying to traverse
+								-- Add smaller penalty (25 instead of 100) to encourage but not block
 								local connection = Node.GetConnectionEntry(currNode, nextNode)
 								if connection then
-									connection.cost = (connection.cost or 1) + 100
-									Log:Info("Added 100 cost penalty to connection %d -> %d (new cost: %d)",
+									connection.cost = (connection.cost or 1) + 25
+									Log:Info("Added 25 cost penalty to connection %d -> %d (new cost: %d) - continuing movement",
 										currNode.id, nextNode.id, connection.cost)
 								end
 							end
 						end
 
-						-- Force immediate repath
-						G.currentState = G.States.PATHFINDING
-						G.lastPathfindingTick = 0
-						G.Navigation.stuckStartTick = nil
-						return
+						-- Stay in MOVING state and let bot continue attempting movement
+						-- Only trigger repathing if we've been stuck for multiple attempts
+						local stuckAttempts = (G.Navigation.unwalkableCount or 0) + 1
+						G.Navigation.unwalkableCount = stuckAttempts
+
+						if stuckAttempts >= 3 then
+							Log:Warn("Multiple unwalkable attempts (%d), triggering repath", stuckAttempts)
+							G.currentState = G.States.PATHFINDING
+							G.lastPathfindingTick = 0
+							G.Navigation.stuckStartTick = nil
+							G.Navigation.unwalkableCount = 0
+							return
+						else
+							Log:Debug("Continuing movement despite unwalkable path (attempt %d/3)", stuckAttempts)
+						end
+					else
+						-- Path is walkable, reset unwalkable counter
+						G.Navigation.unwalkableCount = 0
 					end
 				end
 			end

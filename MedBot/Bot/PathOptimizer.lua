@@ -14,6 +14,11 @@ local PathOptimizer = {}
 
 -- Skip entire path if goal is directly reachable
 function PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path)
+	-- Check menu setting first
+	if not G.Menu.Main.Skip_Nodes then
+		return false
+	end
+
 	local DEADZONE = 24 -- units
 	if not goalPos or not origin then
 		return false
@@ -30,7 +35,7 @@ function PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path)
 	local mapName = engine.GetMapName():lower()
 	if path and #path > 1 and not mapName:find("ctf_") then
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if ISWalkable.Path(origin, goalPos, walkMode) then
+		if ISWalkable.PathCached(origin, goalPos, walkMode) then
 			Navigation.ClearPath()
 			-- Set a direct path with just the goal as the node
 			G.Navigation.path = { { pos = goalPos } }
@@ -44,6 +49,11 @@ end
 
 -- Skip if next node is closer to player than current node and walkable
 function PathOptimizer.skipIfNextCloserAndWalkable(origin, path)
+	-- Check menu setting first
+	if not G.Menu.Main.Skip_Nodes then
+		return false
+	end
+
 	if not path or #path < 2 then
 		return false
 	end
@@ -66,7 +76,7 @@ function PathOptimizer.skipIfNextCloserAndWalkable(origin, path)
 
 	-- Check if we can walk directly to the next node
 	local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-	if ISWalkable.Path(origin, nextNode.pos, walkMode) then
+	if ISWalkable.PathCached(origin, nextNode.pos, walkMode) then
 		Log:Debug(
 			"Next node %d is closer (%.1f < %.1f) and walkable, skipping current node %d",
 			nextNode.id or 0,
@@ -104,11 +114,6 @@ function PathOptimizer.optimize(origin, path, goalPos)
 
 	-- Try the simple algorithm: skip if next node is closer and walkable
 	if PathOptimizer.skipIfNextCloserAndWalkable(origin, path) then
-		return true
-	end
-
-	-- Fallback: skip to next node if it's walkable (existing logic)
-	if PathOptimizer.skipIfNextWalkable(origin, path) then
 		return true
 	end
 
