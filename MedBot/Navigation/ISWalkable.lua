@@ -1,49 +1,158 @@
 -- Path Validation Module - Uses trace hulls to check if path A→B is walkable
 -- This is NOT movement execution, just validation logic
+-- Uses the expensive but accurate algorithm from A_standstillDummy.lua
+-- Only called during stuck detection, so performance cost is acceptable
 local isWalkable = {}
 local G = require("MedBot.Core.Globals")
 local Common = require("MedBot.Core.Common")
 
--- Constants based on standstill dummy's robust implementation
+-- Constants
+local pLocal = entities.GetLocalPlayer()
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) } -- Player collision hull
-local STEP_HEIGHT = 18 -- Maximum height the player can step up
+local MaxSpeed = (pLocal and pLocal:GetPropFloat("m_flMaxspeed")) or 450 -- Default to 450 if max speed not available
+local gravity = client.GetConVar("sv_gravity") or 800 -- Gravity or default one
+local STEP_HEIGHT = (pLocal and pLocal:GetPropFloat("localdata", "m_flStepSize")) or 18 -- Maximum height the player can step up
 local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
 local MAX_FALL_DISTANCE = 250 -- Maximum distance the player can fall without taking fall damage
 local MAX_FALL_DISTANCE_Vector = Vector3(0, 0, MAX_FALL_DISTANCE)
 local STEP_FRACTION = STEP_HEIGHT / MAX_FALL_DISTANCE
 
 local UP_VECTOR = Vector3(0, 0, 1)
+local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval() -- Minimum step size to consider for ground checks
+
 local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
 local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
 
--- Helper function to get local player for speed calculation
-local function getLocalPlayer()
-	return entities.GetLocalPlayer()
-end
-
--- Helper function to get min step size based on player speed
-local function getMinStepSize()
-	local pLocal = getLocalPlayer()
-	if pLocal then
-		local maxSpeed = pLocal:GetPropFloat("m_flMaxspeed") or 450
-		return maxSpeed * globals.TickInterval()
+-- Debug visualization function for trace hulls (like A_standstillDummy)
+function isWalkable.DrawDebugTraces()
+	if not DEBUG_TRACES then
+		return
 	end
-	return 7.5 -- Fallback value (450 * 1/66)
+
+	if not hullTraces then
+		print("ISWalkable: hullTraces is nil!")
+		return
+	end
+
+	if #hullTraces == 0 then
+		print("ISWalkable: hullTraces is empty")
+		return
+	end
+
+	print("ISWalkable: Drawing " .. #hullTraces .. " hull traces")
+
+	-- Draw all hull traces as blue arrow lines
+	for _, trace in ipairs(hullTraces) do
+		if trace.startPos and trace.endPos then
+			draw.Color(0, 50, 255, 255) -- Blue for hull traces
+			isWalkable.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+		end
+	end
+
+	-- Draw all line traces as white lines
+	for _, trace in ipairs(lineTraces) do
+		if trace.startPos and trace.endPos then
+			draw.Color(255, 255, 255, 255) -- White for line traces
+			local w2s_start = client.WorldToScreen(trace.startPos)
+			local w2s_end = client.WorldToScreen(trace.endPos)
+			if w2s_start and w2s_end then
+				draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+			end
+		end
+	end
 end
 
--- Helper function to check if we should hit an entity (ignore local player)
+-- Arrow line drawing function (simplified from A_standstillDummy)
+function isWalkable.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
+	if not (start_pos and end_pos) then
+		return
+	end
+
+	-- If invert is true, swap start_pos and end_pos
+	if invert then
+		start_pos, end_pos = end_pos, start_pos
+	end
+
+	-- Calculate direction from start to end
+	local direction = end_pos - start_pos
+
+	-- Check if arrow size is too small
+	local min_acceptable_length = arrowhead_length + (arrowhead_width / 2)
+	if direction:Length() < min_acceptable_length then
+		-- Draw a regular line if arrow size is too small
+		local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
+		if w2s_start and w2s_end then
+			draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+		end
+		return
+	end
+
+	-- Normalize the direction vector
+	local normalized_direction = isWalkable.Normalize(direction)
+
+	-- Calculate the arrow base position
+	local arrow_base = end_pos - normalized_direction * arrowhead_length
+
+	-- Calculate the perpendicular vector for the arrow width
+	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
+
+	-- Convert world positions to screen positions
+	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
+	local w2s_arrow_base = client.WorldToScreen(arrow_base)
+	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
+	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
+
+	if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
+		return
+	end
+
+	-- Draw the line from start to the base of the arrow
+	draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
+
+	-- Draw the sides of the arrowhead
+	draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
+	draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
+
+	-- Draw the base of the arrowhead
+	draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
+end
+
+-- Vector normalization function
+function isWalkable.Normalize(vec)
+	return vec / vec:Length()
+end
+
+-- Toggle debug visualization on/off
+function isWalkable.ToggleDebug()
+	DEBUG_TRACES = not DEBUG_TRACES
+	print("ISWalkable debug traces: " .. (DEBUG_TRACES and "ENABLED" or "DISABLED"))
+end
+
+-- Get current debug state
+function isWalkable.IsDebugEnabled()
+	return DEBUG_TRACES
+end
+
+-- Clear debug traces (call this before each ISWalkable check)
+function isWalkable.ClearDebugTraces()
+	hullTraces = {}
+	lineTraces = {}
+end
+
+-- Traces tables for debugging
+local hullTraces = {}
+local lineTraces = {}
+
+-- Debug flag (set to true to enable trace visualization)
+local DEBUG_TRACES = true -- TEMPORARILY ENABLED FOR TESTING
+
 local function shouldHitEntity(entity)
-	local pLocal = getLocalPlayer()
 	return entity ~= pLocal -- Ignore self (the player being simulated)
 end
 
 -- Normalize a vector
 local function Normalize(vec)
-	local length = vec:Length()
-	if length == 0 then
-		return vec
-	end
-	return vec / length
+	return vec / vec:Length()
 end
 
 -- Calculate horizontal Manhattan distance between two points
@@ -53,7 +162,10 @@ end
 
 -- Perform a hull trace to check for obstructions between two points
 local function performTraceHull(startPos, endPos)
-	return engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
+	local result =
+		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
+	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos })
+	return result
 end
 
 -- Adjust the direction vector to align with the surface normal
@@ -75,69 +187,55 @@ local function adjustDirectionToSurface(direction, surfaceNormal)
 	return Normalize(direction)
 end
 
--- Main function to check if the path between the current position and the node is walkable.
--- Uses robust algorithm from standstill dummy to prevent walking over walls
--- Respects Walkable Mode setting: "Step" = 18-unit steps only, "Jump" = 72-unit duck jumps allowed
-function isWalkable.Path(startPos, endPos, overrideMode)
-	-- Get walkable mode from menu or override value
-	local walkableMode = overrideMode or G.Menu.Main.WalkableMode or "Smooth"
-	local maxStepHeight = walkableMode == "Aggressive" and 72 or STEP_HEIGHT -- 72 for duck jumps, 18 for steps
-	local maxStepVector = Vector3(0, 0, maxStepHeight)
-	local stepFraction = maxStepHeight / MAX_FALL_DISTANCE
+-- Main function to check walkability
+-- Uses the expensive but accurate algorithm from A_standstillDummy.lua
+-- Only called during stuck detection, so performance cost is acceptable
+function isWalkable.Path(startPos, goalPos, overrideMode)
+	-- Clear trace tables for debugging (like A_standstillDummy)
+	hullTraces = {}
+	lineTraces = {}
 
-	-- Quick height check first
-	local totalHeightDiff = endPos.z - startPos.z
-	if totalHeightDiff > maxStepHeight then
-		return false -- Too high for current mode
-	end
+	print("ISWalkable: Path called from " .. tostring(startPos) .. " to " .. tostring(goalPos))
 
-	local blocked = false
+	-- Initialize variables
 	local currentPos = startPos
-	local MIN_STEP_SIZE = 7.5 -- Use fixed small step size for robust ground checks
 
 	-- Adjust start position to ground level
-	local startGroundTrace = performTraceHull(startPos + maxStepVector, startPos - MAX_FALL_DISTANCE_Vector)
+	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
+
 	currentPos = startGroundTrace.endpos
 
 	-- Initial direction towards goal, adjusted for ground normal
 	local lastPos = currentPos
-	local lastDirection = adjustDirectionToSurface(endPos - currentPos, startGroundTrace.plane)
+	local lastDirection = adjustDirectionToSurface(goalPos - currentPos, startGroundTrace.plane)
 
-	local MaxDistance = getHorizontalManhattanDistance(startPos, endPos)
+	local MaxDistance = getHorizontalManhattanDistance(startPos, goalPos)
 
 	-- Main loop to iterate towards the goal
 	for iteration = 1, MAX_ITERATIONS do
 		-- Calculate distance to goal and update direction
-		local distanceToGoal = (currentPos - endPos):Length()
+		local distanceToGoal = (currentPos - goalPos):Length()
 		local direction = lastDirection
 
 		-- Calculate next position
 		local NextPos = lastPos + direction * distanceToGoal
 
-		-- Forward collision check - this prevents walking through walls
-		local wallTrace = performTraceHull(lastPos + maxStepVector, NextPos + maxStepVector)
+		-- Forward collision check
+		local wallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, NextPos + STEP_HEIGHT_Vector)
 		currentPos = wallTrace.endpos
 
-		-- If we start inside a wall, it's not walkable
 		if wallTrace.fraction == 0 then
-			return false
-		end
-		-- If we immediately hit an obstacle and barely progressed, treat as blocked
-		if wallTrace.fraction < 1 then
-			local progressed = (currentPos - lastPos):Length()
-			if progressed < (MIN_STEP_SIZE * 0.5) then
-				return false
-			end
+			return false -- Path is blocked by a wall - immediately fail
 		end
 
-		-- Ground collision with segmentation - ensures we always have ground beneath us
+		-- Ground collision with segmentation
 		local totalDistance = (currentPos - lastPos):Length()
 		local numSegments = math.max(1, math.floor(totalDistance / MIN_STEP_SIZE))
 
 		for seg = 1, numSegments do
 			local t = seg / numSegments
 			local segmentPos = lastPos + (currentPos - lastPos) * t
-			local segmentTop = segmentPos + maxStepVector
+			local segmentTop = segmentPos + STEP_HEIGHT_Vector
 			local segmentBottom = segmentPos - MAX_FALL_DISTANCE_Vector
 
 			local groundTrace = performTraceHull(segmentTop, segmentBottom)
@@ -146,41 +244,24 @@ function isWalkable.Path(startPos, endPos, overrideMode)
 				return false -- No ground beneath; path is unwalkable
 			end
 
-			-- Check if obstacle is within acceptable height for current mode
-			local obstacleHeight = (segmentBottom - groundTrace.endpos).z
-			if obstacleHeight > maxStepHeight then
-				return false -- Obstacle too high for current mode
-			end
-
-			-- Stronger step acceptance: require either we reached near the ground or we are at the last segment
-			if groundTrace.fraction >= (stepFraction * 0.9) or seg == numSegments then
+			if groundTrace.fraction > STEP_FRACTION or seg == numSegments then
 				-- Adjust position to ground
 				direction = adjustDirectionToSurface(direction, groundTrace.plane)
 				currentPos = groundTrace.endpos
-				blocked = false
 				break
 			end
 		end
 
 		-- Calculate current horizontal distance to goal
-		local currentDistance = getHorizontalManhattanDistance(currentPos, endPos)
-		if blocked or currentDistance > MaxDistance then -- if target is unreachable
+		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
+		if currentDistance > MaxDistance then --if target is unreachable
 			return false
-		end
-
-		-- If we're close enough to the goal, check both horizontal and vertical proximity
-		if currentDistance < 24 then
-			local verticalDist = math.abs(endPos.z - currentPos.z)
-			if verticalDist < maxStepHeight then
-				-- Final forward micro-check to avoid clipping through thin objects near the goal
-				local microEnd = endPos
-				local microTrace = performTraceHull(currentPos + maxStepVector, microEnd + maxStepVector)
-				if microTrace.fraction < 1 and (microTrace.endpos - currentPos):Length() < 24 then
-					return false
-				end
-				return true
-			else
-				return false
+		elseif currentDistance < 24 then --within range
+			local verticalDist = math.abs(goalPos.z - currentPos.z)
+			if verticalDist < 24 then --within vertical range
+				return true -- Goal is within reach; path is walkable
+			else --unreachable
+				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
 

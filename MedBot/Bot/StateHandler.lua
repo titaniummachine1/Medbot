@@ -5,6 +5,7 @@
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Navigation = require("MedBot.Navigation")
+local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
@@ -211,7 +212,7 @@ function StateHandler.handleStuckState(userCmd)
 
 							if prevNode and currNode and nextNode then
 								-- Add cost to the connection we're trying to traverse
-								local connection = Navigation.GetConnectionEntry(currNode, nextNode)
+								local connection = Node.GetConnectionEntry(currNode, nextNode)
 								if connection then
 									connection.cost = (connection.cost or 1) + 100
 									Log:Info("Added 100 cost penalty to connection %d -> %d (new cost: %d)",

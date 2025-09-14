@@ -693,6 +693,9 @@ local function OnDraw()
             end
         end
     end
+
+    -- Draw ISWalkable debug traces if enabled
+    isWalkable.DrawDebugTraces()
 end
 
 --[[ Callbacks ]]

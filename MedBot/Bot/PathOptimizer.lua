@@ -42,21 +42,33 @@ function PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path)
     return false
 end
 
--- Skip if next node is walkable (simplified with work manager cooldown)
-function PathOptimizer.skipIfNextWalkable(origin, path)
+-- Skip if next node is closer to player than current node and walkable
+function PathOptimizer.skipIfNextCloserAndWalkable(origin, path)
     if not path or #path < 2 then
         return false
     end
 
+    local currentNode = path[1]
     local nextNode = path[2]
-    if not nextNode or not nextNode.pos then
+
+    if not (currentNode and nextNode and currentNode.pos and nextNode.pos) then
+        return false
+    end
+
+    -- Check distances
+    local distCurrent = (currentNode.pos - origin):Length()
+    local distNext = (nextNode.pos - origin):Length()
+
+    -- Only skip if next node is actually closer than current node
+    if distNext >= distCurrent then
         return false
     end
 
     -- Check if we can walk directly to the next node
     local walkMode = G.Menu.Main.WalkableMode or "Smooth"
     if ISWalkable.Path(origin, nextNode.pos, walkMode) then
-        Log:Debug("Next node %d is walkable, skipping current node", nextNode.id or 0)
+        Log:Debug("Next node %d is closer (%.1f < %.1f) and walkable, skipping current node %d",
+            nextNode.id or 0, distNext, distCurrent, currentNode.id or 0)
 
         -- Skip to next node
         Navigation.RemoveCurrentNode()
@@ -85,7 +97,12 @@ function PathOptimizer.optimize(origin, path, goalPos)
         return false
     end
 
-    -- Skip to next node if it's walkable
+    -- Try the simple algorithm: skip if next node is closer and walkable
+    if PathOptimizer.skipIfNextCloserAndWalkable(origin, path) then
+        return true
+    end
+
+    -- Fallback: skip to next node if it's walkable (existing logic)
     if PathOptimizer.skipIfNextWalkable(origin, path) then
         return true
     end

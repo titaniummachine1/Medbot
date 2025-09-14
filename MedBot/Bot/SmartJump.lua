@@ -91,7 +91,7 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 	else
 		return nil, false, velocity, false, 0
 	end
-	local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
+	Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 	if Groundtrace.fraction < 1 then
 		targetPos = Groundtrace.endpos
 	else
@@ -276,6 +276,7 @@ function SmartJump.Main(cmd)
 	G.ShouldJump = shouldJump
 	return shouldJump
 end
+
 local function OnCreateMoveStandalone(cmd)
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or (not pLocal:IsAlive()) then
