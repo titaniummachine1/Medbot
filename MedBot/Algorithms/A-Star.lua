@@ -3,6 +3,8 @@
 -- Prefers paths through door nodes when distances are similar
 
 local Heap = require("MedBot.Algorithms.Heap")
+local Common = require("MedBot.Core.Common")
+local Log = Common.Log.new("AStar")
 
 -- Type definitions for A* pathfinding
 
@@ -196,18 +198,35 @@ function AStar.NormalPath(startNode, goalNode, nodes, adjacentFun)
 
 				-- Found a better path?
 				if not gScore[nextNode] or tentativeGScore < gScore[nextNode] then
+					-- Update cameFrom even if we found a better path
 					cameFrom[nextNode] = { node = current, doorPos = neighborData.doorPos }
 					gScore[nextNode] = tentativeGScore
 					fScore[nextNode] = tentativeGScore + heuristicCost(nextNode, goalNode)
 
-					-- Add to open set if not already there, or update if we found better score
+					-- Add to open set if not already there
 					if not openSetLookup[nextNode] then
 						openSet:push({ node = nextNode, fScore = fScore[nextNode] })
 						openSetLookup[nextNode] = true
 					else
-						-- Node is already in open set, but we found a better path
-						-- We need to update it, but since our heap doesn't support updates,
-						-- we'll let the stale entry be skipped when popped
+						-- Node is already in open set with a worse score
+						-- Since our heap doesn't support efficient updates, we mark this node
+						-- for reprocessing by adding a small penalty to ensure it's processed again
+						local markedForUpdate = false
+						if not cameFrom[nextNode] then
+							cameFrom[nextNode] = { node = current, doorPos = neighborData.doorPos, updateFlag = true }
+							markedForUpdate = true
+						else
+							-- Mark existing entry for update
+							cameFrom[nextNode].updateFlag = true
+							markedForUpdate = true
+						end
+
+						if markedForUpdate then
+							-- Add a small penalty to ensure this node gets reprocessed
+							local penalty = 0.001
+							fScore[nextNode] = fScore[nextNode] - penalty
+							Log:Debug("Marked node " .. nextNode.id .. " for reprocessing with better path")
+						end
 					end
 				end
 
