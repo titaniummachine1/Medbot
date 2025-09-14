@@ -180,14 +180,28 @@ function handleMovingState(userCmd)
 			end
 		else
 			-- Fallback to node-based advancement
-			Navigation.RemoveCurrentNode()
-			Navigation.ResetTickTimer()
+			Log:Debug("Main.lua node advancement - Skip_Nodes = %s, path length = %d", tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
+			if G.Menu.Main.Skip_Nodes then
+				-- Only skip nodes if Skip Nodes is enabled
+				Log:Debug("Main.lua: Removing current node (Skip Nodes enabled)")
+				Navigation.RemoveCurrentNode()
+				Navigation.ResetTickTimer()
 
-			if #G.Navigation.path == 0 then
-				Navigation.ClearPath()
-				Log:Info("Reached end of path")
-				G.currentState = G.States.IDLE
-				G.lastPathfindingTick = 0
+				if #G.Navigation.path == 0 then
+					Navigation.ClearPath()
+					Log:Info("Reached end of path")
+					G.currentState = G.States.IDLE
+					G.lastPathfindingTick = 0
+				end
+			else
+				-- Skip Nodes disabled - don't remove nodes, just clear path when reaching final node
+				Log:Debug("Main.lua: Skip Nodes disabled - not removing node")
+				if #G.Navigation.path <= 1 then
+					Navigation.ClearPath()
+					Log:Info("Reached final node (Skip Nodes disabled)")
+					G.currentState = G.States.IDLE
+					G.lastPathfindingTick = 0
+				end
 			end
 		end
 		return

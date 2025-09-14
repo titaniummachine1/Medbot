@@ -182,179 +182,82 @@ function StateHandler.handlePathfindingState()
 	end
 end
 
+-- Simplified unstuck logic - guarantee bot never gets stuck
 function StateHandler.handleStuckState(userCmd)
 	local currentTick = globals.TickCount()
 
-	-- Check velocity and path walkability for unstuck
+	-- Check velocity for stuck detection
 	local pLocal = G.pLocal.entity
 	if pLocal then
 		local velocity = pLocal:EstimateAbsVelocity()
 		local speed2D = velocity and math.sqrt(velocity.x^2 + velocity.y^2) or 0
 
-		-- If velocity drops below 50, check if path is walkable
+		-- MAIN TRIGGER: Velocity < 50 = STUCK
 		if speed2D < 50 then
-			local path = G.Navigation.path
-			if path and #path >= 1 then
-				local currentNode = path[1]
-				if currentNode and currentNode.pos then
-					local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-					local origin = G.pLocal.Origin
+			Log:Warn("STUCK DETECTED: velocity %.1f < 50 - adding penalties and repathing", speed2D)
 
-					-- Check if we can walk to current target
-					if not ISWalkable.PathCached(origin, currentNode.pos, walkMode) then
-						Log:Warn("Velocity < 50 (%.1f) and path to current node is unwalkable - attempting gradual movement", speed2D)
+			-- Add cost penalties to current connection (node->node, node->door, door->door)
+			StateHandler.addStuckPenalties()
 
-						-- Instead of immediately repathing, allow bot to continue moving toward target
-						-- Add small cost penalty but don't stop movement entirely
-						if #path >= 2 then
-							local prevNode = #path >= 2 and path[#path - 1] or nil
-							local currNode = path[#path - 1]
-							local nextNode = path[#path]
-
-							if prevNode and currNode and nextNode then
-								-- Add smaller penalty (25 instead of 100) to encourage but not block
-								local connection = Node.GetConnectionEntry(currNode, nextNode)
-								if connection then
-									connection.cost = (connection.cost or 1) + 25
-									Log:Info("Added 25 cost penalty to connection %d -> %d (new cost: %d) - continuing movement",
-										currNode.id, nextNode.id, connection.cost)
-								end
-							end
-						end
-
-						-- Stay in MOVING state and let bot continue attempting movement
-						-- Only trigger repathing if we've been stuck for multiple attempts
-						local stuckAttempts = (G.Navigation.unwalkableCount or 0) + 1
-						G.Navigation.unwalkableCount = stuckAttempts
-
-						if stuckAttempts >= 3 then
-							Log:Warn("Multiple unwalkable attempts (%d), triggering repath", stuckAttempts)
-							G.currentState = G.States.PATHFINDING
-							G.lastPathfindingTick = 0
-							G.Navigation.stuckStartTick = nil
-							G.Navigation.unwalkableCount = 0
-							return
-						else
-							Log:Debug("Continuing movement despite unwalkable path (attempt %d/3)", stuckAttempts)
-						end
-					else
-						-- Path is walkable, reset unwalkable counter
-						G.Navigation.unwalkableCount = 0
-					end
-				end
-			end
+			-- ALWAYS repath when stuck (simplified approach)
+			StateHandler.forceRepath("Velocity too low")
+			return
 		end
 	end
 
-	-- Rest of the existing stuck logic for circuit breaker...
-	-- Initialize stuck timer if not set
-	if not G.Navigation.stuckStartTick then
-		G.Navigation.stuckStartTick = currentTick
-	end
+	-- Reset stuck detection if moving normally
+	G.Navigation.unwalkableCount = 0
+	G.Navigation.stuckStartTick = nil
+end
 
-	local stuckDuration = currentTick - G.Navigation.stuckStartTick
-
-	-- Circuit breaker logic - prevent infinite loops on blocked connections
+-- Add cost penalties to connections when stuck
+function StateHandler.addStuckPenalties()
 	local path = G.Navigation.path
-	local shouldForceRepath = false
-	local connectionBlocked = false
-
-	if path and #path > 1 then
-		local currentNode, nextNode
-		local closestIndex, closestDist = 1, math.huge
-		local pPos = G.pLocal.Origin
-		for i = 1, #path do
-			local node = path[i]
-			local dist = (node.pos - pPos):Length()
-			if dist < closestDist then
-				closestDist = dist
-				closestIndex = i
-			end
-		end
-
-		if closestIndex >= #path then
-			closestIndex = #path - 1
-		end
-
-		if closestIndex >= 1 then
-			currentNode = path[closestIndex]
-			nextNode = path[closestIndex + 1]
-		end
-
-		if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
-			if CircuitBreaker.isBlocked(currentNode, nextNode) then
-				Log:Warn(
-					"Connection %d -> %d is BLOCKED by circuit breaker - forcing immediate repath",
-					currentNode.id,
-					nextNode.id
-				)
-				shouldForceRepath = true
-				connectionBlocked = true
-			end
-		end
+	if not path or #path < 2 then
+		return
 	end
 
-	-- Repath after being stuck for 3 seconds OR if connection is blocked
-	if stuckDuration > 198 or shouldForceRepath then
-		if not connectionBlocked and path and #path > 1 then
-			-- Add penalties to problematic connection
-			local currentNode, nextNode
-			local closestIndex, closestDist = 1, math.huge
-			local pPos = G.pLocal.Origin
-			for i = 1, #path do
-				local node = path[i]
-				local dist = (node.pos - pPos):Length()
-				if dist < closestDist then
-					closestDist = dist
-					closestIndex = i
-				end
-			end
+	-- Add penalty to current connection (between any two path elements)
+	local currentElement = path[1]
+	local nextElement = path[2]
 
-			if closestIndex >= #path then
-				closestIndex = #path - 1
-			end
+	if currentElement and nextElement then
+		-- Handle different connection types: node->node, node->door, door->door
+		local fromId = currentElement.id or currentElement.fromId
+		local toId = nextElement.id or nextElement.toId or nextElement.areaId
 
-			if closestIndex >= 1 then
-				currentNode = path[closestIndex]
-				nextNode = path[closestIndex + 1]
-			end
+		if fromId and toId then
+			-- Find and penalize the connection
+			local fromNode = G.Navigation.nodes and G.Navigation.nodes[fromId]
+			local toNode = G.Navigation.nodes and G.Navigation.nodes[toId]
 
-			if currentNode and nextNode and currentNode.id and nextNode.id and currentNode.id ~= nextNode.id then
-				if CircuitBreaker.addFailure(currentNode, nextNode) then
-					Log:Error(
-						"Connection %d -> %d has failed too many times - temporarily BLOCKED",
-						currentNode.id,
-						nextNode.id
-					)
+			if fromNode and toNode then
+				local connection = Node.GetConnectionEntry(fromNode, toNode)
+				if connection then
+					connection.cost = (connection.cost or 1) + 50
+					Log:Info("Added 50 cost penalty to connection %d -> %d (stuck penalty)", fromId, toId)
 				end
 			end
 		end
-
-		-- Clear stuck timer and reset navigation
-		G.Navigation.stuckStartTick = nil
-		Navigation.ResetTickTimer()
-		G.currentState = G.States.PATHFINDING
-		G.lastPathfindingTick = 0
-
-		if connectionBlocked then
-			Log:Info("Clearing current path due to blocked connection")
-			Navigation.ClearPath()
-		end
-	else
-		-- Try SmartJump for emergency unstuck after being stuck for a while
-		if stuckDuration > 66 and stuckDuration < 132 then -- Between 1-2 seconds
-			if SmartJump.Main(userCmd) then
-				Log:Info("Emergency SmartJump executed while stuck")
-			end
-		end
-
-		-- Only switch back to MOVING if we've been stuck for at least 0.5 seconds
-		if stuckDuration > 33 then
-			G.Navigation.stuckStartTick = nil
-			Navigation.ResetTickTimer()
-			G.currentState = G.States.MOVING
-		end
 	end
+end
+
+-- Force immediate repath (simplified)
+function StateHandler.forceRepath(reason)
+	Log:Warn("Force repath triggered: %s", reason)
+
+	-- Clear stuck state
+	G.Navigation.stuckStartTick = nil
+	G.Navigation.unwalkableCount = 0
+	Navigation.ResetTickTimer()
+
+	-- Force immediate repath
+	G.currentState = G.States.PATHFINDING
+	G.lastPathfindingTick = 0
+
+	-- Reset work manager to allow immediate repath
+	local WorkManager = require("MedBot.WorkManager")
+	WorkManager.clearWork("Pathfinding")
 end
 
 return StateHandler

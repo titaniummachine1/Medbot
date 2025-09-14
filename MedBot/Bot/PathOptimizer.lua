@@ -96,27 +96,37 @@ end
 
 -- Optimize path by trying different skip strategies with work manager
 function PathOptimizer.optimize(origin, path, goalPos)
+	-- DEBUG: Log current menu state
+	Log:Debug("PathOptimizer.optimize called - Skip_Nodes = %s", tostring(G.Menu.Main.Skip_Nodes))
+
 	if not G.Menu.Main.Skip_Nodes or not path or #path <= 1 then
+		Log:Debug("PathOptimizer.optimize: Skipping optimization (menu disabled or invalid path)")
 		return false
 	end
+
+	Log:Debug("PathOptimizer.optimize: Starting optimization (menu enabled)")
 
 	-- Try to skip directly to the goal if we have a complex path
 	if goalPos and #path > 1 then
 		if PathOptimizer.skipToGoalIfWalkable(origin, goalPos, path) then
+			Log:Debug("PathOptimizer.optimize: Skipped to goal")
 			return true
 		end
 	end
 
 	-- Use work manager for node skipping cooldown (same as unstuck logic)
 	if not WorkManager.attemptWork(3, "node_skip") then -- 3 tick cooldown (~50ms)
+		Log:Debug("PathOptimizer.optimize: Work manager blocked")
 		return false
 	end
 
 	-- Try the simple algorithm: skip if next node is closer and walkable
 	if PathOptimizer.skipIfNextCloserAndWalkable(origin, path) then
+		Log:Debug("PathOptimizer.optimize: Skipped to closer node")
 		return true
 	end
 
+	Log:Debug("PathOptimizer.optimize: No optimization performed")
 	return false
 end
 
