@@ -254,6 +254,12 @@ function handleMovingState(userCmd)
 	-- Execute SmartJump after walkTo to use same cmd with bot's movement intent
 	SmartJump.Main(userCmd)
 
+	-- 🛠️ ENHANCED: Speed penalty system - check for unwalkable connections
+	if G.Navigation.path and #G.Navigation.path > 1 then
+		local PathOptimizer = require("MedBot.Bot.PathOptimizer")
+		PathOptimizer.checkSpeedPenalty(G.pLocal.Origin, targetPos, G.Navigation.path[1], G.Navigation.path)
+	end
+
 	-- Increment stuck counter
 	G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
@@ -278,9 +284,75 @@ end
 ---@param event GameEvent
 local function onGameEvent(event)
 	local eventName = event:GetName()
+
+	-- Map change - reload navigation
 	if eventName == "game_newmap" then
 		Log:Info("New map detected, reloading nav file...")
 		Navigation.Setup()
+		return
+	end
+
+	-- CTF Flag captured - repath since objectives changed
+	if eventName == "ctf_flag_captured" then
+		local cappingTeam = event:GetInt("capping_team")
+		local cappingTeamScore = event:GetInt("capping_team_score")
+		Log:Info("CTF Flag captured by team %d (score: %d) - repathing due to objective change", cappingTeam, cappingTeamScore)
+
+		-- Force bot to repath and reconsider target
+		if G.currentState == G.States.MOVING or G.currentState == G.States.IDLE then
+			G.currentState = G.States.IDLE
+			G.lastPathfindingTick = 0
+			if G.Navigation.path then
+				G.Navigation.path = {} -- Clear current path to force recalculation
+			end
+		end
+		return
+	end
+
+	-- Teamplay flag events (general flag state changes)
+	if eventName == "teamplay_flag_event" then
+		local eventType = event:GetInt("eventtype")
+		Log:Info("Flag event type %d - repathing due to objective change", eventType)
+
+		-- Force bot to repath for any flag event
+		if G.currentState == G.States.MOVING or G.currentState == G.States.IDLE then
+			G.currentState = G.States.IDLE
+			G.lastPathfindingTick = 0
+			if G.Navigation.path then
+				G.Navigation.path = {}
+			end
+		end
+		return
+	end
+
+	-- Player death - might need to repath if target is dead
+	if eventName == "player_death" then
+		local victim = event:GetInt("userid")
+		local attacker = event:GetInt("attacker")
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal then
+			local localUserId = pLocal:GetPropInt("m_iUserID")
+			if victim == localUserId then
+				Log:Info("Bot died - clearing path and resetting state")
+				G.currentState = G.States.IDLE
+				G.lastPathfindingTick = 0
+				if G.Navigation.path then
+					G.Navigation.path = {}
+				end
+			end
+		end
+		return
+	end
+
+	-- Round restart - objectives reset
+	if eventName == "teamplay_round_restart_seconds" then
+		Log:Info("Round restarting - clearing path and resetting state")
+		G.currentState = G.States.IDLE
+		G.lastPathfindingTick = 0
+		if G.Navigation.path then
+			G.Navigation.path = {}
+		end
+		return
 	end
 end
 

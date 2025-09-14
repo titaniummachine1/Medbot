@@ -12,7 +12,7 @@ local WorkManager = require("MedBot.WorkManager")
 local Log = Common.Log.new("PathOptimizer")
 local PathOptimizer = {}
 
--- Simplified path optimization - single predictable algorithm
+-- Simplified path optimization - enhanced algorithms
 function PathOptimizer.optimize(origin, path, goalPos)
 	-- Early exit if optimization disabled or invalid path
 	if not G.Menu.Main.Skip_Nodes or not path or #path <= 1 then
@@ -36,17 +36,70 @@ function PathOptimizer.optimize(origin, path, goalPos)
 		return false
 	end
 
-	-- Simple optimization: skip current node if next is closer and walkable
+	-- Algorithm 1: Closer next node skipping
 	local distToCurrent = Common.Distance3D(origin, currentNode.pos)
 	local distToNext = Common.Distance3D(origin, nextNode.pos)
 
-	-- Only skip if next node is significantly closer (at least 20% closer)
-	if distToNext < (distToCurrent * 0.8) then
+	-- Skip if next node is closer than current (collected first node)
+	if distToNext < distToCurrent then
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
 		if ISWalkable.PathCached(origin, nextNode.pos, walkMode) then
 			Navigation.RemoveCurrentNode()
 			Navigation.ResetTickTimer()
-			Log:Debug("Skipped node - next closer by %.1f units", distToCurrent - distToNext)
+			Log:Debug("Skipped to closer next node - %.1f < %.1f units", distToNext, distToCurrent)
+			return true
+		else
+			Log:Debug("Next node closer but not walkable - staying on current")
+		end
+	end
+
+	return false
+end
+
+-- Algorithm 2: Speed penalty system for unwalkable connections
+function PathOptimizer.checkSpeedPenalty(origin, currentTarget, currentNode, path)
+	if not currentTarget or not currentNode or not path then
+		return false
+	end
+
+	-- Check if we should run speed penalty check (every half second)
+	if not WorkManager.attemptWork(33, "speed_penalty_check") then -- ~0.5s at 66fps
+		return false
+	end
+
+	-- Get current player speed
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal then
+		return false
+	end
+
+	local velocity = pLocal:EstimateAbsVelocity() or Vector3(0, 0, 0)
+	local speed = velocity:Length2D()
+
+	-- Only trigger if speed is below 50
+	if speed >= 50 then
+		return false
+	end
+
+	Log:Debug("Speed penalty check triggered - speed: %.1f", speed)
+
+	-- Check if direct path to current target is walkable
+	local walkMode = G.Menu.Main.WalkableMode or "Smooth"
+	if not ISWalkable.PathCached(origin, currentTarget, walkMode) then
+		Log:Debug("Direct path to target not walkable - adding penalty to connection")
+
+		-- Add penalty to the connection we're currently traversing
+		if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
+			local nextNode = path[2]
+			if nextNode then
+				G.CircuitBreaker.addConnectionFailure(currentNode, nextNode)
+			end
+		end
+
+		-- Force repath from stuck state
+		if G.StateHandler and G.StateHandler.forceRepath then
+			G.StateHandler.forceRepath()
+			Log:Debug("Forced repath due to unwalkable connection")
 			return true
 		end
 	end
