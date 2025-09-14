@@ -63,6 +63,7 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 
 	if isSurfaceWalkable(trace.plane) then
 		local obstacleHeight = 72 * (1 - trace.fraction)
+		print(obstacleHeight)
 
 		if obstacleHeight > 18 then
 			G.SmartJump.LastObstacleHeight = hitPos.z + obstacleHeight
@@ -73,22 +74,20 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 			local minTicksNeeded = 0
 			local maxTicks = math.ceil(timeToPeak / tickInterval)
 
-			for tick = 1, maxTicks do
-				local t = tick * tickInterval
-				local height = jumpVel * t - 0.5 * gravity * t * t
-				if height >= obstacleHeight then
-					minTicksNeeded = tick
-					break
-				end
+			local discriminant = jumpVel ^ 2 - 2 * gravity * obstacleHeight
+			if discriminant >= 0 then
+				local t = (jumpVel - math.sqrt(discriminant)) / gravity
+				print(t)
+				minTicksNeeded = math.ceil(t / tickInterval)
 			end
 
-			minTicksNeeded = math.max(1, minTicksNeeded + 1)
 			G.SmartJump.JumpPeekPos = trace.endpos
 			return true, minTicksNeeded
 		end
 	end
 	return false, 0
 end
+
 -- ============================================================================
 -- MOVEMENT SIMULATION
 -- ============================================================================
@@ -135,6 +134,7 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 
 	if hitObstacle then
 		canJump, minJumpTicks = CheckJumpable(targetPos, moveDirection, hitbox)
+		print(minJumpTicks)
 		local wallNormal = wallTrace.plane
 		local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
 
@@ -203,7 +203,7 @@ local function SmartJumpDetection(cmd, pLocal)
 		table.insert(G.SmartJump.SimulationPath, newPos)
 
 		if hitObstacle and canJump then
-			print(tick)
+			--print(tick, minJumpTicks)
 
 			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
@@ -419,8 +419,16 @@ local function OnDrawSmartJump()
 			vertices[i] = client.WorldToScreen(vertex)
 		end
 
-		if vertices[1] and vertices[2] and vertices[3] and vertices[4] and
-		   vertices[5] and vertices[6] and vertices[7] and vertices[8] then
+		if
+			vertices[1]
+			and vertices[2]
+			and vertices[3]
+			and vertices[4]
+			and vertices[5]
+			and vertices[6]
+			and vertices[7]
+			and vertices[8]
+		then
 			draw.Color(0, 255, 255, 255)
 			draw.Line(vertices[1][1], vertices[1][2], vertices[2][1], vertices[2][2])
 			draw.Line(vertices[2][1], vertices[2][2], vertices[3][1], vertices[3][2])
