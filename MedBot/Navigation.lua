@@ -448,11 +448,19 @@ function Navigation.AdvanceWaypoint()
 		return
 	end
 	local current = wpList[idx]
-	-- If we reached a center of the next area, advance the area path too
-	if current.kind == "center" and G.Navigation.path and #G.Navigation.path > 0 then
-		-- path[1] is previous area; popping it moves us into the new area
-		Navigation.RemoveCurrentNode()
+
+	-- FIXED: Reset timer when reaching ANY waypoint on path, not just center
+	-- This ensures node skipping timer resets when reaching any point on the path
+	if G.Navigation.path and #G.Navigation.path > 0 then
+		-- Reset the node timer when we reach any waypoint
+		Navigation.ResetTickTimer()
+		-- If we reached a center of the next area, advance the area path too
+		if current.kind == "center" then
+			-- path[1] is previous area; popping it moves us into the new area
+			Navigation.RemoveCurrentNode()
+		end
 	end
+
 	G.Navigation.currentWaypointIndex = idx + 1
 end
 
@@ -468,15 +476,23 @@ function Navigation.SkipWaypoints(count)
 	if idx > #wpList + 1 then
 		idx = #wpList + 1
 	end
-	-- If we skip over a center, reflect area progression
-	local current = G.Navigation.waypoints[G.Navigation.currentWaypointIndex or 1]
-	if current and current.kind ~= "center" then
-		for j = (G.Navigation.currentWaypointIndex or 1), math.min(idx - 1, #wpList) do
-			if wpList[j].kind == "center" and G.Navigation.path and #G.Navigation.path > 0 then
-				Navigation.RemoveCurrentNode()
+
+	-- FIXED: Reset timer when skipping ANY waypoints on path
+	-- This ensures node skipping timer resets when skipping any points on the path
+	if G.Navigation.path and #G.Navigation.path > 0 then
+		-- Reset the node timer when we skip waypoints
+		Navigation.ResetTickTimer()
+		-- If we skip over a center, reflect area progression
+		local current = G.Navigation.waypoints[G.Navigation.currentWaypointIndex or 1]
+		if current and current.kind ~= "center" then
+			for j = (G.Navigation.currentWaypointIndex or 1), math.min(idx - 1, #wpList) do
+				if wpList[j].kind == "center" and G.Navigation.path and #G.Navigation.path > 0 then
+					Navigation.RemoveCurrentNode()
+				end
 			end
 		end
 	end
+
 	G.Navigation.currentWaypointIndex = idx
 end
 
