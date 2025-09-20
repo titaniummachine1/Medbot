@@ -288,14 +288,19 @@ function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 		return false
 	end
 
-	local distanceToCurrent = (currentPos - currentNode.pos):Length()
-	local distanceToNext = (currentPos - nextNode.pos):Length()
+	local distanceToCurrent = Common.Distance2D(currentPos, currentNode.pos)
+	local distanceToNext = Common.Distance2D(currentPos, nextNode.pos)
 
 	if distanceToNext < distanceToCurrent then
 		Log:Debug("Next node %d is closer (%.2f < %.2f)", nextNode.id, distanceToNext, distanceToCurrent)
 		return true
 	else
-		Log:Debug("Current node %d is closer or equal (%.2f >= %.2f)", currentNode.id, distanceToCurrent, distanceToNext)
+		Log:Debug(
+			"Current node %d is closer or equal (%.2f >= %.2f)",
+			currentNode.id,
+			distanceToCurrent,
+			distanceToNext
+		)
 		return false
 	end
 end
@@ -316,39 +321,34 @@ function Navigation.HandleNodeSkipping(currentPos)
 
 	local currentTick = globals.TickCount()
 
-	-- Update node skip timer
-	G.Navigation.nodeSkipTimer = G.Navigation.nodeSkipTimer + 1
-	G.Navigation.lastSkipCheckTick = currentTick
+	-- Use WorkManager for timing instead of manual timer
+	local WorkManager = require("MedBot.WorkManager")
+	local checkDelay = G.Navigation.nextNodeCloser and 11 or 22
 
-	-- Determine which skip delay to use
-	local skipDelay = G.Navigation.nextNodeCloser and G.Navigation.fastSkipDelayTicks or G.Navigation.skipDelayTicks
-
-	-- Check if it's time to perform skip check
-	if G.Navigation.nodeSkipTimer >= skipDelay then
-		Log:Debug("Node skip check triggered after %d ticks (delay: %d)", G.Navigation.nodeSkipTimer, skipDelay)
-		G.Navigation.nodeSkipTimer = 0 -- Reset timer
+	-- Check if enough time has passed since last check
+	if currentTick - G.Navigation.lastSkipCheckTick >= checkDelay then
+		G.Navigation.lastSkipCheckTick = currentTick
+		Log:Debug("Node skip check triggered after %d ticks", checkDelay)
 
 		-- Check distance comparison every time (cheap operation)
 		G.Navigation.nextNodeCloser = Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 
 		if G.Navigation.nextNodeCloser then
 			-- Reset walkability cooldown for immediate check
-			local WorkManager = require("MedBot.WorkManager")
 			WorkManager.resetCooldown("continuous_node_skip_walkability")
 		end
 
 		-- Use WorkManager to throttle expensive walkability checks
-		local WorkManager = require("MedBot.WorkManager")
 		if WorkManager.attemptWork(5, "continuous_node_skip_walkability") then
 			-- Check if next node is walkable
 			local nextNodeWalkable = Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 
-			if nextNodeWalkable and G.Navigation.nextNodeCloser then
-				Log:Info("Skipping current node %d -> next node %d (closer and walkable)", currentNode.id, nextNode.id)
+			if nextNodeWalkable then
+				Log:Info("Skipping current node %d -> next node %d (walkable)", currentNode.id, nextNode.id)
 				Navigation.RemoveCurrentNode()
 				return true -- Node was skipped
 			else
-				Log:Debug("Next node %d is walkable but not closer - not skipping", nextNode.id)
+				Log:Debug("Next node %d is not walkable - not skipping", nextNode.id)
 			end
 		end
 	end
@@ -358,10 +358,8 @@ end
 
 -- Reset node skipping state
 function Navigation.ResetNodeSkipping()
-	G.Navigation.nodeSkipTimer = 0
 	G.Navigation.lastSkipCheckTick = 0
 	G.Navigation.nextNodeCloser = false
-	Log:Debug("Node skipping state reset")
 end
 
 -- Build flexible waypoints: choose optimal door points, skip centers when direct door-to-door is shorter
@@ -408,22 +406,22 @@ function Navigation.BuildDoorWaypointsFromPath()
 				doorPoint = Node.GetDoorTargetPoint(a, b)
 			end
 
-		if doorPoint then
-			-- Add door waypoint
-			table.insert(G.Navigation.waypoints, {
-				kind = "door",
-				fromId = a.id,
-				toId = b.id,
-				pos = doorPoint,
-			})
+			if doorPoint then
+				-- Add door waypoint
+				table.insert(G.Navigation.waypoints, {
+					kind = "door",
+					fromId = a.id,
+					toId = b.id,
+					pos = doorPoint,
+				})
 
-			-- Always add center waypoint (don't do optimization here - let PathOptimizer handle it)
-			table.insert(G.Navigation.waypoints, {
-				pos = b.pos,
-				kind = "center",
-				areaId = b.id,
-			})
-		end
+				-- Always add center waypoint (don't do optimization here - let PathOptimizer handle it)
+				table.insert(G.Navigation.waypoints, {
+					pos = b.pos,
+					kind = "center",
+					areaId = b.id,
+				})
+			end
 		end
 	end
 
