@@ -68,6 +68,17 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 		local traceLength = (abovePos - checkPos):Length()
 		local obstacleHeight = traceLength * (1 - trace.fraction)
 
+		-- FIXED: Ensure obstacle height is reasonable
+		if trace.fraction == 0 then
+			-- Trace hit immediately, this might be a wall we're standing against
+			return false, 0
+		end
+
+		if obstacleHeight <= 0 or obstacleHeight > 100 then
+			-- Invalid obstacle height
+			return false, 0
+		end
+
 		if obstacleHeight > 18 then
 			G.SmartJump.LastObstacleHeight = hitPos.z + obstacleHeight
 
@@ -76,11 +87,6 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 			local jumpVel = SJC.JUMP_FORCE
 			local gravity = SJC.GRAVITY
 			local tickInterval = globals.TickInterval()
-
-			-- FIXED: Use actual TF2 jump mechanics
-			-- In TF2, jump is impulse + gravity, but formula needs adjustment
-			-- The issue is that discriminant goes negative for reasonable heights
-			-- Let's use a corrected formula that works for TF2 physics
 
 			local a = 0.5 * gravity
 			local b = -jumpVel
@@ -104,9 +110,6 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 				local estimatedTime = timeToMaxHeight * fraction
 				minTicksNeeded = math.ceil(estimatedTime / tickInterval)
 			end
-
-			-- FIXED: Remove debug spam from simulation
-			-- Only show debug when obstacle is actually detected and processed
 
 			G.SmartJump.JumpPeekPos = trace.endpos
 			return true, minTicksNeeded
@@ -164,9 +167,13 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 		local wallNormal = wallTrace.plane
 		local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
 
-		if wallAngle > 55 then
+		-- FIXED: Apply sliding logic for all wall collisions, not just steep ones
+		-- This ensures we slide even against shallow walls during simulation
+		if wallAngle > 0 then -- Any wall collision
 			local velocityDot = velocity:Dot(wallNormal)
-			velocity = velocity - wallNormal * velocityDot
+			if velocityDot < 0 then -- Only reflect if moving towards the wall
+				velocity = velocity - wallNormal * velocityDot * 1.5 -- 1.5x to ensure sliding
+			end
 		end
 	end
 
@@ -247,11 +254,23 @@ local function SmartJumpDetection(cmd, pLocal)
 			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
-				print(string.format("DEBUG: SmartJump triggered at tick %d for obstacle requiring %d ticks", tick, minJumpTicks))
+				print(
+					string.format(
+						"DEBUG: SmartJump triggered at tick %d for obstacle requiring %d ticks",
+						tick,
+						minJumpTicks
+					)
+				)
 				DebugLog("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
 				return true
 			else
-				print(string.format("DEBUG: SmartJump waiting - at tick %d, obstacle requires %d ticks", tick, minJumpTicks))
+				print(
+					string.format(
+						"DEBUG: SmartJump waiting - at tick %d, obstacle requires %d ticks",
+						tick,
+						minJumpTicks
+					)
+				)
 				DebugLog("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
 				return false
 			end
