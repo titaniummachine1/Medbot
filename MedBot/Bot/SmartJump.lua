@@ -68,25 +68,31 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 		local traceLength = (abovePos - checkPos):Length()
 		local obstacleHeight = traceLength * (1 - trace.fraction)
 
-		-- Debug output for troubleshooting
-		local jumpMaxHeight = (SJC.JUMP_FORCE ^ 2) / (2 * SJC.GRAVITY)
-
 		if obstacleHeight > 18 then
 			G.SmartJump.LastObstacleHeight = hitPos.z + obstacleHeight
+
+			-- Calculate minimum ticks needed to clear this obstacle
+			-- Use quadratic formula to find time to reach obstacle height
 			local jumpVel = SJC.JUMP_FORCE
 			local gravity = SJC.GRAVITY
+			local tickInterval = globals.TickInterval()
 
-			-- FIXED: Use exact physics equation instead of iteration
-			-- Quadratic formula: height = jumpVel*t - 0.5*gravity*t^2
-			-- Solve for t: t = (jumpVel - sqrt(jumpVel^2 - 2*gravity*obstacleHeight)) / gravity
-			local discriminant = jumpVel ^ 2 - 2 * gravity * obstacleHeight
+			local a = 0.5 * gravity
+			local b = -jumpVel
+			local c = obstacleHeight
+			local discriminant = b * b - 4 * a * c
+
 			local minTicksNeeded = 0
-
 			if discriminant >= 0 then
-				local t = (jumpVel - math.sqrt(discriminant)) / gravity
-				local tickInterval = globals.TickInterval()
-				minTicksNeeded = math.ceil(t / tickInterval)
+				local t1 = (-b - math.sqrt(discriminant)) / (2 * a)
+				local t2 = (-b + math.sqrt(discriminant)) / (2 * a)
+				local t = math.min(t1 > 0 and t1 or math.huge, t2 > 0 and t2 or math.huge)
+				if t ~= math.huge then
+					minTicksNeeded = math.ceil(t / tickInterval)
+				end
 			end
+
+			print(string.format("DEBUG: Obstacle %.1f units, needs %d ticks", obstacleHeight, minTicksNeeded))
 
 			G.SmartJump.JumpPeekPos = trace.endpos
 			return true, minTicksNeeded
@@ -137,7 +143,7 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 
 	local hitObstacle = wallTrace.fraction < 1
 	local canJump = false
-	local minJumpTicks = 30
+	local minJumpTicks = 0
 
 	if hitObstacle then
 		canJump, minJumpTicks = CheckJumpable(targetPos, moveDirection, hitbox)
@@ -189,7 +195,19 @@ local function SmartJumpDetection(cmd, pLocal)
 	end
 
 	local initialVelocity = moveDir * horizontalSpeed
-	local jumpPeakTicks = math.ceil(SJC.JUMP_FORCE / SJC.GRAVITY / globals.TickInterval())
+
+	-- Calculate actual jump peak timing using TF2 physics
+	-- Jump velocity impulse: immediately sets Z velocity to JUMP_FORCE
+	-- Gravity: 800 units/second²
+	-- Find time to reach peak: t = JUMP_FORCE / GRAVITY
+	local jumpVel = SJC.JUMP_FORCE
+	local gravity = SJC.GRAVITY
+	local tickInterval = globals.TickInterval()
+
+	-- Time to reach jump peak: t = v/g
+	local timeToPeak = jumpVel / gravity -- 271/800 = 0.33875 seconds
+	local jumpPeakTicks = math.ceil(timeToPeak / tickInterval) -- ~23 ticks
+
 	local currentPos = pLocalPos
 	local currentVelocity = initialVelocity
 
@@ -202,7 +220,6 @@ local function SmartJumpDetection(cmd, pLocal)
 			SimulateMovementTick(currentPos, currentVelocity, pLocal)
 
 		if not newPos then
-			DebugLog("SmartJump: Simulation stopped - no ground at tick %d", tick)
 			break
 		end
 
@@ -214,19 +231,34 @@ local function SmartJumpDetection(cmd, pLocal)
 			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
+				print(
+					string.format(
+						"DEBUG: JUMP TRIGGERED! At tick %d, needed %d ticks, current <= needed",
+						tick,
+						minJumpTicks
+					)
+				)
 				DebugLog("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
 				return true
 			else
-				DebugLog("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
-				return false
+				-- FIXED: Jump anyway even if obstacle is "missed" - user wants to jump
+				G.SmartJump.PredPos = newPos
+				G.SmartJump.HitObstacle = true
+				print(
+					string.format(
+						"DEBUG: JUMP ANYWAY! At tick %d, needed %d ticks, current > needed but jumping",
+						tick,
+						minJumpTicks
+					)
+				)
+				DebugLog("SmartJump: Jumping anyway at tick %d (needed: %d)", tick, minJumpTicks)
+				return true
 			end
 		end
 
 		currentPos = newPos
 		currentVelocity = newVelocity
 	end
-
-	DebugLog("SmartJump: No obstacle within jump peak window")
 	return false
 end
 -- ============================================================================
@@ -359,7 +391,6 @@ function SmartJump.Main(cmd)
 	if not SJ.stateStartTime then
 		SJ.stateStartTime = globals.TickCount()
 	elseif globals.TickCount() - SJ.stateStartTime > 132 then
-		Log:Warn("SmartJump: State timeout, resetting to IDLE from %s", SJ.jumpState)
 		SJ.jumpState = SJC.STATE_IDLE
 		SJ.stateStartTime = nil
 	end
