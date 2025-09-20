@@ -164,13 +164,12 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 		local wallNormal = wallTrace.plane
 		local wallAngle = math.deg(math.acos(wallNormal:Dot(upVector)))
 
-		-- FIXED: Apply sliding logic for all wall collisions, not just steep ones
-		-- This ensures we slide even against shallow walls during simulation
-		if wallAngle > 0 then -- Any wall collision
-			local velocityDot = velocity:Dot(wallNormal)
-			if velocityDot < 0 then -- Only reflect if moving towards the wall
-				velocity = velocity - wallNormal * velocityDot * 1.5 -- 1.5x to ensure sliding
-			end
+		-- FIXED: Apply sliding logic only for steep walls (>55 degrees)
+		-- This matches the swing prediction behavior - only slide on steep walls
+		if wallAngle > 55 then
+			-- The wall is too steep, we'll collide
+			local dot = velocity:Dot(wallNormal)
+			velocity = velocity - wallNormal * dot
 		end
 	end
 
