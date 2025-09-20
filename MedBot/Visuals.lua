@@ -295,15 +295,17 @@ local function OnDraw()
 
     -- Collect visible nodes using flood-fill from player position
     local connectionDepth = G.Menu.Visuals.connectionDepth or 10
-    local visibleNodes = collectNodesByConnectionDepth(p, connectionDepth)
+    local allReachableNodes = collectNodesByConnectionDepth(p, connectionDepth)
 
-    -- Filter nodes by screen visibility only (flood-fill already limits by connection depth)
+    -- Filter to only nodes within the actual depth limit (not just reachable through flood-fill)
     local filteredNodes = {}
-    for id, entry in pairs(visibleNodes) do
-        local node = entry.node
-        local scr = client.WorldToScreen(node.pos)
-        if scr then
-            filteredNodes[id] = { node = node, screen = scr, depth = entry.depth }
+    for id, entry in pairs(allReachableNodes) do
+        if entry.depth <= connectionDepth then
+            local node = entry.node
+            local scr = client.WorldToScreen(node.pos)
+            if scr then
+                filteredNodes[id] = { node = node, screen = scr, depth = entry.depth }
+            end
         end
     end
 
@@ -350,10 +352,8 @@ local function OnDraw()
 
     -- Show connections between nav nodes (colored by directionality)
     if G.Menu.Visuals.showConnections then
-        local maxDepth = G.Menu.Visuals.connectionDepth or 10
         for id, entry in pairs(filteredNodes) do
             local node = entry.node
-            local sourceDepth = entry.depth
             for dir = 1, 4 do
                 local cDir = node.c[dir]
                 if cDir and cDir.connections then
@@ -361,36 +361,32 @@ local function OnDraw()
                         local nid = (type(conn) == "table") and conn.node or conn
                         local otherNode = G.Navigation.nodes and G.Navigation.nodes[nid]
                         if otherNode then
-                            -- Check if target node is also within flood-fill depth
-                            local targetEntry = filteredNodes[nid]
-                            if targetEntry and targetEntry.depth <= maxDepth then
-                                local pos1 = node.pos + UP_VECTOR
-                                local pos2 = otherNode.pos + UP_VECTOR
-                                local s1 = client.WorldToScreen(pos1)
-                                local s2 = client.WorldToScreen(pos2)
-                                if s1 and s2 then
-                                    -- determine if other->id exists in its connections
-                                    local bidir = false
+                            local pos1 = node.pos + UP_VECTOR
+                            local pos2 = otherNode.pos + UP_VECTOR
+                            local s1 = client.WorldToScreen(pos1)
+                            local s2 = client.WorldToScreen(pos2)
+                            if s1 and s2 then
+                                -- determine if other->id exists in its connections
+                                local bidir = false
 
-                                    for d2 = 1, 4 do
-                                        local otherCDir = otherNode.c[d2]
-                                        if otherCDir and otherCDir.connections then
-                                            for _, backConn in ipairs(otherCDir.connections) do
-                                                local backId = (type(backConn) == "table") and backConn.node or backConn
-                                                if backId == id then
-                                                    bidir = true
-                                                    break
-                                                end
-                                            end
-                                            if bidir then
+                                for d2 = 1, 4 do
+                                    local otherCDir = otherNode.c[d2]
+                                    if otherCDir and otherCDir.connections then
+                                        for _, backConn in ipairs(otherCDir.connections) do
+                                            local backId = (type(backConn) == "table") and backConn.node or backConn
+                                            if backId == id then
+                                                bidir = true
                                                 break
                                             end
                                         end
+                                        if bidir then
+                                            break
+                                        end
                                     end
-                                    -- yellow for two-way, red for one-way
-                                    if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
-                                    draw.Line(s1[1], s1[2], s2[1], s2[2])
                                 end
+                                -- yellow for two-way, red for one-way
+                                if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
+                                draw.Line(s1[1], s1[2], s2[1], s2[2])
                             end
                         end
                     end

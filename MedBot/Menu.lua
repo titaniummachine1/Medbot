@@ -182,7 +182,7 @@ local function OnDrawMenu()
 
 		-- Connection depth for flood-fill visualization (controls how far from player to render navmesh)
 		G.Menu.Visuals.connectionDepth = G.Menu.Visuals.connectionDepth or 10
-		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Draw Connections", G.Menu.Visuals.connectionDepth, 1, 50, 1)
+		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Draw Connections", G.Menu.Visuals.connectionDepth, 1, 30, 1)
 		TimMenu.Tooltip(
 			"How many connection steps away from player to visualize (0 = only current node, 20 = maximum range). Controls flood-fill rendering of all navmesh elements except path arrows."
 		)
