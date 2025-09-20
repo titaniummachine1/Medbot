@@ -176,23 +176,23 @@ local function OnDrawMenu()
 	elseif G.Menu.Tab == "Visuals" then
 		-- Visual Settings Section
 		TimMenu.BeginSector("Visual Settings")
+		G.Menu.Visuals.EnableVisuals = G.Menu.Visuals.EnableVisuals or true
 		G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 		TimMenu.NextLine()
 
 		-- Align naming with visuals: renderRadius is what Visuals.lua reads
-		G.Menu.Visuals.renderRadius = G.Menu.Visuals.renderRadius or G.Menu.Visuals.renderDistance or 800
+		if G.Menu.Visuals.renderRadius == nil then
+			G.Menu.Visuals.renderRadius = 800
+		end
 		G.Menu.Visuals.renderRadius = TimMenu.Slider("Render Radius", G.Menu.Visuals.renderRadius, 100, 3000, 100)
 		TimMenu.NextLine()
 
-		G.Menu.Visuals.chunkSize = G.Menu.Visuals.chunkSize or 256
-		G.Menu.Visuals.chunkSize = TimMenu.Slider("Chunk Size", G.Menu.Visuals.chunkSize, 64, 512, 16)
-		TimMenu.NextLine()
-
-		G.Menu.Visuals.renderChunks = G.Menu.Visuals.renderChunks or 3
-		G.Menu.Visuals.renderChunks = TimMenu.Slider("Render Chunks", G.Menu.Visuals.renderChunks, 1, 10, 1)
-		-- Visuals.MaybeRebuildGrid() -- Temporarily disabled
-		TimMenu.EndSector()
-
+		-- Connection depth for flood-fill visualization
+		if G.Menu.Visuals.connectionDepth == nil then
+			G.Menu.Visuals.connectionDepth = 3
+		end
+		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Connection Depth", G.Menu.Visuals.connectionDepth, 0, 10, 1)
+		TimMenu.Tooltip("How many connection steps away from player to visualize (0 = only current node, 10 = maximum range)")
 		TimMenu.NextLine()
 
 		-- Node Display Section
@@ -206,17 +206,100 @@ local function OnDrawMenu()
 			"Show Doors",
 			"Show Corner Connections",
 		}
-		G.Menu.Visuals.basicDisplay = G.Menu.Visuals.basicDisplay or { true, true, true, true, true, false }
-		G.Menu.Visuals.basicDisplay = TimMenu.Combo("Basic Display", G.Menu.Visuals.basicDisplay, basicOptions)
-		TimMenu.NextLine()
+
+		-- Initialize basicDisplay array if it doesn't exist
+		if G.Menu.Visuals.basicDisplay == nil then
+			G.Menu.Visuals.basicDisplay = { true, true, true, true, true, false }
+		end
 
 		-- Update individual settings based on combo selection
-		G.Menu.Visuals.drawNodes = G.Menu.Visuals.basicDisplay[1]
-		G.Menu.Visuals.drawNodeIDs = G.Menu.Visuals.basicDisplay[2]
-		G.Menu.Visuals.showConnections = G.Menu.Visuals.basicDisplay[3]
-		G.Menu.Visuals.showAreas = G.Menu.Visuals.basicDisplay[4]
-		G.Menu.Visuals.showDoors = G.Menu.Visuals.basicDisplay[5]
-		G.Menu.Visuals.showCornerConnections = G.Menu.Visuals.basicDisplay[6]
+		G.Menu.Visuals.drawNodes = G.Menu.Visuals.basicDisplay[1] or false
+		G.Menu.Visuals.drawNodeIDs = G.Menu.Visuals.basicDisplay[2] or false
+		G.Menu.Visuals.showConnections = G.Menu.Visuals.basicDisplay[3] or false
+		G.Menu.Visuals.showAreas = G.Menu.Visuals.basicDisplay[4] or false
+		G.Menu.Visuals.showDoors = G.Menu.Visuals.basicDisplay[5] or false
+		G.Menu.Visuals.showCornerConnections = G.Menu.Visuals.basicDisplay[6] or false
+
+		-- Create a simple combo for basic display options
+		local currentBasicDisplay = ""
+		if G.Menu.Visuals.showConnections then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
+		if G.Menu.Visuals.showAreas then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
+		if G.Menu.Visuals.showDoors then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
+		if G.Menu.Visuals.showCornerConnections then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
+
+		local basicDisplayOptions = {
+			"Connections + Areas + Doors + Corners",
+			"Connections + Areas + Doors",
+			"Connections + Areas",
+			"Connections Only",
+			"None"
+		}
+
+		local displayIndex = 1
+		if currentBasicDisplay == "1111" then displayIndex = 1
+		elseif currentBasicDisplay == "1110" then displayIndex = 2
+		elseif currentBasicDisplay == "1100" then displayIndex = 3
+		elseif currentBasicDisplay == "1000" then displayIndex = 4
+		else displayIndex = 5 end
+
+		local newDisplayIndex = TimMenu.Selector("Basic Display", displayIndex, basicDisplayOptions)
+		TimMenu.NextLine()
+
+		-- Update settings based on selection
+		if newDisplayIndex == 1 then
+			G.Menu.Visuals.showConnections = true
+			G.Menu.Visuals.showAreas = true
+			G.Menu.Visuals.showDoors = true
+			G.Menu.Visuals.showCornerConnections = true
+		elseif newDisplayIndex == 2 then
+			G.Menu.Visuals.showConnections = true
+			G.Menu.Visuals.showAreas = true
+			G.Menu.Visuals.showDoors = true
+			G.Menu.Visuals.showCornerConnections = false
+		elseif newDisplayIndex == 3 then
+			G.Menu.Visuals.showConnections = true
+			G.Menu.Visuals.showAreas = true
+			G.Menu.Visuals.showDoors = false
+			G.Menu.Visuals.showCornerConnections = false
+		elseif newDisplayIndex == 4 then
+			G.Menu.Visuals.showConnections = true
+			G.Menu.Visuals.showAreas = false
+			G.Menu.Visuals.showDoors = false
+			G.Menu.Visuals.showCornerConnections = false
+		else
+			G.Menu.Visuals.showConnections = false
+			G.Menu.Visuals.showAreas = false
+			G.Menu.Visuals.showDoors = false
+			G.Menu.Visuals.showCornerConnections = false
+		end
+
+		-- Update the basicDisplay array to match
+		G.Menu.Visuals.basicDisplay = {
+			false, -- drawNodes (not used)
+			false, -- drawNodeIDs (not used)
+			G.Menu.Visuals.showConnections,
+			G.Menu.Visuals.showAreas,
+			G.Menu.Visuals.showDoors,
+			G.Menu.Visuals.showCornerConnections
+		}
+
+		-- Additional visual options
+		G.Menu.Visuals.showAgentBoxes = G.Menu.Visuals.showAgentBoxes or false
+		G.Menu.Visuals.showAgentBoxes = TimMenu.Checkbox("Show Agent Boxes", G.Menu.Visuals.showAgentBoxes)
+		TimMenu.NextLine()
+
+		G.Menu.Visuals.drawPath = G.Menu.Visuals.drawPath or false
+		G.Menu.Visuals.drawPath = TimMenu.Checkbox("Draw Path", G.Menu.Visuals.drawPath)
+		TimMenu.NextLine()
+
+		G.Menu.Visuals.ignorePathRadius = G.Menu.Visuals.ignorePathRadius or false
+		G.Menu.Visuals.ignorePathRadius = TimMenu.Checkbox("Ignore Path Radius", G.Menu.Visuals.ignorePathRadius)
+		TimMenu.NextLine()
+
+		G.Menu.Visuals.memoryUsage = G.Menu.Visuals.memoryUsage or false
+		G.Menu.Visuals.memoryUsage = TimMenu.Checkbox("Show Memory Usage", G.Menu.Visuals.memoryUsage)
+		TimMenu.NextLine()
+
 		TimMenu.EndSector()
 	end
 

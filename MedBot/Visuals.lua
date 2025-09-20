@@ -18,8 +18,59 @@ local gridIndex = {}
 local nodeCell = {}
 local visBuf = {}
 local visCount = 0
-Visuals.lastChunkSize = nil
-Visuals.lastRenderChunks = nil
+-- Flood-fill algorithm to collect nodes within connection depth from player
+local function collectNodesByConnectionDepth(playerPos, maxDepth)
+    local nodes = G.Navigation.nodes
+    if not nodes then
+        return {}
+    end
+
+    -- Get player's closest nav position
+    local startNode = Node.GetClosestNode(playerPos)
+    if not startNode then
+        return {}
+    end
+
+    local visited = {}
+    local toVisit = {}
+    local result = {}
+
+    -- Initialize with start node at depth 0
+    toVisit[1] = { node = startNode, depth = 0 }
+    visited[startNode.id] = true
+    result[startNode.id] = { node = startNode, depth = 0 }
+
+    local currentIndex = 1
+    local maxNodes = 1000 -- Safety limit to prevent infinite loops
+
+    while currentIndex <= #toVisit and #result < maxNodes do
+        local current = toVisit[currentIndex]
+        local node = current.node
+        local depth = current.depth
+
+        -- Stop if we've reached maximum depth
+        if depth >= maxDepth then
+            break
+        end
+
+        -- Get adjacent nodes
+        local adjacentNodes = Node.GetAdjacentNodesOnly(node, nodes)
+        for _, adjacentNode in ipairs(adjacentNodes) do
+            if not visited[adjacentNode.id] then
+                visited[adjacentNode.id] = true
+                result[adjacentNode.id] = { node = adjacentNode, depth = depth + 1 }
+
+                -- Add to visit queue for next depth level
+                table.insert(toVisit, { node = adjacentNode, depth = depth + 1 })
+            end
+        end
+
+        currentIndex = currentIndex + 1
+    end
+
+    Log:Debug("Flood-fill collected %d nodes at max depth %d", #result, maxDepth)
+    return result
+end
 
 --[[ Functions ]]
 local function Draw3DBox(size, pos)
@@ -240,6 +291,31 @@ local function OnDraw()
         return
     end
 
+    local p = me:GetAbsOrigin()
+
+    -- Collect visible nodes using flood-fill from player position
+    local connectionDepth = G.Menu.Visuals.connectionDepth or 3
+    local visibleNodes = collectNodesByConnectionDepth(p, connectionDepth)
+
+    -- Apply render radius filtering to the collected nodes
+    local renderRadius = (G.Menu.Visuals.renderRadius or 400)
+    local function withinRadius(pos)
+        -- Inline distance check for bundle compatibility
+        return (pos - p):Length() <= renderRadius
+    end
+
+    -- Filter nodes by render radius and prepare screen positions
+    local filteredNodes = {}
+    for id, entry in pairs(visibleNodes) do
+        local node = entry.node
+        if withinRadius(node.pos) then
+            local scr = client.WorldToScreen(node.pos)
+            if scr then
+                filteredNodes[id] = { node = node, screen = scr, depth = entry.depth }
+            end
+        end
+    end
+
     local currentY = 120
     -- Draw memory usage if enabled in config
     if G.Menu.Visuals.memoryUsage then
@@ -248,34 +324,10 @@ local function OnDraw()
         -- Get current memory usage directly for real-time display
         local currentMemKB = collectgarbage("count")
         local memMB = currentMemKB / 1024
-        draw.Text(10, 10, string.format("Memory Usage: %.1f MB", memMB))
+        draw.Text(10, currentY, string.format("Connection Depth: %d", connectionDepth or 0))
         currentY = currentY + 20
-    end
-    -- Collect visible nodes using chunk grid and Manhattan render radius
-    Visuals.MaybeRebuildGrid()
-    collectVisible(me)
-    local p = me:GetAbsOrigin()
-    local renderRadius = (G.Menu.Visuals.renderRadius or 400)
-    local function withinRadius(pos)
-        -- Inline distance check for bundle compatibility
-        return (pos - p):Length() <= renderRadius
-    end
-    local visibleNodes = {}
-    for i = 1, visCount do
-        -- local nodeA = Node.GetNodeByID(connection.areaID) -- Temporarily disabled
-        -- local nodeB = Node.GetNodeByID(connection.targetAreaID) -- Temporarily disabled
-        local nodeA, nodeB = nil, nil
-        local id = visBuf[i]
-        local node = G.Navigation.nodes[id]
-        if node then
-            -- Use withinRadius for consistent distance culling
-            if withinRadius(node.pos) then
-                local scr = client.WorldToScreen(node.pos)
-                if scr then
-                    visibleNodes[id] = { node = node, screen = scr }
-                end
-            end
-        end
+        draw.Text(10, currentY, string.format("Visible Nodes: %d", #filteredNodes or 0))
+        currentY = currentY + 20
     end
     G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
     if G.Navigation.currentNodeIndex == nil then
@@ -307,7 +359,7 @@ local function OnDraw()
 
     -- Show connections between nav nodes (colored by directionality)
     if G.Menu.Visuals.showConnections then
-        for id, entry in pairs(visibleNodes) do
+        for id, entry in pairs(filteredNodes) do
             local node = entry.node
             if not withinRadius(node.pos) then goto continue_node end
             for dir = 1, 4 do
@@ -359,7 +411,7 @@ local function OnDraw()
         local wallCornerCount = 0
         local allCornerCount = 0
 
-        for id, entry in pairs(visibleNodes) do
+        for id, entry in pairs(filteredNodes) do
             local node = entry.node
 
             -- Draw wall corners (orange squares)
@@ -387,7 +439,7 @@ local function OnDraw()
 
     -- Draw Doors (left, middle, right) if enabled
     if G.Menu.Visuals.showDoors then
-        for id, entry in pairs(visibleNodes) do
+        for id, entry in pairs(filteredNodes) do
             local node = entry.node
             for dir = 1, 4 do
                 local cDir = node.c[dir]
@@ -432,7 +484,7 @@ local function OnDraw()
 
     -- Fill and outline areas using fixed corners from Navigation
     if G.Menu.Visuals.showAreas then
-        for id, entry in pairs(visibleNodes) do
+        for id, entry in pairs(filteredNodes) do
             local node = entry.node
             -- Collect the four corner vectors from the node
             local worldCorners = { node.nw, node.ne, node.se, node.sw }
@@ -466,7 +518,7 @@ local function OnDraw()
         local drawnInterConnections = {}
         local drawnIntraConnections = {}
 
-        for id, entry in pairs(visibleNodes) do
+        for id, entry in pairs(filteredNodes) do
             local points = Node.GetAreaPoints(id)
             if points then
                 -- First pass: draw connections if enabled
@@ -554,7 +606,7 @@ local function OnDraw()
 
         -- Show fine point statistics for areas with points
         local finePointStats = {}
-        for id, entry in pairs(visibleNodes) do
+        for id, entry in pairs(filteredNodes) do
             local points = Node.GetAreaPoints(id)
             if points and #points > 1 then -- Only count areas with multiple points
                 local edgeCount = 0
@@ -676,7 +728,7 @@ local function OnDraw()
 
     -- Draw wall corners (orange points)
     if G.Menu.Visuals.showCornerConnections then
-        for id, entry in pairs(visibleNodes) do
+        for id, entry in pairs(filteredNodes) do
             local node = entry.node
             if node.wallCorners then
                 for _, cornerPoint in ipairs(node.wallCorners) do
