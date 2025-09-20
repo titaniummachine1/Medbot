@@ -75,25 +75,21 @@ local function getDirectionCorners(area, direction)
 	return nil, nil
 end
 
--- Calculate distance from point to line segment in 3D
-local function pointToLineSegmentDistance3D(point, lineStart, lineEnd)
+-- Calculate distance from point to line segment (2D, ignores Z completely)
+local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 	local dx = lineEnd.x - lineStart.x
 	local dy = lineEnd.y - lineStart.y
-	local dz = lineEnd.z - lineStart.z
-	local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+	local length = Vector3(dx, dy, 0):Length2D()
 
 	if length == 0 then
-		-- Line segment is a point - use 3D distance
-		return math.sqrt(
-			(point.x - lineStart.x) * (point.x - lineStart.x)
-				+ (point.y - lineStart.y) * (point.y - lineStart.y)
-				+ (point.z - lineStart.z) * (point.z - lineStart.z)
-		)
+		-- Line segment is a point - use Common.Distance2D
+		local point2D = Vector3(point.x, point.y, 0)
+		local start2D = Vector3(lineStart.x, lineStart.y, 0)
+		return Common.Distance2D(point2D, start2D)
 	end
 
 	-- Calculate projection parameter
-	local t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy + (point.z - lineStart.z) * dz)
-		/ (length * length)
+	local t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (length * length)
 
 	-- Clamp t to [0, 1] to stay within segment bounds
 	t = math.max(0, math.min(1, t))
@@ -101,14 +97,11 @@ local function pointToLineSegmentDistance3D(point, lineStart, lineEnd)
 	-- Calculate closest point on line segment
 	local closestX = lineStart.x + t * dx
 	local closestY = lineStart.y + t * dy
-	local closestZ = lineStart.z + t * dz
 
-	-- Return 3D distance
-	return math.sqrt(
-		(point.x - closestX) * (point.x - closestX)
-			+ (point.y - closestY) * (point.y - closestY)
-			+ (point.z - closestZ) * (point.z - closestZ)
-	)
+	-- Use Common.Distance2D for final distance calculation (ignore Z)
+	local point2D = Vector3(point.x, point.y, 0)
+	local closest2D = Vector3(closestX, closestY, 0)
+	return Common.Distance2D(point2D, closest2D)
 end
 
 -- Check if point lies on neighbor border (improved version)
@@ -127,9 +120,9 @@ local function pointLiesOnNeighborBorder(point, neighbor, direction)
 		{ neighbor.sw, neighbor.nw }, -- West edge
 	}
 
-	-- Check distance to each edge using improved 3D calculation
+	-- Check distance to each edge using 2D calculation (ignore Z)
 	for _, edge in ipairs(edges) do
-		local distance = pointToLineSegmentDistance3D(point, edge[1], edge[2])
+		local distance = pointToLineSegmentDistance(point, edge[1], edge[2])
 		if distance <= maxDistance then
 			return true -- Point is close enough to this border edge
 		end
