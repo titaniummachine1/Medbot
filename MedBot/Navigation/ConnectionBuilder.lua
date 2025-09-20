@@ -37,13 +37,74 @@ function ConnectionBuilder.NormalizeConnections()
 	Log:Info("Normalized all connections to enriched format")
 end
 
-local function determineDirection(fromPos, toPos)
-	local dx = toPos.x - fromPos.x
-	local dy = toPos.y - fromPos.y
-	if math.abs(dx) >= math.abs(dy) then
-		return (dx > 0) and 1 or -1, 0
+local function determineDirection(fromArea, toArea)
+	-- Use edge coordinates to determine if areas are aligned on the same axis
+	-- This replaces the previous area center-based approach
+
+	local function getEdgeBounds(area, axis)
+		if not (area.nw and area.ne and area.se and area.sw) then
+			return nil, nil
+		end
+
+		if axis == "x" then
+			-- For X axis alignment, check if Y coordinates overlap significantly
+			local minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+			local maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+			return minY, maxY
+		else
+			-- For Y axis alignment, check if X coordinates overlap significantly
+			local minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+			local maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+			return minX, maxX
+		end
+	end
+
+	-- Get X and Y bounds for both areas
+	local fromXMin, fromXMax = getEdgeBounds(fromArea, "x")
+	local fromYMin, fromYMax = getEdgeBounds(fromArea, "y")
+	local toXMin, toXMax = getEdgeBounds(toArea, "x")
+	local toYMin, toYMax = getEdgeBounds(toArea, "y")
+
+	if not (fromXMin and toXMin and fromYMin and toYMin) then
+		-- Fallback to center-based approach if edge data is missing
+		local dx = toArea.pos.x - fromArea.pos.x
+		local dy = toArea.pos.y - fromArea.pos.y
+		if math.abs(dx) >= math.abs(dy) then
+			return (dx > 0) and 1 or -1, 0
+		else
+			return 0, (dy > 0) and 1 or -1
+		end
+	end
+
+	-- Check for significant X overlap (Y axis alignment)
+	local xOverlap = math.max(0, math.min(fromXMax, toXMax) - math.max(fromXMin, toXMin))
+	local fromXRange = fromXMax - fromXMin
+	local toXRange = toXMax - toXMin
+	local xOverlapRatio = xOverlap / math.min(fromXRange, toXRange)
+
+	-- Check for significant Y overlap (X axis alignment)
+	local yOverlap = math.max(0, math.min(fromYMax, toYMax) - math.max(fromYMin, toYMin))
+	local fromYRange = fromYMax - fromYMin
+	local toYRange = toYMax - toYMin
+	local yOverlapRatio = yOverlap / math.min(fromYRange, toYRange)
+
+	-- Determine primary alignment based on which overlap is more significant
+	if xOverlapRatio >= yOverlapRatio and xOverlapRatio > 0.3 then
+		-- Aligned on Y axis (horizontal neighbors)
+		local avgY = (fromYMin + fromYMax + toYMin + toYMax) / 4
+		if fromArea.pos.y < toArea.pos.y then
+			return 0, 1 -- South
+		else
+			return 0, -1 -- North
+		end
 	else
-		return 0, (dy > 0) and 1 or -1
+		-- Aligned on X axis (vertical neighbors)
+		local avgX = (fromXMin + fromXMax + toXMin + toXMax) / 4
+		if fromArea.pos.x < toArea.pos.x then
+			return 1, 0 -- East
+		else
+			return -1, 0 -- West
+		end
 	end
 end
 
@@ -205,7 +266,7 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	local dirX, dirY = determineDirection(areaA.pos, areaB.pos)
+	local dirX, dirY = determineDirection(areaA, areaB)
 	local geometry = calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	if not geometry then
 		return nil
