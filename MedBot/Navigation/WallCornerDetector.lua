@@ -104,31 +104,37 @@ local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 	return Common.Distance2D(point2D, closest2D)
 end
 
--- Check if point lies on neighbor border (improved version)
+-- Check if point lies on neighbor's facing boundary
 local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
 		return false
 	end
 
-	local maxDistance = 18.0 -- Allow up to 18 units distance for lenient detection
+	local maxDistance = 18.0
 
-	-- Check all 4 border edges of the neighbor
-	local edges = {
-		{ neighbor.nw, neighbor.ne }, -- North edge
-		{ neighbor.ne, neighbor.se }, -- East edge
-		{ neighbor.se, neighbor.sw }, -- South edge
-		{ neighbor.sw, neighbor.nw }, -- West edge
-	}
-
-	-- Check distance to each edge using 2D calculation (ignore Z)
-	for _, edge in ipairs(edges) do
-		local distance = pointToLineSegmentDistance(point, edge[1], edge[2])
-		if distance <= maxDistance then
-			return true -- Point is close enough to this border edge
-		end
+	-- Only check the boundary that's facing our area
+	local facingBoundary = nil
+	if direction == "north" then
+		-- We're facing north, so neighbor must be facing south
+		facingBoundary = { neighbor.sw, neighbor.se } -- South boundary of neighbor
+	elseif direction == "south" then
+		-- We're facing south, so neighbor must be facing north
+		facingBoundary = { neighbor.nw, neighbor.ne } -- North boundary of neighbor
+	elseif direction == "east" then
+		-- We're facing east, so neighbor must be facing west
+		facingBoundary = { neighbor.sw, neighbor.nw } -- West boundary of neighbor
+	elseif direction == "west" then
+		-- We're facing west, so neighbor must be facing east
+		facingBoundary = { neighbor.se, neighbor.ne } -- East boundary of neighbor
 	end
 
-	return false -- Point is too far from all border edges
+	if not facingBoundary then
+		return false
+	end
+
+	-- Check distance to the facing boundary only
+	local distance = pointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
+	return distance <= maxDistance
 end
 
 -- Count how many neighbor borders a corner lies on
@@ -220,9 +226,9 @@ function WallCornerDetector.DetectWallCorners()
 							)
 						end
 
-						-- Simplified classification: wall corner if 0 or 1 neighbor contacts
+						-- Simplified classification: wall corner if exactly 0 neighbor contacts (completely outside)
 						local cornerType = "not_wall"
-						if proximityScore == 0 or proximityScore == 1 then
+						if proximityScore == 0 then
 							cornerType = "wall"
 							table.insert(area.wallCorners, corner) -- Mark as wall corner
 							wallCornerCount = wallCornerCount + 1
