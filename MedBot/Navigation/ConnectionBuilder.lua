@@ -37,74 +37,13 @@ function ConnectionBuilder.NormalizeConnections()
 	Log:Info("Normalized all connections to enriched format")
 end
 
-local function determineDirection(fromArea, toArea)
-	-- Use edge coordinates to determine if areas are aligned on the same axis
-	-- This replaces the previous area center-based approach
-
-	local function getEdgeBounds(area, axis)
-		if not (area.nw and area.ne and area.se and area.sw) then
-			return nil, nil
-		end
-
-		if axis == "x" then
-			-- For X axis alignment, check if Y coordinates overlap significantly
-			local minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
-			local maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
-			return minY, maxY
-		else
-			-- For Y axis alignment, check if X coordinates overlap significantly
-			local minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
-			local maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
-			return minX, maxX
-		end
-	end
-
-	-- Get X and Y bounds for both areas
-	local fromXMin, fromXMax = getEdgeBounds(fromArea, "x")
-	local fromYMin, fromYMax = getEdgeBounds(fromArea, "y")
-	local toXMin, toXMax = getEdgeBounds(toArea, "x")
-	local toYMin, toYMax = getEdgeBounds(toArea, "y")
-
-	if not (fromXMin and toXMin and fromYMin and toYMin) then
-		-- Fallback to center-based approach if edge data is missing
-		local dx = toArea.pos.x - fromArea.pos.x
-		local dy = toArea.pos.y - fromArea.pos.y
-		if math.abs(dx) >= math.abs(dy) then
-			return (dx > 0) and 1 or -1, 0
-		else
-			return 0, (dy > 0) and 1 or -1
-		end
-	end
-
-	-- Check for significant X overlap (Y axis alignment)
-	local xOverlap = math.max(0, math.min(fromXMax, toXMax) - math.max(fromXMin, toXMin))
-	local fromXRange = fromXMax - fromXMin
-	local toXRange = toXMax - toXMin
-	local xOverlapRatio = xOverlap / math.min(fromXRange, toXRange)
-
-	-- Check for significant Y overlap (X axis alignment)
-	local yOverlap = math.max(0, math.min(fromYMax, toYMax) - math.max(fromYMin, toYMin))
-	local fromYRange = fromYMax - fromYMin
-	local toYRange = toYMax - toYMin
-	local yOverlapRatio = yOverlap / math.min(fromYRange, toYRange)
-
-	-- Determine primary alignment based on which overlap is more significant
-	if xOverlapRatio >= yOverlapRatio and xOverlapRatio > 0.3 then
-		-- Aligned on Y axis (horizontal neighbors)
-		local avgY = (fromYMin + fromYMax + toYMin + toYMax) / 4
-		if fromArea.pos.y < toArea.pos.y then
-			return 0, 1 -- South
-		else
-			return 0, -1 -- North
-		end
+local function determineDirection(fromPos, toPos)
+	local dx = toPos.x - fromPos.x
+	local dy = toPos.y - fromPos.y
+	if math.abs(dx) >= math.abs(dy) then
+		return (dx > 0) and 1 or -1, 0
 	else
-		-- Aligned on X axis (vertical neighbors)
-		local avgX = (fromXMin + fromXMax + toXMin + toXMax) / 4
-		if fromArea.pos.x < toArea.pos.x then
-			return 1, 0 -- East
-		else
-			return -1, 0 -- West
-		end
+		return 0, (dy > 0) and 1 or -1
 	end
 end
 
@@ -166,10 +105,8 @@ local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
 		if area.wallCorners then
 			for _, wallCorner in ipairs(area.wallCorners) do
 				-- Calculate 2D distance to both door endpoints
-				local leftDist2D = Common.Distance2D(
-					Vector3(clampedLeft.x, clampedLeft.y, 0),
-					Vector3(wallCorner.x, wallCorner.y, 0)
-				)
+				local leftDist2D =
+					Common.Distance2D(Vector3(clampedLeft.x, clampedLeft.y, 0), Vector3(wallCorner.x, wallCorner.y, 0))
 				local rightDist2D = Common.Distance2D(
 					Vector3(clampedRight.x, clampedRight.y, 0),
 					Vector3(wallCorner.x, wallCorner.y, 0)
@@ -181,35 +118,19 @@ local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
 						-- Door is horizontal (varies on X-axis), clamp on X-axis
 						if wallCorner.x < clampedLeft.x and leftDist2D < WALL_CLEARANCE then
 							-- Corner is to the left of door's left endpoint, move left endpoint right
-							clampedLeft = Vector3(
-								wallCorner.x + WALL_CLEARANCE,
-								clampedLeft.y,
-								clampedLeft.z
-							)
+							clampedLeft = Vector3(wallCorner.x + WALL_CLEARANCE, clampedLeft.y, clampedLeft.z)
 						elseif wallCorner.x > clampedRight.x and rightDist2D < WALL_CLEARANCE then
 							-- Corner is to the right of door's right endpoint, move right endpoint left
-							clampedRight = Vector3(
-								wallCorner.x - WALL_CLEARANCE,
-								clampedRight.y,
-								clampedRight.z
-							)
+							clampedRight = Vector3(wallCorner.x - WALL_CLEARANCE, clampedRight.y, clampedRight.z)
 						end
 					else
 						-- Door is vertical (varies on Y-axis), clamp on Y-axis
 						if wallCorner.y < clampedLeft.y and leftDist2D < WALL_CLEARANCE then
 							-- Corner is below door's left endpoint, move left endpoint up
-							clampedLeft = Vector3(
-								clampedLeft.x,
-								wallCorner.y + WALL_CLEARANCE,
-								clampedLeft.z
-							)
+							clampedLeft = Vector3(clampedLeft.x, wallCorner.y + WALL_CLEARANCE, clampedLeft.z)
 						elseif wallCorner.y > clampedRight.y and rightDist2D < WALL_CLEARANCE then
 							-- Corner is above door's right endpoint, move right endpoint down
-							clampedRight = Vector3(
-								clampedRight.x,
-								wallCorner.y - WALL_CLEARANCE,
-								clampedRight.z
-							)
+							clampedRight = Vector3(clampedRight.x, wallCorner.y - WALL_CLEARANCE, clampedRight.z)
 						end
 					end
 				end
@@ -266,7 +187,7 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	local dirX, dirY = determineDirection(areaA, areaB)
+	local dirX, dirY = determineDirection(areaA.pos, areaB.pos)
 	local geometry = calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	if not geometry then
 		return nil
@@ -390,7 +311,12 @@ function ConnectionBuilder.BuildDoorsForConnections()
 									connection.needJump = door.needJump
 									connection.owner = door.owner
 									doorsBuilt = doorsBuilt + 1
-									Log:Debug("Built door for connection %d -> %d (owner: %d)", nodeId, targetId, door.owner)
+									Log:Debug(
+										"Built door for connection %d -> %d (owner: %d)",
+										nodeId,
+										targetId,
+										door.owner
+									)
 								end
 
 								-- Mirror onto reverse connection so both directions share the same geometry
