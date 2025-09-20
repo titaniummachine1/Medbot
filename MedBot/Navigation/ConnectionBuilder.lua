@@ -54,13 +54,13 @@ local function getFacingEdgeCorners(area, dirX, dirY, _)
 	end
 
 	if dirX == 1 then
-		return area.ne, area.se
+		return area.nw, area.ne -- When facing east, left is northwest, right is northeast
 	end -- East
 	if dirX == -1 then
-		return area.sw, area.nw
+		return area.se, area.sw -- When facing west, left is southeast, right is southwest
 	end -- West
 	if dirY == 1 then
-		return area.se, area.sw
+		return area.sw, area.se -- When facing south, left is southwest, right is southeast
 	end -- South
 	if dirY == -1 then
 		return area.nw, area.ne
@@ -87,10 +87,9 @@ local function calculateDoorOwner(a0, a1, b0, b1, areaA, areaB)
 	end
 end
 
--- Calculate edge overlap and door geometry
 local function calculateDoorGeometry(areaA, areaB, direction)
 	local a0, a1 = AxisCalculator.GetEdgeCorners(areaA, direction)
-	local b0, b1 = AxisCalculator.GetEdgeCorners(areaB, AxisCalculator.GetOppositeDirection(direction))
+	local b0, b1 = getFacingEdgeCorners(areaB, -direction.x, -direction.y, direction)
 	if not (a0 and a1 and b0 and b1) then
 		return nil
 	end
@@ -154,7 +153,104 @@ local function createDoorForAreas(areaA, areaB)
 	local overlapLeft = pointOnOwnerEdge(oL)
 	local overlapRight = pointOnOwnerEdge(oR)
 
-	-- Clamp door away from wall corners
+	-- Clamp door endpoints while keeping them on the boundary line
+	local function clampDoorOnBoundary(leftPoint, rightPoint, boundaryStart, boundaryEnd, wallCorners, clearance)
+		local function clampPointOnLine(point, lineStart, lineEnd)
+			-- Project point onto the line segment
+			local dx = lineEnd.x - lineStart.x
+			local dy = lineEnd.y - lineStart.y
+			local length = math.sqrt(dx * dx + dy * dy)
+
+			if length == 0 then
+				return point
+			end
+
+			-- Normalize direction vector
+			local nx, ny = dx / length, dy / length
+
+			-- Project point onto the infinite line
+			local toPoint = { x = point.x - lineStart.x, y = point.y - lineStart.y }
+			local proj = toPoint.x * nx + toPoint.y * ny
+
+			-- Clamp projection to segment bounds
+			local clampedProj = math.max(0, math.min(length, proj))
+
+			-- Calculate final point on line
+			return Vector3(lineStart.x + nx * clampedProj, lineStart.y + ny * clampedProj, point.z)
+		end
+
+		-- Find the closest wall corners that might interfere
+		local function getInterferingCorners()
+			local interfering = {}
+			for _, corner in ipairs(wallCorners) do
+				local leftDist = Common.Distance2D(leftPoint, Vector3(corner.x, corner.y, 0))
+				local rightDist = Common.Distance2D(rightPoint, Vector3(corner.x, corner.y, 0))
+				if leftDist < clearance or rightDist < clearance then
+					table.insert(interfering, corner)
+				end
+			end
+			return interfering
+		end
+
+		-- Get the direction vector of the boundary
+		local boundaryDx = boundaryEnd.x - boundaryStart.x
+		local boundaryDy = boundaryEnd.y - boundaryStart.y
+		local boundaryLength = math.sqrt(boundaryDx * boundaryDx + boundaryDy * boundaryDy)
+
+		if boundaryLength == 0 then
+			return leftPoint, rightPoint
+		end
+
+		-- Normalize boundary direction
+		local boundaryNx, boundaryNy = boundaryDx / boundaryLength, boundaryDy / boundaryLength
+
+		-- Calculate perpendicular vector for pushing away from corners
+		local perpNx, perpNy = -boundaryNy, boundaryNx
+
+		local interferingCorners = getInterferingCorners()
+		if #interferingCorners == 0 then
+			return leftPoint, rightPoint
+		end
+
+		-- For each interfering corner, push the door endpoints away along the perpendicular
+		for _, corner in ipairs(interferingCorners) do
+			-- Calculate vector from corner to door endpoints
+			local toLeft = { x = leftPoint.x - corner.x, y = leftPoint.y - corner.y }
+			local toRight = { x = rightPoint.x - corner.x, y = rightPoint.y - corner.y }
+
+			-- Project onto perpendicular direction
+			local leftProj = toLeft.x * perpNx + toLeft.y * perpNy
+			local rightProj = toRight.x * perpNx + toRight.y * perpNy
+
+			-- If corner is interfering, push the door away
+			if math.abs(leftProj) < clearance then
+				local pushDistance = clearance - math.abs(leftProj)
+				local pushDir = leftProj > 0 and 1 or -1
+				leftPoint = Vector3(
+					leftPoint.x + perpNx * pushDistance * pushDir,
+					leftPoint.y + perpNy * pushDistance * pushDir,
+					leftPoint.z
+				)
+				-- Re-project onto boundary
+				leftPoint = clampPointOnLine(leftPoint, boundaryStart, boundaryEnd)
+			end
+
+			if math.abs(rightProj) < clearance then
+				local pushDistance = clearance - math.abs(rightProj)
+				local pushDir = rightProj > 0 and 1 or -1
+				rightPoint = Vector3(
+					rightPoint.x + perpNx * pushDistance * pushDir,
+					rightPoint.y + perpNy * pushDistance * pushDir,
+					rightPoint.z
+				)
+				-- Re-project onto boundary
+				rightPoint = clampPointOnLine(rightPoint, boundaryStart, boundaryEnd)
+			end
+		end
+
+		return leftPoint, rightPoint
+	end
+
 	local wallCorners = {}
 	if areaA.wallCorners then
 		for _, corner in ipairs(areaA.wallCorners) do
@@ -162,13 +258,9 @@ local function createDoorForAreas(areaA, areaB)
 		end
 	end
 	if areaB.wallCorners then
-		for _, corner in ipairs(areaB.wallCorners) do
-			table.insert(wallCorners, corner)
-		end
 	end
 
-	local overlapLeft, overlapRight =
-		AxisCalculator.ClampEndpoints(overlapLeft, overlapRight, wallCorners, direction, HITBOX_WIDTH)
+	local overlapLeft, overlapRight = clampDoorOnBoundary(overlapLeft, overlapRight, e0, e1, wallCorners, HITBOX_WIDTH)
 
 	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
 
