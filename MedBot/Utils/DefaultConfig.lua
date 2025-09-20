@@ -22,11 +22,10 @@ defaultconfig = {
 	},
 	Visuals = {
 		EnableVisuals = true,
-		connectionDepth = 5, -- Flood-fill depth: how many connection steps from player to visualize (1-50)
+		connectionDepth = 4, -- Flood-fill depth: how many connection steps from player to visualize (1-50)
 		memoryUsage = true,
-		showAgentBoxes = false, -- Optional legacy agent 3D boxes
 		drawPath = true, -- Draws the path to the current goal
-		showConnections = false, -- Show connections between nodes
+		showConnections = true, -- Show connections between nodes
 		showAreas = true, -- Show area outlines
 		showDoors = true,
 		showCornerConnections = true, -- Show corner connections

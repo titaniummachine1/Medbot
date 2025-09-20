@@ -180,9 +180,9 @@ local function OnDrawMenu()
 		G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 		TimMenu.NextLine()
 
-		-- Connection depth for flood-fill visualization (controls how far from player to render navmesh)
+		-- Draw depth for flood-fill visualization (controls how far from player to render navmesh)
 		G.Menu.Visuals.connectionDepth = G.Menu.Visuals.connectionDepth or 10
-		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Draw Connections", G.Menu.Visuals.connectionDepth, 1, 50, 1)
+		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Draw Depth", G.Menu.Visuals.connectionDepth, 1, 50, 1)
 		TimMenu.Tooltip(
 			"How many connection steps away from player to visualize (1 = only current node, 50 = maximum range). Controls flood-fill rendering of all navmesh elements except path arrows."
 		)
@@ -193,18 +193,26 @@ local function OnDrawMenu()
 
 		-- Display Section
 		TimMenu.BeginSector("Display Options")
-		-- Basic display options using individual checkboxes (TimMenu Combo doesn't support boolean arrays)
+		-- Areas Visuals Combo - groups area-related visual options together for better organization
 		G.Menu.Visuals.showConnections = TimMenu.Checkbox("Show Nav Connections", G.Menu.Visuals.showConnections)
 		TimMenu.NextLine()
 
-		G.Menu.Visuals.showAreas = TimMenu.Checkbox("Show Areas", G.Menu.Visuals.showAreas)
-		TimMenu.NextLine()
+		-- Multi-selection combo for all visual elements
+		local visualElements = {"Areas", "Doors", "Wall Corners", "Nav Connections"}
+		local visualSelections = {
+			G.Menu.Visuals.showAreas or false,
+			G.Menu.Visuals.showDoors or false,
+			G.Menu.Visuals.showCornerConnections or false,
+			G.Menu.Visuals.showConnections or false
+		}
 
-		G.Menu.Visuals.showDoors = TimMenu.Checkbox("Show Doors", G.Menu.Visuals.showDoors)
-		TimMenu.NextLine()
+		local newSelections = TimMenu.Combo("Visual Elements", visualSelections, visualElements)
 
-		G.Menu.Visuals.showCornerConnections =
-			TimMenu.Checkbox("Show Corner Connections", G.Menu.Visuals.showCornerConnections)
+		-- Update boolean values based on combo selections
+		G.Menu.Visuals.showAreas = newSelections[1]
+		G.Menu.Visuals.showDoors = newSelections[2]
+		G.Menu.Visuals.showCornerConnections = newSelections[3]
+		G.Menu.Visuals.showConnections = newSelections[4]
 		TimMenu.NextLine()
 
 		-- Additional visual options

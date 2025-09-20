@@ -105,12 +105,8 @@ local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
 		if area.wallCorners then
 			for _, wallCorner in ipairs(area.wallCorners) do
 				-- Calculate 2D distance to both door endpoints
-				local leftDist2D =
-					Common.Distance2D(Vector3(clampedLeft.x, clampedLeft.y, 0), Vector3(wallCorner.x, wallCorner.y, 0))
-				local rightDist2D = Common.Distance2D(
-					Vector3(clampedRight.x, clampedRight.y, 0),
-					Vector3(wallCorner.x, wallCorner.y, 0)
-				)
+				local leftDist2D = Common.Distance2D(clampedLeft, Vector3(wallCorner.x, wallCorner.y, 0))
+				local rightDist2D = Common.Distance2D(clampedRight, Vector3(wallCorner.x, wallCorner.y, 0))
 
 				-- Only clamp if corner is too close to either endpoint
 				if leftDist2D < WALL_CLEARANCE or rightDist2D < WALL_CLEARANCE then
@@ -118,19 +114,19 @@ local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
 						-- Door is horizontal (varies on X-axis), clamp on X-axis
 						if wallCorner.x < clampedLeft.x and leftDist2D < WALL_CLEARANCE then
 							-- Corner is to the left of door's left endpoint, move left endpoint right
-							clampedLeft = Vector3(wallCorner.x + WALL_CLEARANCE, clampedLeft.y, clampedLeft.z)
+							clampedLeft.x = wallCorner.x + WALL_CLEARANCE
 						elseif wallCorner.x > clampedRight.x and rightDist2D < WALL_CLEARANCE then
 							-- Corner is to the right of door's right endpoint, move right endpoint left
-							clampedRight = Vector3(wallCorner.x - WALL_CLEARANCE, clampedRight.y, clampedRight.z)
+							clampedRight.x = wallCorner.x - WALL_CLEARANCE
 						end
 					else
 						-- Door is vertical (varies on Y-axis), clamp on Y-axis
 						if wallCorner.y < clampedLeft.y and leftDist2D < WALL_CLEARANCE then
 							-- Corner is below door's left endpoint, move left endpoint up
-							clampedLeft = Vector3(clampedLeft.x, wallCorner.y + WALL_CLEARANCE, clampedLeft.z)
+							clampedLeft.y = wallCorner.y + WALL_CLEARANCE
 						elseif wallCorner.y > clampedRight.y and rightDist2D < WALL_CLEARANCE then
 							-- Corner is above door's right endpoint, move right endpoint down
-							clampedRight = Vector3(clampedRight.x, wallCorner.y - WALL_CLEARANCE, clampedRight.z)
+							clampedRight.y = wallCorner.y - WALL_CLEARANCE
 						end
 					end
 				end
