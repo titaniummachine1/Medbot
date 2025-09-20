@@ -220,9 +220,9 @@ function WallCornerDetector.DetectWallCorners()
 							)
 						end
 
-						-- Simplified classification: wall corner if exactly 1 neighbor contact
+						-- Simplified classification: wall corner if 0 or 1 neighbor contacts
 						local cornerType = "not_wall"
-						if proximityScore == 1 then
+						if proximityScore == 0 or proximityScore == 1 then
 							cornerType = "wall"
 							table.insert(area.wallCorners, corner) -- Mark as wall corner
 							wallCornerCount = wallCornerCount + 1
