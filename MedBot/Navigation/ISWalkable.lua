@@ -307,4 +307,7 @@ function isWalkable.PathCached(startPos, goalPos, overrideMode)
 	return result
 end
 
-return isWalkable
+-- Simple wrapper function for checking if a position is walkable from another position
+function isWalkable.IsWalkable(fromPos, toPos)
+	return isWalkable.PathCached(fromPos, toPos, "Fast")
+end

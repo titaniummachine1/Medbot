@@ -48,6 +48,12 @@ G.Navigation = {
 	goalPos = nil, -- Current goal world position
 	goalNodeId = nil, -- Closest node to the goal position
 	navMeshUpdated = false, -- Set when navmesh is rebuilt
+	-- Node skipping system
+	nodeSkipTimer = 0, -- Timer for node skipping (in ticks)
+	skipDelayTicks = 22, -- Default skip delay (22 ticks)
+	fastSkipDelayTicks = 11, -- Faster skip delay when next node is closer (11 ticks)
+	lastSkipCheckTick = 0, -- Last tick when we performed skip check
+	nextNodeCloser = false, -- Flag indicating if next node is closer
 }
 
 -- SmartJump integration

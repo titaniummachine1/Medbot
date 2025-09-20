@@ -211,6 +211,8 @@ function Navigation.ClearPath()
 	G.Navigation.currentWaypointIndex = 1
 	-- Clear path traversal history used by stuck analysis
 	G.Navigation.pathHistory = {}
+	-- Reset node skipping state
+	Navigation.ResetNodeSkipping()
 end
 
 -- Set the current path
@@ -229,6 +231,8 @@ function Navigation.SetCurrentPath(path)
 	Navigation.BuildDoorWaypointsFromPath()
 	-- Reset traversal history on new path
 	G.Navigation.pathHistory = {}
+	-- Reset node skipping state for new path
+	Navigation.ResetNodeSkipping()
 end
 
 -- Remove the current node from the path (we've reached it)
@@ -259,8 +263,103 @@ function Navigation.increment_ticks()
 end
 
 -- Function to increment the current node ticks
-function Navigation.ResetTickTimer()
-	G.Navigation.currentNodeTicks = 0
+-- Check if next node is walkable from current position
+function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
+	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		return false
+	end
+
+	-- Use the existing walkability check from the Node module or ISWalkable
+	local ISWalkable = require("MedBot.Navigation.ISWalkable")
+	local isWalkable = ISWalkable.IsWalkable(currentPos, nextNode.pos)
+
+	if isWalkable then
+		Log:Debug("Next node %d is walkable from current position", nextNode.id)
+		return true
+	else
+		Log:Debug("Next node %d is not walkable from current position", nextNode.id)
+		return false
+	end
+end
+
+-- Check if next node is closer than current node
+function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
+	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		return false
+	end
+
+	local distanceToCurrent = (currentPos - currentNode.pos):Length()
+	local distanceToNext = (currentPos - nextNode.pos):Length()
+
+	if distanceToNext < distanceToCurrent then
+		Log:Debug("Next node %d is closer (%.2f < %.2f)", nextNode.id, distanceToNext, distanceToCurrent)
+		return true
+	else
+		Log:Debug("Current node %d is closer or equal (%.2f >= %.2f)", currentNode.id, distanceToCurrent, distanceToNext)
+		return false
+	end
+end
+
+-- Handle node skipping logic
+function Navigation.HandleNodeSkipping(currentPos)
+	local path = G.Navigation.path
+	if not path or #path < 2 then
+		return false -- No path or not enough nodes to skip
+	end
+
+	local currentNode = path[1] -- Current target node
+	local nextNode = path[2] -- Next node to potentially skip to
+
+	if not currentNode or not nextNode then
+		return false
+	end
+
+	local currentTick = globals.TickCount()
+
+	-- Update node skip timer
+	G.Navigation.nodeSkipTimer = G.Navigation.nodeSkipTimer + 1
+	G.Navigation.lastSkipCheckTick = currentTick
+
+	-- Determine which skip delay to use
+	local skipDelay = G.Navigation.nextNodeCloser and G.Navigation.fastSkipDelayTicks or G.Navigation.skipDelayTicks
+
+	-- Check if it's time to perform skip check
+	if G.Navigation.nodeSkipTimer >= skipDelay then
+		Log:Debug("Node skip check triggered after %d ticks (delay: %d)", G.Navigation.nodeSkipTimer, skipDelay)
+		G.Navigation.nodeSkipTimer = 0 -- Reset timer
+
+		-- Use WorkManager to throttle expensive walkability checks
+		local WorkManager = require("MedBot.WorkManager")
+		if WorkManager.attemptWork(5, "continuous_node_skip_walkability") then
+			-- Check if next node is walkable
+			local nextNodeWalkable = Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
+
+			if nextNodeWalkable then
+				-- Check if we should skip based on distance
+				G.Navigation.nextNodeCloser = Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
+
+				if G.Navigation.nextNodeCloser then
+					Log:Info("Skipping current node %d -> next node %d (closer and walkable)", currentNode.id, nextNode.id)
+					Navigation.RemoveCurrentNode()
+					return true -- Node was skipped
+				else
+					Log:Debug("Next node %d is walkable but not closer - not skipping", nextNode.id)
+				end
+			else
+				Log:Debug("Next node %d is not walkable - not skipping", nextNode.id)
+			end
+		end
+	end
+
+	return false -- No skip occurred
+end
+
+-- Reset node skipping state
+function Navigation.ResetNodeSkipping()
+	G.Navigation.nodeSkipTimer = 0
+	G.Navigation.lastSkipCheckTick = 0
+	G.Navigation.nextNodeCloser = false
+	Log:Debug("Node skipping state reset")
 end
 
 -- Build flexible waypoints: choose optimal door points, skip centers when direct door-to-door is shorter

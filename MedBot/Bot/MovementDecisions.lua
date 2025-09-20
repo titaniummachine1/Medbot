@@ -16,6 +16,7 @@ local Log = Common.Log.new("MovementDecisions")
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
+local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between walkability checks (more expensive than distance checks)
 
 -- Decision: Check if we've reached the target and advance waypoints/nodes
 function MovementDecisions.checkDistanceAndAdvance(userCmd)
@@ -41,6 +42,32 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	if MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist) then
 		Log:Debug("Reached target - advancing waypoint/node")
 
+		-- Handle node skipping logic when we reach a node
+		if G.Navigation.path and #G.Navigation.path > 1 then
+			local currentNode = G.Navigation.path[1]
+			local nextNode = G.Navigation.path[2]
+
+			if currentNode and nextNode then
+				-- Use forceWork for critical node skipping - we want immediate walkability check when reaching a node
+				WorkManager.forceWork(WALKABILITY_CHECK_COOLDOWN, "node_skip_walkability")
+				-- Check if next node is walkable and closer
+				local ISWalkable = require("MedBot.Navigation.ISWalkable")
+				local isNextWalkable = ISWalkable.IsWalkable(LocalOrigin, nextNode.pos)
+
+				if isNextWalkable then
+					local distanceToCurrent = (LocalOrigin - currentNode.pos):Length()
+					local distanceToNext = (LocalOrigin - nextNode.pos):Length()
+
+					if distanceToNext < distanceToCurrent then
+						Log:Info("Skipping current node %d -> next node %d (closer and walkable)", currentNode.id, nextNode.id)
+						Navigation.RemoveCurrentNode()
+						-- Don't advance waypoint/node since we skipped
+						return result
+					end
+				end
+			end
+		end
+
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
 			Navigation.AdvanceWaypoint()
@@ -55,6 +82,19 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		else
 			-- Fallback to node-based advancement
 			MovementDecisions.advanceNode()
+		end
+	end
+
+	-- Handle continuous node skipping logic (every 22 ticks)
+	if G.Navigation.path and #G.Navigation.path > 1 then
+		local skipResult = Navigation.HandleNodeSkipping(LocalOrigin)
+		if skipResult then
+			-- Node was skipped, get new target
+			targetPos = MovementDecisions.getCurrentTarget()
+			if not targetPos then
+				result.shouldContinue = false
+				return result
+			end
 		end
 	end
 
@@ -93,6 +133,8 @@ function MovementDecisions.advanceNode()
 		Log:Debug("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
+		-- Reset node skipping timer when manually advancing
+		Navigation.ResetNodeSkipping()
 
 		if #G.Navigation.path == 0 then
 			Navigation.ClearPath()

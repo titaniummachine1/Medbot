@@ -83,6 +83,24 @@ function WorkManager.attemptWork(delay, identifier)
 
 	return true
 end
+--- @param delay number The delay (in ticks) to set for future calls
+--- @param identifier string A unique identifier for the work
+--- @return boolean Always returns true to indicate work was allowed
+function WorkManager.forceWork(delay, identifier)
+	local currentTime = getCurrentTick()
+
+	-- Always allow execution by updating the lastExecuted time
+	if not WorkManager.works[identifier] then
+		WorkManager.works[identifier] = {
+			lastExecuted = currentTime,
+			delay = delay,
+		}
+	else
+		WorkManager.works[identifier].lastExecuted = currentTime - delay -- Set to past to allow immediate execution
+	end
+
+	return true
+end
 
 --- Processes the works based on their priority
 function WorkManager.processWorks()
