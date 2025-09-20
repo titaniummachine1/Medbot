@@ -360,7 +360,9 @@ local function OnDraw()
                     for _, conn in ipairs(cDir.connections) do
                         local nid = (type(conn) == "table") and conn.node or conn
                         local otherNode = G.Navigation.nodes and G.Navigation.nodes[nid]
-                        if otherNode then
+
+                        -- Only draw connections if the other node is also within depth limit
+                        if otherNode and filteredNodes[nid] then
                             local pos1 = node.pos + UP_VECTOR
                             local pos2 = otherNode.pos + UP_VECTOR
                             local s1 = client.WorldToScreen(pos1)
