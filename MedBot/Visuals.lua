@@ -294,25 +294,16 @@ local function OnDraw()
     local p = me:GetAbsOrigin()
 
     -- Collect visible nodes using flood-fill from player position
-    local connectionDepth = G.Menu.Visuals.connectionDepth or 3
+    local connectionDepth = G.Menu.Visuals.connectionDepth or 10
     local visibleNodes = collectNodesByConnectionDepth(p, connectionDepth)
 
-    -- Apply render radius filtering to the collected nodes
-    local renderRadius = (G.Menu.Visuals.renderRadius or 400)
-    local function withinRadius(pos)
-        -- Inline distance check for bundle compatibility
-        return (pos - p):Length() <= renderRadius
-    end
-
-    -- Filter nodes by render radius and prepare screen positions
+    -- Filter nodes by screen visibility only (flood-fill already limits by connection depth)
     local filteredNodes = {}
     for id, entry in pairs(visibleNodes) do
         local node = entry.node
-        if withinRadius(node.pos) then
-            local scr = client.WorldToScreen(node.pos)
-            if scr then
-                filteredNodes[id] = { node = node, screen = scr, depth = entry.depth }
-            end
+        local scr = client.WorldToScreen(node.pos)
+        if scr then
+            filteredNodes[id] = { node = node, screen = scr, depth = entry.depth }
         end
     end
 
@@ -361,7 +352,6 @@ local function OnDraw()
     if G.Menu.Visuals.showConnections then
         for id, entry in pairs(filteredNodes) do
             local node = entry.node
-            if not withinRadius(node.pos) then goto continue_node end
             for dir = 1, 4 do
                 local cDir = node.c[dir]
                 if cDir and cDir.connections then
@@ -371,7 +361,6 @@ local function OnDraw()
                         if otherNode then
                             local pos1 = node.pos + UP_VECTOR
                             local pos2 = otherNode.pos + UP_VECTOR
-                            if not (withinRadius(pos1) and withinRadius(pos2)) then goto continue_conn end
                             local s1 = client.WorldToScreen(pos1)
                             local s2 = client.WorldToScreen(pos2)
                             if s1 and s2 then
@@ -397,12 +386,10 @@ local function OnDraw()
                                 if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
                                 draw.Line(s1[1], s1[2], s2[1], s2[2])
                             end
-                            ::continue_conn::
                         end
                     end
                 end
             end
-            ::continue_node::
         end
     end
 
@@ -418,13 +405,11 @@ local function OnDraw()
             if node.wallCorners then
                 for _, cornerPoint in ipairs(node.wallCorners) do
                     wallCornerCount = wallCornerCount + 1
-                    if withinRadius(cornerPoint) then
-                        local cornerScreen = client.WorldToScreen(cornerPoint)
-                        if cornerScreen then
-                            draw.Color(255, 165, 0, 200) -- Orange for wall corners
-                            draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3,
-                                cornerScreen[1] + 3, cornerScreen[2] + 3)
-                        end
+                    local cornerScreen = client.WorldToScreen(cornerPoint)
+                    if cornerScreen then
+                        draw.Color(255, 165, 0, 200) -- Orange for wall corners
+                        draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3,
+                            cornerScreen[1] + 3, cornerScreen[2] + 3)
                     end
                 end
             end
@@ -707,8 +692,7 @@ local function OnDraw()
                 if not bPos and b.kind == "door" and b.points and #b.points > 0 then
                     bPos = b.points[math.ceil(#b.points / 2)]
                 end
-                local inRad = withinRadius(aPos or p) and withinRadius(bPos or p)
-                if aPos and bPos and (G.Menu.Visuals.ignorePathRadius or inRad) then
+                if aPos and bPos then
                     draw.Color(255, 255, 255, 255) -- white route
                     ArrowLine(aPos, bPos, 18, 12, false)
                 end
@@ -720,7 +704,7 @@ local function OnDraw()
     if G.Menu.Visuals.drawPath then
         local localPos = G.pLocal and G.pLocal.Origin
         local targetPos = G.Navigation.currentTargetPos
-        if localPos and targetPos and withinRadius(targetPos) then
+        if localPos and targetPos then
             draw.Color(255, 255, 255, 220) -- White arrow to current target
             ArrowLine(localPos, targetPos, 18, 12, false)
         end
@@ -732,14 +716,12 @@ local function OnDraw()
             local node = entry.node
             if node.wallCorners then
                 for _, cornerPoint in ipairs(node.wallCorners) do
-                    if withinRadius(cornerPoint) then
-                        local cornerScreen = client.WorldToScreen(cornerPoint)
-                        if cornerScreen then
-                            -- Draw orange square for wall corners
-                            draw.Color(255, 165, 0, 200) -- Orange for wall corners
-                            draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3,
-                                          cornerScreen[1] + 3, cornerScreen[2] + 3)
-                        end
+                    local cornerScreen = client.WorldToScreen(cornerPoint)
+                    if cornerScreen then
+                        -- Draw orange square for wall corners
+                        draw.Color(255, 165, 0, 200) -- Orange for wall corners
+                        draw.FilledRect(cornerScreen[1] - 3, cornerScreen[2] - 3,
+                                      cornerScreen[1] + 3, cornerScreen[2] + 3)
                     end
                 end
             end

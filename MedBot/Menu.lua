@@ -180,108 +180,31 @@ local function OnDrawMenu()
 		G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 		TimMenu.NextLine()
 
-		-- Align naming with visuals: renderRadius is what Visuals.lua reads
-		if G.Menu.Visuals.renderRadius == nil then
-			G.Menu.Visuals.renderRadius = 800
-		end
-		G.Menu.Visuals.renderRadius = TimMenu.Slider("Render Radius", G.Menu.Visuals.renderRadius, 100, 3000, 100)
+		-- Connection depth for flood-fill visualization (controls how far from player to render navmesh)
+		G.Menu.Visuals.connectionDepth = G.Menu.Visuals.connectionDepth or 10
+		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Draw Connections", G.Menu.Visuals.connectionDepth, 0, 20, 1)
+		TimMenu.Tooltip(
+			"How many connection steps away from player to visualize (0 = only current node, 20 = maximum range). Controls flood-fill rendering of all navmesh elements except path arrows."
+		)
 		TimMenu.NextLine()
 
-		-- Connection depth for flood-fill visualization
-		if G.Menu.Visuals.connectionDepth == nil then
-			G.Menu.Visuals.connectionDepth = 3
-		end
-		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Connection Depth", G.Menu.Visuals.connectionDepth, 0, 10, 1)
-		TimMenu.Tooltip("How many connection steps away from player to visualize (0 = only current node, 10 = maximum range)")
-		TimMenu.NextLine()
+		TimMenu.EndSector()
 
-		-- Node Display Section
+		-- Display Section
 		TimMenu.BeginSector("Display Options")
-		-- Basic display options
-		local basicOptions = {
-			"Show Nodes",
-			"Show Node IDs",
-			"Show Nav Connections",
-			"Show Areas",
-			"Show Doors",
-			"Show Corner Connections",
-		}
-
-		-- Initialize basicDisplay array if it doesn't exist
-		if G.Menu.Visuals.basicDisplay == nil then
-			G.Menu.Visuals.basicDisplay = { true, true, true, true, true, false }
-		end
-
-		-- Update individual settings based on combo selection
-		G.Menu.Visuals.drawNodes = G.Menu.Visuals.basicDisplay[1] or false
-		G.Menu.Visuals.drawNodeIDs = G.Menu.Visuals.basicDisplay[2] or false
-		G.Menu.Visuals.showConnections = G.Menu.Visuals.basicDisplay[3] or false
-		G.Menu.Visuals.showAreas = G.Menu.Visuals.basicDisplay[4] or false
-		G.Menu.Visuals.showDoors = G.Menu.Visuals.basicDisplay[5] or false
-		G.Menu.Visuals.showCornerConnections = G.Menu.Visuals.basicDisplay[6] or false
-
-		-- Create a simple combo for basic display options
-		local currentBasicDisplay = ""
-		if G.Menu.Visuals.showConnections then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
-		if G.Menu.Visuals.showAreas then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
-		if G.Menu.Visuals.showDoors then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
-		if G.Menu.Visuals.showCornerConnections then currentBasicDisplay = currentBasicDisplay .. "1" else currentBasicDisplay = currentBasicDisplay .. "0" end
-
-		local basicDisplayOptions = {
-			"Connections + Areas + Doors + Corners",
-			"Connections + Areas + Doors",
-			"Connections + Areas",
-			"Connections Only",
-			"None"
-		}
-
-		local displayIndex = 1
-		if currentBasicDisplay == "1111" then displayIndex = 1
-		elseif currentBasicDisplay == "1110" then displayIndex = 2
-		elseif currentBasicDisplay == "1100" then displayIndex = 3
-		elseif currentBasicDisplay == "1000" then displayIndex = 4
-		else displayIndex = 5 end
-
-		local newDisplayIndex = TimMenu.Selector("Basic Display", displayIndex, basicDisplayOptions)
+		-- Basic display options using individual checkboxes (TimMenu Combo doesn't support boolean arrays)
+		G.Menu.Visuals.showConnections = TimMenu.Checkbox("Show Nav Connections", G.Menu.Visuals.showConnections)
 		TimMenu.NextLine()
 
-		-- Update settings based on selection
-		if newDisplayIndex == 1 then
-			G.Menu.Visuals.showConnections = true
-			G.Menu.Visuals.showAreas = true
-			G.Menu.Visuals.showDoors = true
-			G.Menu.Visuals.showCornerConnections = true
-		elseif newDisplayIndex == 2 then
-			G.Menu.Visuals.showConnections = true
-			G.Menu.Visuals.showAreas = true
-			G.Menu.Visuals.showDoors = true
-			G.Menu.Visuals.showCornerConnections = false
-		elseif newDisplayIndex == 3 then
-			G.Menu.Visuals.showConnections = true
-			G.Menu.Visuals.showAreas = true
-			G.Menu.Visuals.showDoors = false
-			G.Menu.Visuals.showCornerConnections = false
-		elseif newDisplayIndex == 4 then
-			G.Menu.Visuals.showConnections = true
-			G.Menu.Visuals.showAreas = false
-			G.Menu.Visuals.showDoors = false
-			G.Menu.Visuals.showCornerConnections = false
-		else
-			G.Menu.Visuals.showConnections = false
-			G.Menu.Visuals.showAreas = false
-			G.Menu.Visuals.showDoors = false
-			G.Menu.Visuals.showCornerConnections = false
-		end
+		G.Menu.Visuals.showAreas = TimMenu.Checkbox("Show Areas", G.Menu.Visuals.showAreas)
+		TimMenu.NextLine()
 
-		-- Update the basicDisplay array to match
-		G.Menu.Visuals.basicDisplay = {
-			false, -- drawNodes (not used)
-			false, -- drawNodeIDs (not used)
-			G.Menu.Visuals.showConnections,
-			G.Menu.Visuals.showAreas,
-			G.Menu.Visuals.showDoors,
-			G.Menu.Visuals.showCornerConnections
-		}
+		G.Menu.Visuals.showDoors = TimMenu.Checkbox("Show Doors", G.Menu.Visuals.showDoors)
+		TimMenu.NextLine()
+
+		G.Menu.Visuals.showCornerConnections =
+			TimMenu.Checkbox("Show Corner Connections", G.Menu.Visuals.showCornerConnections)
+		TimMenu.NextLine()
 
 		-- Additional visual options
 		G.Menu.Visuals.showAgentBoxes = G.Menu.Visuals.showAgentBoxes or false
