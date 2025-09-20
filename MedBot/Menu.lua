@@ -182,9 +182,9 @@ local function OnDrawMenu()
 
 		-- Connection depth for flood-fill visualization (controls how far from player to render navmesh)
 		G.Menu.Visuals.connectionDepth = G.Menu.Visuals.connectionDepth or 10
-		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Draw Connections", G.Menu.Visuals.connectionDepth, 1, 30, 1)
+		G.Menu.Visuals.connectionDepth = TimMenu.Slider("Draw Connections", G.Menu.Visuals.connectionDepth, 1, 50, 1)
 		TimMenu.Tooltip(
-			"How many connection steps away from player to visualize (0 = only current node, 20 = maximum range). Controls flood-fill rendering of all navmesh elements except path arrows."
+			"How many connection steps away from player to visualize (1 = only current node, 50 = maximum range). Controls flood-fill rendering of all navmesh elements except path arrows."
 		)
 		TimMenu.NextLine()
 
@@ -214,10 +214,6 @@ local function OnDrawMenu()
 
 		G.Menu.Visuals.drawPath = G.Menu.Visuals.drawPath or false
 		G.Menu.Visuals.drawPath = TimMenu.Checkbox("Draw Path", G.Menu.Visuals.drawPath)
-		TimMenu.NextLine()
-
-		G.Menu.Visuals.ignorePathRadius = G.Menu.Visuals.ignorePathRadius or false
-		G.Menu.Visuals.ignorePathRadius = TimMenu.Checkbox("Ignore Path Radius", G.Menu.Visuals.ignorePathRadius)
 		TimMenu.NextLine()
 
 		G.Menu.Visuals.memoryUsage = G.Menu.Visuals.memoryUsage or false
