@@ -137,13 +137,6 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 	local wallTrace =
 		engine.TraceHull(downpstartPos + stepVector, downpostarget + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 
-	if wallTrace.fraction ~= 0 then
-		targetPos = wallTrace.endpos
-	else
-		targetPos = startPos
-		return nil, false, velocity, false, 0
-	end
-
 	local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector * 2, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 	if Groundtrace.fraction < 1 then
 		targetPos = Groundtrace.endpos
@@ -199,20 +192,29 @@ local function SmartJumpDetection(cmd, pLocal)
 	end
 
 	local rotatedMoveIntent = RotateVectorByYaw(moveIntent, viewAngles.yaw)
-	if rotatedMoveIntent:Length() <= 1 then
-		return false
+
+	-- FIXED: Ensure we always have minimum move direction for simulation
+	-- Even if move intent is very small, we need direction to detect obstacles
+	local moveDir = Common.Normalize(rotatedMoveIntent)
+	local moveLength = rotatedMoveIntent:Length()
+
+	-- Always use minimum move speed for simulation (450 units/second)
+	local minMoveSpeed = 450
+	local simulationSpeed = math.max(moveLength, minMoveSpeed)
+
+	-- If no movement intent at all, use forward direction
+	if moveLength <= 1 then
+		local forward = viewAngles:Forward()
+		moveDir = forward
+		simulationSpeed = minMoveSpeed
 	end
 
-	local moveDir = Common.Normalize(rotatedMoveIntent)
 	local currentVel = pLocal:EstimateAbsVelocity()
 	local horizontalSpeed = currentVel:Length()
 
+	-- Use simulation speed if we have movement intent, otherwise use current velocity
 	if horizontalSpeed <= 1 then
-		horizontalSpeed = rotatedMoveIntent:Length() > 1 and 450 or 0
-	end
-
-	if horizontalSpeed == 0 then
-		return false
+		horizontalSpeed = simulationSpeed
 	end
 
 	local initialVelocity = moveDir * horizontalSpeed
