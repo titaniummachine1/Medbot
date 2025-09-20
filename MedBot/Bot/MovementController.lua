@@ -54,17 +54,73 @@ local function computeMove(userCmd, a, b)
 	return Vector3(math.cos(yawDiff) * MAX_SPEED, math.sin(-yawDiff) * MAX_SPEED, 0)
 end
 
--- Simple WalkTo that works wonders (from old Navigation.lua)
+-- Predictive/no-overshoot WalkTo (superior implementation)
 function MovementController.walkTo(cmd, player, dest)
 	if not (cmd and player and dest) then
 		return
 	end
 
-	local localPos = player:GetAbsOrigin()
+	local pos = player:GetAbsOrigin()
+	if not pos then
+		return
+	end
 
-	local result = computeMove(cmd, localPos, dest)
-	cmd:SetForwardMove(result.x)
-	cmd:SetSideMove(result.y)
+	local tick = globals.TickInterval()
+	if tick <= 0 then
+		tick = 1 / 66.67
+	end
+
+	-- Current horizontal velocity (ignore Z)
+	local vel = player:EstimateAbsVelocity() or Vector3(0, 0, 0)
+	vel.z = 0
+
+	-- Predict passive drag to next tick
+	local drag = math.max(0, 1 - getGroundFriction() * tick)
+	local velNext = vel * drag
+	local predicted = Vector3(pos.x + velNext.x * tick, pos.y + velNext.y * tick, pos.z)
+
+	-- Remaining displacement after coast
+	local need = dest - predicted
+	need.z = 0
+	local dist = need:Length()
+	if dist < 1.5 then
+		cmd:SetForwardMove(0)
+		cmd:SetSideMove(0)
+		return
+	end
+
+	-- Velocity we need at start of next tick to land on dest
+	local deltaV = (need / tick) - velNext
+	local deltaLen = deltaV:Length()
+	if deltaLen < 0.1 then
+		cmd:SetForwardMove(0)
+		cmd:SetSideMove(0)
+		return
+	end
+
+	-- Accel clamp from sv_accelerate
+	local aMax = getGroundMaxDeltaV(player, tick)
+	local accelDir = deltaV / deltaLen
+	local accelLen = math.min(deltaLen, aMax)
+
+	-- wishspeed proportional to allowed Δv
+	local wishSpeed = math.max(MAX_SPEED * (accelLen / aMax), 20)
+
+	-- Overshoot guard
+	local maxNoOvershoot = dist / tick
+	wishSpeed = math.min(wishSpeed, maxNoOvershoot)
+	if wishSpeed < 5 then
+		wishSpeed = 0
+	end
+
+	-- Convert accelDir into local move inputs
+	local dirEnd = pos + accelDir
+	local moveVec = computeMove(cmd, pos, dirEnd)
+	local fwd = (moveVec.x / MAX_SPEED) * wishSpeed
+	local side = (moveVec.y / MAX_SPEED) * wishSpeed
+
+	cmd:SetForwardMove(fwd)
+	cmd:SetSideMove(side)
 end
 
 -- Handle camera rotation if LookingAhead is enabled
