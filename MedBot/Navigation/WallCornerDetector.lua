@@ -185,36 +185,47 @@ function WallCornerDetector.DetectWallCorners()
 						table.insert(area.allCorners, corner)
 						allCornerCount = allCornerCount + 1
 
-						local borderCount = countNeighborBorders(corner, dirNeighbors, direction)
+						-- Simplified: wall corner gets 1 point for each neighbor it's close to
+						local proximityScore = 0
+						for _, neighbor in ipairs(neighbors.north) do
+							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
+								proximityScore = proximityScore + 1
+							end
+						end
+						for _, neighbor in ipairs(neighbors.south) do
+							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
+								proximityScore = proximityScore + 1
+							end
+						end
+						for _, neighbor in ipairs(neighbors.east) do
+							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
+								proximityScore = proximityScore + 1
+							end
+						end
+						for _, neighbor in ipairs(neighbors.west) do
+							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
+								proximityScore = proximityScore + 1
+							end
+						end
 
-						-- Debug: log border counts for first few corners
+						-- Debug: log proximity scores for first few corners
 						if allCornerCount <= 10 then
 							Log:Debug(
-								"Corner at (%.1f,%.1f,%.1f) in direction %s has %d border contacts",
+								"Corner at (%.1f,%.1f,%.1f) in direction %s has %d proximity score",
 								corner.x,
 								corner.y,
 								corner.z,
 								direction,
-								borderCount
+								proximityScore
 							)
 						end
 
-						-- Wall corner classification based on proximity scoring:
-						-- 0 = outside corner (no neighbor borders touched) - DRAW AS ORANGE
-						-- 1 = wall corner (exactly 1 neighbor border touched)
-						-- 2 = inside corner (exactly 2 neighbor borders touched)
-						-- 3+ = inner corner (3+ neighbor borders touched - inside corner)
-						local cornerType = "unknown"
-						if borderCount == 0 then
-							cornerType = "outside"
-							table.insert(area.wallCorners, corner) -- Only show outside corners as orange
-							wallCornerCount = wallCornerCount + 1
-						elseif borderCount == 1 then
+						-- Simplified classification: wall corner if exactly 1 neighbor contact
+						local cornerType = "not_wall"
+						if proximityScore == 1 then
 							cornerType = "wall"
-						elseif borderCount == 2 then
-							cornerType = "inside"
-						elseif borderCount >= 3 then
-							cornerType = "inner"
+							table.insert(area.wallCorners, corner) -- Mark as wall corner
+							wallCornerCount = wallCornerCount + 1
 						end
 
 						-- Store corner classification for debugging
@@ -224,7 +235,7 @@ function WallCornerDetector.DetectWallCorners()
 						table.insert(area.cornerTypes, {
 							pos = corner,
 							type = cornerType,
-							borderCount = borderCount,
+							proximityScore = proximityScore,
 							direction = direction,
 						})
 					end
