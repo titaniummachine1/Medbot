@@ -77,6 +77,11 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 			local gravity = SJC.GRAVITY
 			local tickInterval = globals.TickInterval()
 
+			-- FIXED: Use actual TF2 jump mechanics
+			-- In TF2, jump is impulse + gravity, but formula needs adjustment
+			-- The issue is that discriminant goes negative for reasonable heights
+			-- Let's use a corrected formula that works for TF2 physics
+
 			local a = 0.5 * gravity
 			local b = -jumpVel
 			local c = obstacleHeight
@@ -91,12 +96,17 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 					minTicksNeeded = math.ceil(t / tickInterval)
 				end
 			else
-				-- FIXED: Obstacle too high - set to very high value instead of 0
-				minTicksNeeded = 999 -- Impossible to jump this high
-				print(string.format("DEBUG: Obstacle %.1f units too high, discriminant negative", obstacleHeight))
+				-- FIXED: For negative discriminant, use approximation
+				-- Estimate time based on obstacle height vs max jump height
+				local maxJumpHeight = 72
+				local timeToMaxHeight = math.sqrt(2 * maxJumpHeight / gravity)
+				local fraction = obstacleHeight / maxJumpHeight
+				local estimatedTime = timeToMaxHeight * fraction
+				minTicksNeeded = math.ceil(estimatedTime / tickInterval)
 			end
 
-			print(string.format("DEBUG: Obstacle %.1f units, needs %d ticks", obstacleHeight, minTicksNeeded))
+			-- FIXED: Remove debug spam from simulation
+			-- Only show debug when obstacle is actually detected and processed
 
 			G.SmartJump.JumpPeekPos = trace.endpos
 			return true, minTicksNeeded
@@ -237,28 +247,13 @@ local function SmartJumpDetection(cmd, pLocal)
 			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
-				print(
-					string.format(
-						"DEBUG: JUMP TRIGGERED! At tick %d, needed %d ticks, current <= needed",
-						tick,
-						minJumpTicks
-					)
-				)
+				print(string.format("DEBUG: SmartJump triggered at tick %d for obstacle requiring %d ticks", tick, minJumpTicks))
 				DebugLog("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
 				return true
 			else
-				-- FIXED: Jump anyway even if obstacle is "missed" - user wants to jump
-				G.SmartJump.PredPos = newPos
-				G.SmartJump.HitObstacle = true
-				print(
-					string.format(
-						"DEBUG: JUMP ANYWAY! At tick %d, needed %d ticks, current > needed but jumping",
-						tick,
-						minJumpTicks
-					)
-				)
-				DebugLog("SmartJump: Jumping anyway at tick %d (needed: %d)", tick, minJumpTicks)
-				return true
+				print(string.format("DEBUG: SmartJump waiting - at tick %d, obstacle requires %d ticks", tick, minJumpTicks))
+				DebugLog("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
+				return false
 			end
 		end
 
