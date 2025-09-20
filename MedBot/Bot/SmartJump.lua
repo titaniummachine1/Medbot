@@ -137,6 +137,10 @@ local function SimulateMovementTick(startPos, velocity, pLocal)
 	local wallTrace =
 		engine.TraceHull(downpstartPos + stepVector, downpostarget + stepVector, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 
+	if wallTrace.fraction ~= 0 then
+		targetPos = wallTrace.endpos
+	end
+
 	local Groundtrace = engine.TraceHull(targetPos, targetPos - stepVector * 2, hitbox[1], hitbox[2], MASK_PLAYERSOLID)
 	if Groundtrace.fraction < 1 then
 		targetPos = Groundtrace.endpos
