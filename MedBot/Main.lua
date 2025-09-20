@@ -17,7 +17,7 @@ local WorkManager = require("MedBot.WorkManager")
 local StateHandler = require("MedBot.Bot.StateHandler")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
 local PathOptimizer = require("MedBot.Bot.PathOptimizer")
-local MovementController = require("MedBot.Bot.MovementController")
+local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 local CommandHandler = require("MedBot.Bot.CommandHandler")
 local HealthLogic = require("MedBot.Bot.HealthLogic")
 
@@ -105,7 +105,7 @@ local function onCreateMove(userCmd)
 	elseif G.currentState == G.States.PATHFINDING then
 		StateHandler.handlePathfindingState()
 	elseif G.currentState == G.States.MOVING then
-		handleMovingState(userCmd)
+		MovementDecisions.handleMovingState(userCmd)
 	elseif G.currentState == G.States.STUCK then
 		StateHandler.handleStuckState(userCmd)
 	end
@@ -168,13 +168,10 @@ function handleMovingState(userCmd)
 	G.Navigation.currentTargetPos = targetPos
 
 	-- Handle camera rotation
-	MovementController.handleCameraRotation(userCmd, targetPos)
+	MovementDecisions.handleCameraRotation(userCmd, targetPos)
 
 	-- 🛠️ OPTIMIZE: Use WorkManager to throttle distance calculations (every 3 ticks = ~50ms)
-	if not WorkManager.attemptWork(DISTANCE_CHECK_COOLDOWN, "distance_check") then
-		-- Skip distance calculation this frame to reduce CPU usage
-		goto continue_movement
-	end
+	-- Decision-making is now handled in MovementDecisions, so we always continue to movement
 
 	-- 🛠️ OPTIMIZE: Use Common lib for distance calculations (10x faster than manual math.abs)
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
@@ -260,21 +257,9 @@ function handleMovingState(userCmd)
 	-- Execute SmartJump after walkTo to use same cmd with bot's movement intent
 	SmartJump.Main(userCmd)
 
-	-- 🛠️ ENHANCED: Speed penalty system - check for unwalkable connections
-	if G.Navigation.path and #G.Navigation.path > 1 then
-		local PathOptimizer = require("MedBot.Bot.PathOptimizer")
-		PathOptimizer.checkSpeedPenalty(G.pLocal.Origin, targetPos, G.Navigation.path[1], G.Navigation.path)
-	end
-
 	-- Increment stuck counter
 	G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
 
-	-- Check if stuck
-	if G.Navigation.currentNodeTicks > 132 then -- 2 seconds
-		G.currentState = G.States.STUCK
-	end
-
-	::continue_movement::
 end
 
 --[[ Event Handlers ]]
