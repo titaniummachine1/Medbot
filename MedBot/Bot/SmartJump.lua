@@ -90,6 +90,10 @@ local function CheckJumpable(hitPos, moveDirection, hitbox)
 				if t ~= math.huge then
 					minTicksNeeded = math.ceil(t / tickInterval)
 				end
+			else
+				-- FIXED: Obstacle too high - set to very high value instead of 0
+				minTicksNeeded = 999 -- Impossible to jump this high
+				print(string.format("DEBUG: Obstacle %.1f units too high, discriminant negative", obstacleHeight))
 			end
 
 			print(string.format("DEBUG: Obstacle %.1f units, needs %d ticks", obstacleHeight, minTicksNeeded))
@@ -208,6 +212,8 @@ local function SmartJumpDetection(cmd, pLocal)
 	local timeToPeak = jumpVel / gravity -- 271/800 = 0.33875 seconds
 	local jumpPeakTicks = math.ceil(timeToPeak / tickInterval) -- ~23 ticks
 
+	local totalSimulationTicks = jumpPeakTicks
+
 	local currentPos = pLocalPos
 	local currentVelocity = initialVelocity
 
@@ -215,7 +221,7 @@ local function SmartJumpDetection(cmd, pLocal)
 		currentPos,
 	}
 
-	for tick = 1, jumpPeakTicks do
+	for tick = 1, totalSimulationTicks do
 		local newPos, hitObstacle, newVelocity, canJump, minJumpTicks =
 			SimulateMovementTick(currentPos, currentVelocity, pLocal)
 
