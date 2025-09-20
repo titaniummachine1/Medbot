@@ -102,6 +102,26 @@ function WorkManager.forceWork(delay, identifier)
 	return true
 end
 
+--- Resets the cooldown for a work, allowing immediate execution on next attempt
+--- @param identifier string A unique identifier for the work
+--- @return boolean Always returns true to indicate reset was successful
+function WorkManager.resetCooldown(identifier)
+	local currentTime = getCurrentTick()
+
+	-- Reset the cooldown by setting lastExecuted to current time
+	-- This allows attemptWork to immediately allow execution on next call
+	if not WorkManager.works[identifier] then
+		WorkManager.works[identifier] = {
+			lastExecuted = currentTime,
+			delay = 1, -- Default delay if not set
+		}
+	else
+		WorkManager.works[identifier].lastExecuted = currentTime
+	end
+
+	return true
+end
+
 --- Processes the works based on their priority
 function WorkManager.processWorks()
 	local currentTime = getCurrentTick()

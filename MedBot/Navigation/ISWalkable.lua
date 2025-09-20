@@ -119,7 +119,7 @@ end
 
 -- Vector normalization function
 function isWalkable.Normalize(vec)
-	return vec / vec:Length()
+	return Common.Normalize(vec)
 end
 
 -- Toggle debug visualization on/off
@@ -150,10 +150,6 @@ local function shouldHitEntity(entity)
 	return entity ~= pLocal -- Ignore self (the player being simulated)
 end
 
--- Normalize a vector
-local function Normalize(vec)
-	return vec / vec:Length()
-end
 local function getHorizontalManhattanDistance(point1, point2)
 	return math.abs(point1.x - point2.x) + math.abs(point1.y - point2.y)
 end
@@ -168,7 +164,7 @@ end
 
 -- Adjust the direction vector to align with the surface normal
 local function adjustDirectionToSurface(direction, surfaceNormal)
-	direction = normalize(direction)
+	direction = Common.Normalize(direction)
 	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
 
 	-- Check if the surface is within the maximum allowed angle for adjustment
@@ -182,7 +178,7 @@ local function adjustDirectionToSurface(direction, surfaceNormal)
 	direction.z = direction.z - surfaceNormal.z * dotProduct
 
 	-- Normalize the direction after adjustment
-	return normalize(direction)
+	return Common.Normalize(direction)
 end
 
 -- Main function to check walkability
@@ -311,3 +307,5 @@ end
 function isWalkable.IsWalkable(fromPos, toPos)
 	return isWalkable.PathCached(fromPos, toPos, "Fast")
 end
+
+return isWalkable

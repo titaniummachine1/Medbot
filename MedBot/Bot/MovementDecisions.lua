@@ -16,7 +16,7 @@ local Log = Common.Log.new("MovementDecisions")
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
-local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between walkability checks (more expensive than distance checks)
+local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between expensive walkability checks
 
 -- Decision: Check if we've reached the target and advance waypoints/nodes
 function MovementDecisions.checkDistanceAndAdvance(userCmd)
@@ -48,17 +48,18 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 			local nextNode = G.Navigation.path[2]
 
 			if currentNode and nextNode then
-				-- Use forceWork for critical node skipping - we want immediate walkability check when reaching a node
-				WorkManager.forceWork(WALKABILITY_CHECK_COOLDOWN, "node_skip_walkability")
-				-- Check if next node is walkable and closer
-				local ISWalkable = require("MedBot.Navigation.ISWalkable")
-				local isNextWalkable = ISWalkable.IsWalkable(LocalOrigin, nextNode.pos)
+				-- Check distance comparison every tick (cheap operation)
+				local distanceToCurrent = (LocalOrigin - currentNode.pos):Length()
+				local distanceToNext = (LocalOrigin - nextNode.pos):Length()
 
-				if isNextWalkable then
-					local distanceToCurrent = (LocalOrigin - currentNode.pos):Length()
-					local distanceToNext = (LocalOrigin - nextNode.pos):Length()
+				-- If next node is closer, force immediate walkability check
+				if distanceToNext < distanceToCurrent then
+					WorkManager.resetCooldown("node_skip_walkability")
+					-- Check if next node is walkable
+					local ISWalkable = require("MedBot.Navigation.ISWalkable")
+					local isNextWalkable = ISWalkable.IsWalkable(LocalOrigin, nextNode.pos)
 
-					if distanceToNext < distanceToCurrent then
+					if isNextWalkable then
 						Log:Info("Skipping current node %d -> next node %d (closer and walkable)", currentNode.id, nextNode.id)
 						Navigation.RemoveCurrentNode()
 						-- Don't advance waypoint/node since we skipped

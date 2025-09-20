@@ -257,9 +257,9 @@ function Navigation.RemoveCurrentNode()
 	end
 end
 
--- Function to increment the current node ticks
-function Navigation.increment_ticks()
-	G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
+-- Function to reset the current node ticks
+function Navigation.ResetTickTimer()
+	G.Navigation.currentNodeTicks = 0
 end
 
 -- Function to increment the current node ticks
@@ -328,25 +328,27 @@ function Navigation.HandleNodeSkipping(currentPos)
 		Log:Debug("Node skip check triggered after %d ticks (delay: %d)", G.Navigation.nodeSkipTimer, skipDelay)
 		G.Navigation.nodeSkipTimer = 0 -- Reset timer
 
+		-- Check distance comparison every time (cheap operation)
+		G.Navigation.nextNodeCloser = Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
+
+		if G.Navigation.nextNodeCloser then
+			-- Reset walkability cooldown for immediate check
+			local WorkManager = require("MedBot.WorkManager")
+			WorkManager.resetCooldown("continuous_node_skip_walkability")
+		end
+
 		-- Use WorkManager to throttle expensive walkability checks
 		local WorkManager = require("MedBot.WorkManager")
 		if WorkManager.attemptWork(5, "continuous_node_skip_walkability") then
 			-- Check if next node is walkable
 			local nextNodeWalkable = Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 
-			if nextNodeWalkable then
-				-- Check if we should skip based on distance
-				G.Navigation.nextNodeCloser = Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
-
-				if G.Navigation.nextNodeCloser then
-					Log:Info("Skipping current node %d -> next node %d (closer and walkable)", currentNode.id, nextNode.id)
-					Navigation.RemoveCurrentNode()
-					return true -- Node was skipped
-				else
-					Log:Debug("Next node %d is walkable but not closer - not skipping", nextNode.id)
-				end
+			if nextNodeWalkable and G.Navigation.nextNodeCloser then
+				Log:Info("Skipping current node %d -> next node %d (closer and walkable)", currentNode.id, nextNode.id)
+				Navigation.RemoveCurrentNode()
+				return true -- Node was skipped
 			else
-				Log:Debug("Next node %d is not walkable - not skipping", nextNode.id)
+				Log:Debug("Next node %d is walkable but not closer - not skipping", nextNode.id)
 			end
 		end
 	end
