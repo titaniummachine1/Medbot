@@ -16,7 +16,7 @@ local WorkManager = require("MedBot.WorkManager")
 --[[ Bot Modules ]]
 local StateHandler = require("MedBot.Bot.StateHandler")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local PathOptimizer = require("MedBot.Bot.PathOptimizer")
+-- REMOVED: PathOptimizer - all skipping now handled by NodeSkipper
 local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 local CommandHandler = require("MedBot.Bot.CommandHandler")
 local HealthLogic = require("MedBot.Bot.HealthLogic")

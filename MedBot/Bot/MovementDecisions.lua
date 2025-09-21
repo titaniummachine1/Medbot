@@ -9,6 +9,7 @@ local Navigation = require("MedBot.Navigation")
 local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
+local ISWalkable = require("MedBot.Navigation.ISWalkable")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -42,12 +43,8 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	if MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist) then
 		Log:Debug("Reached target - advancing waypoint/node")
 
-		-- Handle node skipping logic when we reach a node
-		-- local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-		-- if NodeSkipper.CheckSkipOnReach(LocalOrigin, function() Navigation.RemoveCurrentNode() end) then
-		-- 	-- Don't advance waypoint/node since we skipped
-		-- 	return result
-		-- end
+	-- Handle node skipping logic when we reach a node
+	-- REMOVED: Old skipping logic - now using passive distance-based skipping in NodeSkipper.CheckContinuousSkip
 
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
@@ -157,13 +154,48 @@ end
 -- Decision: Handle speed penalties and optimization
 function MovementDecisions.handleSpeedOptimization()
 	if G.Navigation.path and #G.Navigation.path > 1 then
-		local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-		NodeSkipper.CheckSpeedPenalty(
-			G.pLocal.Origin,
-			MovementDecisions.getCurrentTarget(),
-			G.Navigation.path[1],
-			G.Navigation.path
-		)
+		-- Speed penalty check (moved from NodeSkipper - this is stuck detection, not skipping)
+		local currentTick = globals.TickCount()
+		if not G.__lastSpeedCheckTick then
+			G.__lastSpeedCheckTick = currentTick
+		end
+
+		-- Check every 33 ticks (~0.5s at 66fps)
+		if currentTick - G.__lastSpeedCheckTick >= 33 then
+			G.__lastSpeedCheckTick = currentTick
+
+			-- Get current player speed
+			local pLocal = entities.GetLocalPlayer()
+			if pLocal then
+				local velocity = pLocal:EstimateAbsVelocity() or Vector3(0, 0, 0)
+				local speed = velocity:Length2D()
+
+				-- Only trigger if speed is below 50
+				if speed < 50 then
+					Log:Debug("Speed penalty check triggered - speed: %.1f", speed)
+
+					local targetPos = MovementDecisions.getCurrentTarget()
+					if targetPos and not ISWalkable.Path(G.pLocal.Origin, targetPos) then
+						Log:Debug("Direct path to target not walkable - adding penalty")
+
+						-- Add penalty to connection
+						if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
+							local currentNode = G.Navigation.path[1]
+							local nextNode = G.Navigation.path[2]
+							if currentNode and nextNode then
+								G.CircuitBreaker.addConnectionFailure(currentNode, nextNode)
+							end
+						end
+
+						-- Force repath
+						if G.StateHandler and G.StateHandler.forceRepath then
+							G.StateHandler.forceRepath()
+							Log:Debug("Forced repath due to unwalkable connection")
+						end
+					end
+				end
+			end
+		end
 	end
 end
 

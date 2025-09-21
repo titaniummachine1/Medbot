@@ -598,10 +598,7 @@ function Navigation.FindPath(startNode, goalNode)
 		-- Refresh waypoints to reflect current door usage
 		Navigation.BuildDoorWaypointsFromPath()
 		-- Apply PathOptimizer for menu-controlled optimization
-		-- local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-		-- NodeSkipper.OptimizePath(G.pLocal.Origin, G.Navigation.path, goalNode.pos,
-		-- 	function() Navigation.RemoveCurrentNode() end,
-		-- 	function() Navigation.ResetTickTimer() end)
+		-- REMOVED: All path optimization now handled by NodeSkipper.CheckContinuousSkip
 		-- Reset traversed-node history for new path
 		G.Navigation.pathHistory = {}
 	end
