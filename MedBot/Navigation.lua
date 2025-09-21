@@ -593,6 +593,8 @@ function Navigation.FindPath(startNode, goalNode)
 		Navigation.pathFound = true
 		Navigation.pathFailed = false
 		pcall(setmetatable, G.Navigation.path, { __mode = "v" })
+		-- Reset node skipping agents for new path
+		G.Navigation.skipAgents = nil
 		-- Refresh waypoints to reflect current door usage
 		Navigation.BuildDoorWaypointsFromPath()
 		-- Apply PathOptimizer for menu-controlled optimization

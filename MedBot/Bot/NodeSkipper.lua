@@ -49,10 +49,9 @@ end
 -- Initialize/reset state when needed
 function NodeSkipper.Reset()
 	G.Navigation.nextNodeCloser = false
-	G.Navigation.skipAgents = nil -- Reset agent-based skipping state
 	WorkManager.resetCooldown("continuous_node_skip_walkability")
 	WorkManager.resetCooldown("node_skip_walkability")
-	WorkManager.resetCooldown("agent_based_skipping") -- Reset new agent-based cooldown
+	WorkManager.resetCooldown("simple_skip_check") -- Reset simple skip check cooldown
 	Log:Debug("NodeSkipper state reset")
 end
 
@@ -151,92 +150,44 @@ function NodeSkipper.CheckContinuousSkip(currentPos, removeNodeCallback)
 	end
 
 	local path = G.Navigation.path
-	if not path or #path < 3 then -- Need at least current + next + one more
+	if not path or #path < 2 then
 		return false
 	end
 
-	-- Initialize agent state if not exists
-	if not G.Navigation.skipAgents then
-		G.Navigation.skipAgents = {
-			agentA = { nodeIndex = 1, pos = path[1].pos }, -- Agent A at current node
-			agentB = { nodeIndex = 2, pos = path[2].pos }, -- Agent B at next node
-			maxNodeDistance = G.Menu.Main.MaxNodesSkipped or 10, -- Max nodes ahead to check
-		}
-	end
+	local currentNode = path[1]
+	local nextNode = path[2]
 
-	local agents = G.Navigation.skipAgents
-
-	-- Reset if path changed
-	if agents.agentA.nodeIndex > #path or agents.agentB.nodeIndex > #path then
-		G.Navigation.skipAgents = nil
+	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
 		return false
 	end
 
 	-- Run one iteration every 22 ticks
-	if not WorkManager.attemptWork(CONTINUOUS_SKIP_COOLDOWN, "agent_based_skipping") then
+	if not WorkManager.attemptWork(CONTINUOUS_SKIP_COOLDOWN, "simple_skip_check") then
 		return false
 	end
 
-	Log:Debug(
-		"Agent skip check - A:%d B:%d (dist:%d)",
-		agents.agentA.nodeIndex,
-		agents.agentB.nodeIndex,
-		agents.agentB.nodeIndex - agents.agentA.nodeIndex
-	)
+	-- Simple robust check: Is next node closer to us than current node?
+	local distToCurrent = Common.Distance3D(currentPos, currentNode.pos)
+	local distToNext = Common.Distance3D(currentPos, nextNode.pos)
 
-	-- Check if agent B is too far ahead
-	if agents.agentB.nodeIndex - agents.agentA.nodeIndex >= agents.maxNodeDistance then
-		Log:Info("Reached max node distance (%d) - stopping skip checks", agents.maxNodeDistance)
-		G.Navigation.skipAgents = nil
+	if distToNext >= distToCurrent then
+		-- Next node is not closer, don't skip
 		return false
 	end
 
-	-- Check walkability from agent A to agent B using ISWalkable module
-	local isWalkable = ISWalkable.Path(agents.agentA.pos, agents.agentB.pos)
+	Log:Debug("Next node %d is closer (%.1f < %.1f)", nextNode.id, distToNext, distToCurrent)
 
-	if isWalkable then
-		-- Success: skip directly from agent A to agent B
-		local nodesSkipped = agents.agentB.nodeIndex - agents.agentA.nodeIndex
-		Log:Info(
-			"Skipping %d nodes directly from %d to %d (walkable)",
-			nodesSkipped,
-			agents.agentA.nodeIndex,
-			agents.agentB.nodeIndex
-		)
+	-- Next node is closer - check if path to it is walkable
+	if ISWalkable.Path(currentPos, nextNode.pos) then
+		Log:Info("Skipping to closer next node %d (%.1f < %.1f units)", nextNode.id, distToNext, distToCurrent)
 
-		-- Modify path to skip directly (not just remove nodes)
-		local newPath = {}
-		for i = 1, agents.agentA.nodeIndex do
-			newPath[i] = path[i] -- Keep nodes up to agent A
+		-- Remove the current node to skip to the next one
+		if removeNodeCallback then
+			removeNodeCallback()
 		end
-		for i = agents.agentB.nodeIndex, #path do
-			newPath[#newPath + 1] = path[i] -- Add nodes from agent B onward
-		end
-
-		G.Navigation.path = newPath
-
-		-- Reset agents for next skip session
-		G.Navigation.skipAgents = nil
 		return true
 	else
-		-- Not walkable: move agent A behind agent B and advance B
-		Log:Debug("Not walkable to B - moving A behind B")
-
-		-- Move agent A to current agent B position
-		agents.agentA.nodeIndex = agents.agentB.nodeIndex
-		agents.agentA.pos = agents.agentB.pos
-
-		-- Advance agent B to next node if possible
-		local nextBIndex = agents.agentB.nodeIndex + 1
-		if nextBIndex <= #path then
-			agents.agentB.nodeIndex = nextBIndex
-			agents.agentB.pos = path[nextBIndex].pos
-		else
-			-- Can't advance B further, stop
-			Log:Info("Reached path end - stopping skip checks")
-			G.Navigation.skipAgents = nil
-			return false
-		end
+		Log:Debug("Next node %d closer but not walkable", nextNode.id)
 	end
 
 	return false

@@ -327,28 +327,8 @@ local function OnDraw()
         return
     end
 
-    if G.Menu.Visuals.showAgentBoxes and G.Navigation.path then
-        -- Visualizing agents (optional)
-        local agent1Pos = G.Navigation.path[G.Navigation.FirstAgentNode]
-            and G.Navigation.path[G.Navigation.FirstAgentNode].pos
-        local agent2Pos = G.Navigation.path[G.Navigation.SecondAgentNode]
-            and G.Navigation.path[G.Navigation.SecondAgentNode].pos
-
-        if agent1Pos then
-            local screenPos1 = client.WorldToScreen(agent1Pos)
-            if screenPos1 then
-                draw.Color(255, 255, 255, 255)
-                Draw3DBox(10, agent1Pos)
-            end
-        end
-        if agent2Pos then
-            local screenPos2 = client.WorldToScreen(agent2Pos)
-            if screenPos2 then
-                draw.Color(0, 255, 0, 255)
-                Draw3DBox(20, agent2Pos)
-            end
-        end
-    end
+    -- Agent visualization removed - back to simple node skipping
+    -- No complex agent visualization needed for distance-based skipping
 
     -- Show connections between nav nodes (colored by directionality)
     if G.Menu.Visuals.showConnections then

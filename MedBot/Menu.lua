@@ -85,12 +85,6 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Allow skipping nodes when direct path is walkable (handles all optimization)")
 		TimMenu.NextLine()
 
-		-- Max Corners Skipped slider
-		G.Menu.Main.MaxCornersSkipped = G.Menu.Main.MaxCornersSkipped or 3
-		G.Menu.Main.MaxCornersSkipped = TimMenu.Slider("Max Corners Skipped", G.Menu.Main.MaxCornersSkipped, 1, 10, 1)
-		TimMenu.Tooltip("Maximum corners to skip around before stopping node skipping (default: 3)")
-		TimMenu.NextLine()
-
 		-- Max Nodes Skipped slider
 		G.Menu.Main.MaxNodesSkipped = G.Menu.Main.MaxNodesSkipped or 10
 		G.Menu.Main.MaxNodesSkipped = TimMenu.Slider("Max Nodes Skipped", G.Menu.Main.MaxNodesSkipped, 1, 50, 1)

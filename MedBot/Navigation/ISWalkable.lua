@@ -189,7 +189,7 @@ function isWalkable.Path(startPos, goalPos, overrideMode)
 	hullTraces = {}
 	lineTraces = {}
 
-	print("ISWalkable: Path called from " .. tostring(startPos) .. " to " .. tostring(goalPos))
+	-- print("ISWalkable: Path called from " .. tostring(startPos) .. " to " .. tostring(goalPos))
 
 	-- Initialize variables
 	local currentPos = startPos
