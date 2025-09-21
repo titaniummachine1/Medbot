@@ -528,15 +528,6 @@ local function OnDrawSmartJump()
 			draw.FilledRect(landingScreen[1] - 4, landingScreen[2] - 4, landingScreen[1] + 4, landingScreen[2] + 4)
 		end
 	end
-
-	draw.Color(255, 255, 255, 255)
-	draw.Text(10, 100, "SmartJump State: " .. (G.SmartJump.jumpState or "UNKNOWN"))
-
-	if G.SmartJump.HitObstacle then
-		draw.Text(10, 120, "Obstacle Detected: YES")
-	else
-		draw.Text(10, 120, "Obstacle Detected: NO")
-	end
 end
 
 -- ============================================================================

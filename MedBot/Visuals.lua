@@ -319,8 +319,6 @@ local function OnDraw()
         local memMB = currentMemKB / 1024
         draw.Text(10, currentY, string.format("Connection Depth: %d", connectionDepth or 0))
         currentY = currentY + 20
-        draw.Text(10, currentY, string.format("Visible Nodes: %d", #filteredNodes or 0))
-        currentY = currentY + 20
     end
     G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
     if G.Navigation.currentNodeIndex == nil then
@@ -397,12 +395,6 @@ local function OnDraw()
                     end
                 end
             end
-        end
-
-        -- Debug output in top-left corner
-        if wallCornerCount > 0 or allCornerCount > 0 then
-            draw.Color(255, 255, 255, 255)
-            draw.Text(10, 10, "Wall corners: " .. wallCornerCount .. " / All corners: " .. allCornerCount)
         end
     end
 
@@ -608,18 +600,6 @@ local function OnDraw()
             end
         end
     end
-
-    -- Draw all nodes - REMOVED: Using wall corners instead
-    -- if G.Menu.Visuals.drawNodes then
-    --     draw.Color(0, 255, 0, 255)
-    --     for id, entry in pairs(visibleNodes) do
-    --         local s = entry.screen
-    --         draw.FilledRect(s[1] - 4, s[2] - 4, s[1] + 4, s[2] + 4)
-    --         if G.Menu.Visuals.drawNodeIDs then
-    --             draw.Text(s[1], s[2] + 10, tostring(id))
-    --         end
-    --     end
-    -- end
 
     -- Draw SmartJump simulation visualization (like AutoPeek)
     if G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then

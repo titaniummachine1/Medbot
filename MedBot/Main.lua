@@ -84,14 +84,6 @@ local function onCreateMove(userCmd)
 
 	-- Periodic maintenance
 	local currentTick = globals.TickCount()
-	if not G.lastCleanupTick then
-		G.lastCleanupTick = currentTick
-	end
-	if currentTick - G.lastCleanupTick > 300 then -- Every 5 seconds
-		G.CleanupMemory()
-		CircuitBreaker.cleanup()
-		G.lastCleanupTick = currentTick
-	end
 
 	-- Health logic
 	HealthLogic.HandleSelfHealing(pLocal)

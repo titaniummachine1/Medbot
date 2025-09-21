@@ -111,7 +111,7 @@ G.BotMovementDirection = Vector3(0, 0, 0) -- Bot's intended movement direction
 -- Memory management and cache tracking
 G.Cache = {
 	lastCleanup = 0,
-	cleanupInterval = 2000, -- Clean up every 2000 ticks (~30 seconds)
+	cleanupInterval = 500, -- Clean up every 500 ticks (~8 seconds) instead of 2000
 	maxCacheSize = 1000, -- Maximum number of cached items
 }
 
@@ -142,81 +142,5 @@ G.States = {
 G.currentState = nil
 G.prevState = nil -- Track previous bot state
 G.wasManualWalking = false -- Track if user manually walked last tick
-
--- Function to clean up memory and caches
-function G.CleanupMemory()
-	local currentTick = globals.TickCount()
-	if currentTick - G.Cache.lastCleanup < G.Cache.cleanupInterval then
-		return -- Too soon to cleanup
-	end
-
-	-- Update memory usage statistics
-	local memUsage = collectgarbage("count")
-	G.Benchmark.MemUsage = memUsage
-
-	-- NOTE: Fine point caches are kept to avoid expensive re-generation
-	-- when garbage collection happens.
-
-	-- Hierarchical pathfinding removed
-	G.Navigation.hierarchical = nil
-
-	-- Reset stuck timer if it's been set for too long (prevents infinite stuck states)
-	if G.Navigation.stuckStartTick and (currentTick - G.Navigation.stuckStartTick) > 1000 then
-		print("Reset stuck timer during cleanup (was stuck for >1000 ticks)")
-		G.Navigation.stuckStartTick = nil
-		G.Navigation.currentNodeTicks = 0
-	end
-
-	-- 🛠️ FIX MEMORY LEAKS: Clean up debug timestamps and temporary variables
-	local cleanupThreshold = 300 -- 5 seconds worth of ticks
-	local keysToRemove = {}
-
-	-- Find debug timestamps and temporary variables to clean up
-	for key, value in pairs(G) do
-		-- Clean up debug timestamps (keys ending with "Tick" that are numbers)
-		if type(key) == "string" and key:find("Tick") and type(value) == "number" then
-			if currentTick - value > cleanupThreshold then
-				table.insert(keysToRemove, key)
-			end
-		end
-
-		-- Clean up temporary debug variables (starting with "__" or containing "Debug")
-		if type(key) == "string" and (key:sub(1, 2) == "__" or key:find("Debug")) then
-			if type(value) == "number" and currentTick - value > cleanupThreshold then
-				table.insert(keysToRemove, key)
-			elseif type(value) ~= "number" then
-				-- Clean up non-numeric debug variables immediately
-				table.insert(keysToRemove, key)
-			end
-		end
-
-		-- Clean up temporary cache variables that might accumulate
-		if type(key) == "string" and key:find("Cache") and type(value) == "table" then
-			if value.tick and currentTick - value.tick > cleanupThreshold then
-				table.insert(keysToRemove, key)
-			end
-		end
-	end
-
-	-- Remove the identified keys
-	for _, key in ipairs(keysToRemove) do
-		G[key] = nil
-	end
-
-	if #keysToRemove > 0 then
-		print(string.format("Cleaned up %d debug/temporary variables from G table", #keysToRemove))
-	end
-
-	-- Force garbage collection if memory usage is high
-	local memBefore = memUsage
-	if memUsage > 1024 * 1024 then -- More than 1GB
-		collectgarbage("collect")
-		memUsage = collectgarbage("count")
-		G.Benchmark.MemUsage = memUsage
-		print(string.format("Force GC: %.2f MB -> %.2f MB", memBefore / 1024, memUsage / 1024))
-	end
-
-	G.Cache.lastCleanup = currentTick
-end
 
 return G
