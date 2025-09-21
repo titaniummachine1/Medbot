@@ -300,6 +300,11 @@ end
 
 -- Handle node skipping logic
 function Navigation.HandleNodeSkipping(currentPos)
+	-- Respect Skip_Nodes menu setting
+	if not G.Menu.Main.Skip_Nodes then
+		return false
+	end
+
 	local path = G.Navigation.path
 	if not path or #path < 2 then
 		return false -- No path or not enough nodes to skip

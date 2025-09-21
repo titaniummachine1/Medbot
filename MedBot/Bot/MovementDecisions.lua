@@ -43,7 +43,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		Log:Debug("Reached target - advancing waypoint/node")
 
 		-- Handle node skipping logic when we reach a node
-		if G.Navigation.path and #G.Navigation.path > 1 then
+		if G.Menu.Main.Skip_Nodes and G.Navigation.path and #G.Navigation.path > 1 then
 			local currentNode = G.Navigation.path[1]
 			local nextNode = G.Navigation.path[2]
 
@@ -81,7 +81,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	end
 
 	-- Handle continuous node skipping logic (every 22 ticks)
-	if G.Navigation.path and #G.Navigation.path > 1 then
+	if G.Menu.Main.Skip_Nodes and G.Navigation.path and #G.Navigation.path > 1 then
 		local currentNode = G.Navigation.path[1]
 		local nextNode = G.Navigation.path[2]
 
