@@ -1,5 +1,0 @@
-Testing bundle...
-❌ FAILED: Failed to bundle resolved module MedBot.Bot.PathOptimizer
-Stack: Error: Failed to bundle resolved module MedBot.Bot.PathOptimizer
-    at Object.processModule (C:\Users\Terminatort8000\node_modules\luabundle\bundle\process.js:75:19)
-    at bundleString (C:\Users\Terminatort8000\node_modules\luabundle\bundle\index.js:19:15)

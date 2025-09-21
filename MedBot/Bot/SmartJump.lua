@@ -7,7 +7,7 @@ local SJ = G.SmartJump
 local SJC = G.SmartJump.Constants
 
 local function DebugLog(...)
-	if G.Menu.Main.Debug or (G.Menu.SmartJump and G.Menu.SmartJump.Debug) then
+	if G.Menu.Main.Debug then
 		Log:Debug(...)
 	end
 end

@@ -91,22 +91,15 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Maximum nodes to skip in one continuous sequence (default: 10)")
 		TimMenu.NextLine()
 
-		-- Debug logging toggle
-		G.Menu.Main.Debug = TimMenu.Checkbox("Debug Logging", G.Menu.Main.Debug or false)
-		TimMenu.Tooltip("Enable debug logging across all modules (reduces performance)")
+		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)
+		G.Menu.Main.Debug = TimMenu.Checkbox("Enable Debug Output", G.Menu.Main.Debug or false)
+		TimMenu.Tooltip("Enable debug prints from Smart Jump and Node Skipper (useful for debugging but spammy)")
 		TimMenu.NextLine()
 
 		-- Smart Jump (works independently of MedBot enable state)
 		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
 		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
 		TimMenu.NextLine()
-
-		-- Smart Jump Debug (only show when Smart Jump is enabled)
-		if G.Menu.SmartJump.Enable then
-			G.Menu.SmartJump.Debug = TimMenu.Checkbox("Smart Jump Debug", G.Menu.SmartJump.Debug or false)
-			TimMenu.Tooltip("Enable debug output for Smart Jump (shows jump timing and obstacle detection)")
-			TimMenu.NextLine()
-		end
 		G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
 		local walkableModes = { "Smooth", "Aggressive" }
 		-- Get current mode as index number
@@ -133,11 +126,6 @@ local function OnDrawMenu()
 		G.Menu.Main.CleanupConnections =
 			TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections or false)
 		TimMenu.Tooltip("Clean up navigation connections on map load (DISABLE if causing performance issues)")
-		TimMenu.NextLine()
-
-		G.Menu.Main.AllowExpensiveChecks =
-			TimMenu.Checkbox("Allow Expensive Walkability Checks", G.Menu.Main.AllowExpensiveChecks or false)
-		TimMenu.Tooltip("Enable expensive trace-based walkability validation (rarely needed)")
 		TimMenu.NextLine()
 
 		-- Hierarchical pathfinding removed: single-layer areas only
@@ -208,12 +196,12 @@ local function OnDrawMenu()
 		TimMenu.NextLine()
 
 		-- Multi-selection combo for all visual elements
-		local visualElements = {"Areas", "Doors", "Wall Corners", "Nav Connections"}
+		local visualElements = { "Areas", "Doors", "Wall Corners", "Nav Connections" }
 		local visualSelections = {
 			G.Menu.Visuals.showAreas or false,
 			G.Menu.Visuals.showDoors or false,
 			G.Menu.Visuals.showCornerConnections or false,
-			G.Menu.Visuals.showConnections or false
+			G.Menu.Visuals.showConnections or false,
 		}
 
 		local newSelections = TimMenu.Combo("Visual Elements", visualSelections, visualElements)
