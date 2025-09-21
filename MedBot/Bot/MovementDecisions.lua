@@ -43,8 +43,8 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	if MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist) then
 		Log:Debug("Reached target - advancing waypoint/node")
 
-	-- Handle node skipping logic when we reach a node
-	-- REMOVED: Old skipping logic - now using passive distance-based skipping in NodeSkipper.CheckContinuousSkip
+		-- Handle node skipping logic when we reach a node
+		-- REMOVED: Old skipping logic - now using passive distance-based skipping in NodeSkipper.CheckContinuousSkip
 
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
@@ -65,7 +65,11 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 
 	-- Handle continuous node skipping logic
 	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-	if NodeSkipper.CheckContinuousSkip(LocalOrigin, function() Navigation.RemoveCurrentNode() end) then
+	if NodeSkipper.CheckContinuousSkip(LocalOrigin) then
+		-- NodeSkipper decided we should skip - handle it here (proper separation of concerns)
+		Log:Debug("NodeSkipper decided to skip current node")
+		Navigation.RemoveCurrentNode()
+
 		-- Node was skipped, get new target
 		targetPos = MovementDecisions.getCurrentTarget()
 		if not targetPos then
