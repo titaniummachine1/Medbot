@@ -7,7 +7,7 @@ local SJ = G.SmartJump
 local SJC = G.SmartJump.Constants
 
 local function DebugLog(...)
-	if G.Menu.SmartJump and G.Menu.SmartJump.Debug then
+	if G.Menu.Main.Debug or (G.Menu.SmartJump and G.Menu.SmartJump.Debug) then
 		Log:Debug(...)
 	end
 end
@@ -259,23 +259,9 @@ local function SmartJumpDetection(cmd, pLocal)
 			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
-				print(
-					string.format(
-						"DEBUG: SmartJump triggered at tick %d for obstacle requiring %d ticks",
-						tick,
-						minJumpTicks
-					)
-				)
 				DebugLog("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
 				return true
 			else
-				print(
-					string.format(
-						"DEBUG: SmartJump waiting - at tick %d, obstacle requires %d ticks",
-						tick,
-						minJumpTicks
-					)
-				)
 				DebugLog("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
 				return false
 			end

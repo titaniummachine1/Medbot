@@ -121,6 +121,7 @@ local function onGameEvent(event)
 	if eventName == "game_newmap" then
 		Log:Info("New map detected, reloading nav file...")
 		Navigation.Setup()
+        DoorSystem.Initialize()
 		return
 	end
 
@@ -212,6 +213,7 @@ if entities.GetLocalPlayer() then
 	local mapName = engine.GetMapName()
 	if mapName and mapName ~= "" and mapName ~= "menu" then
 		Navigation.Setup()
+        DoorSystem.Initialize()
 	else
 		Log:Info("Skipping navigation setup - no valid map loaded")
 		G.Navigation.nodes = {}

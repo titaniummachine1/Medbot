@@ -338,4 +338,12 @@ function Common.Math.DistanceSquared(a, b)
 	return dx * dx + dy * dy + dz * dz
 end
 
+-- Debug logging wrapper that respects the general debug setting
+function Common.DebugLog(level, ...)
+	local G = require("MedBot.Core.Globals")
+	if G.Menu.Main.Debug then
+		Common.Log[level](...)
+	end
+end
+
 return Common

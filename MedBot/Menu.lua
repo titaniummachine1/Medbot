@@ -91,18 +91,22 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Maximum nodes to skip in one continuous sequence (default: 10)")
 		TimMenu.NextLine()
 
-		-- Duck_Grab
-		G.Menu.Main.Duck_Grab = TimMenu.Checkbox("Duck Grab", G.Menu.Main.Duck_Grab)
-		TimMenu.Tooltip(
-			"(EXPERIMENTAL) allows duck grabbing when jumping on obstacles worlds fastest but not finished will make bot slower due to missed jumps"
-		)
+		-- Debug logging toggle
+		G.Menu.Main.Debug = TimMenu.Checkbox("Debug Logging", G.Menu.Main.Debug or false)
+		TimMenu.Tooltip("Enable debug logging across all modules (reduces performance)")
 		TimMenu.NextLine()
 
 		-- Smart Jump (works independently of MedBot enable state)
 		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
 		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
+		TimMenu.NextLine()
 
-		-- Path optimisation mode for following nodes
+		-- Smart Jump Debug (only show when Smart Jump is enabled)
+		if G.Menu.SmartJump.Enable then
+			G.Menu.SmartJump.Debug = TimMenu.Checkbox("Smart Jump Debug", G.Menu.SmartJump.Debug or false)
+			TimMenu.Tooltip("Enable debug output for Smart Jump (shows jump timing and obstacle detection)")
+			TimMenu.NextLine()
+		end
 		G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
 		local walkableModes = { "Smooth", "Aggressive" }
 		-- Get current mode as index number

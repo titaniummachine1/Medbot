@@ -19,6 +19,7 @@ defaultconfig = {
 		CleanupConnections = true, -- Cleanup invalid connections during map load (disable to prevent crashes)
 		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
 		Duck_Grab = true,
+		Debug = false, -- Enable debug logging across all modules
 	},
 	Visuals = {
 		EnableVisuals = true,

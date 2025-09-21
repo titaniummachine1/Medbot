@@ -1,5 +1,12 @@
-import { bundle } from 'luabundle'
-import * as fs from 'fs';
+// Bundle script for MedBot
+// Bundle script for MedBot
+import { bundle } from 'luabundle';
+import fs from 'fs';
+import path from 'path';
+
+// Read the lua file name from title.txt
+const titleFile = path.join(process.cwd(), 'title.txt');
+const luaFileName = fs.readFileSync(titleFile, 'utf8').trim();
 
 // Set timeout to force exit if hanging
 const timeout = setTimeout(() => {
@@ -11,7 +18,8 @@ const timeout = setTimeout(() => {
 async function runBundle() {
     try {
         console.log('Starting Lua bundle process...');
-        
+        console.log('Using lua file name:', luaFileName);
+
         const bundledLua = bundle('./MedBot/Main.lua', {
             metadata: false,
             expressionHandler: (module, expression) => {
@@ -21,14 +29,13 @@ async function runBundle() {
         });
 
         console.log('Bundle generation completed, writing to file...');
+        // Use the lua file name from title.txt
+        fs.writeFileSync(luaFileName, bundledLua);
 
-        // Use synchronous writeFile to avoid async hanging
-        fs.writeFileSync('MedBot.lua', bundledLua);
-        
         clearTimeout(timeout);
         console.log('Library bundle created successfully');
         process.exit(0);
-        
+
     } catch (error) {
         clearTimeout(timeout);
         console.error('Bundle failed:', error.message);

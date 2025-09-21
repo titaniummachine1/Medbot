@@ -1,5 +1,7 @@
 @echo off
 
+set /p LUATITLE=<title.txt
+
 node bundle.js
-move /Y "MedBot.lua" "%localappdata%"
+copy /Y "%LUATITLE%" "%localappdata%\%LUATITLE%"
 exit

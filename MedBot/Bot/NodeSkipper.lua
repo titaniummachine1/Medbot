@@ -26,14 +26,14 @@ local AGENT_SKIP_COOLDOWN = 4 -- ticks (~550ms) for agent system (slower, more e
 local function RunAgentSkipping(currentPos)
 	local path = G.Navigation.path
 	if not path or #path < 3 then -- Need at least current + next + one more
-		Log:Debug("Agent system: Path too short (%d nodes), aborting", path and #path or 0)
+		Common.DebugLog("Debug", "Agent system: Path too short (%d nodes), aborting", path and #path or 0)
 		return 0
 	end
 
 	local skipCount = 0
 	local agentIndex = 2 -- Start from next node (path[2])
 
-	Log:Debug("Agent system: Starting from node %d (path index %d)", path[agentIndex].id, agentIndex)
+	Common.DebugLog("Debug", "Agent system: Starting from node %d (path index %d)", path[agentIndex].id, agentIndex)
 
 	-- Agent advances along path, checking walkability at each step
 	while agentIndex < #path do
@@ -44,20 +44,20 @@ local function RunAgentSkipping(currentPos)
 			break -- End of path
 		end
 
-		Log:Debug("Agent at node %d, checking walkability to node %d", agentNode.id, nextCheckNode.id)
+		Common.DebugLog("Debug", "Agent at node %d, checking walkability to node %d", agentNode.id, nextCheckNode.id)
 
 		-- Check if path from current position to next check node is walkable
 		if ISWalkable.Path(currentPos, nextCheckNode.pos) then
-			Log:Debug("Agent: Path to node %d walkable, advancing agent", nextCheckNode.id)
+			Common.DebugLog("Debug", "Agent: Path to node %d walkable, advancing agent", nextCheckNode.id)
 			agentIndex = agentIndex + 1
 			skipCount = skipCount + 1
 		else
-			Log:Debug("Agent: Path to node %d not walkable, stopping agent", nextCheckNode.id)
+			Common.DebugLog("Debug", "Agent: Path to node %d not walkable, stopping agent", nextCheckNode.id)
 			break -- Found obstacle, stop here
 		end
 	end
 
-	Log:Info("Agent system: Found %d skippable nodes", skipCount)
+	Common.DebugLog("Debug", "Agent system: Found %d skippable nodes", skipCount)
 	return skipCount
 end
 
@@ -113,27 +113,27 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 	-- PASSIVE SYSTEM: Distance-based skipping (cheap, runs every 11 ticks)
 	if WorkManager.attemptWork(11, "passive_skip_check") then
 		if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-			Log:Info("Passive skip: Next node %d closer than current %d - skip 1 node", nextNode.id, currentNode.id)
+			Common.DebugLog("Debug", "Passive skip: Next node %d closer than current %d - skip 1 node", nextNode.id, currentNode.id)
 			maxNodesToSkip = math.max(maxNodesToSkip, 1)
 		end
 	end
 
 	-- ACTIVE SYSTEM: Walkability-based skipping (expensive, runs every 22 ticks)
 	if WorkManager.attemptWork(CONTINUOUS_SKIP_COOLDOWN, "active_skip_check") then
-		Log:Debug("Active skip check - checking path from player to next node %d", nextNode.id)
+		Common.DebugLog("Debug", "Active skip check - checking path from player to next node %d", nextNode.id)
 
 		if ISWalkable.Path(currentPos, nextNode.pos) then
-			Log:Info("Active skip: Path to next node %d is walkable - skip 1 node", nextNode.id)
+			Common.DebugLog("Debug", "Active skip: Path to next node %d is walkable - skip 1 node", nextNode.id)
 			maxNodesToSkip = math.max(maxNodesToSkip, 1)
 		end
 	end
 
 	-- AGENT SYSTEM: Progressive multi-node skipping (most expensive, runs every 33 ticks)
 	if WorkManager.attemptWork(AGENT_SKIP_COOLDOWN, "agent_skip_check") then
-		Log:Debug("Agent system check - running progressive skip analysis")
+		Common.DebugLog("Debug", "Agent system check - running progressive skip analysis")
 		local agentSkipCount = RunAgentSkipping(currentPos)
 		if agentSkipCount > 0 then
-			Log:Info("Agent system: Found %d nodes to skip", agentSkipCount)
+			Common.DebugLog("Debug", "Agent system: Found %d nodes to skip", agentSkipCount)
 			maxNodesToSkip = math.max(maxNodesToSkip, agentSkipCount)
 		end
 	end
