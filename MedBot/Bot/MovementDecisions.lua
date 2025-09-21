@@ -65,12 +65,17 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 
 	-- Handle continuous node skipping logic
 	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-	if NodeSkipper.CheckContinuousSkip(LocalOrigin) then
-		-- NodeSkipper decided we should skip - handle it here (proper separation of concerns)
-		Log:Debug("NodeSkipper decided to skip current node")
-		Navigation.RemoveCurrentNode()
+	local nodesToSkip = NodeSkipper.CheckContinuousSkip(LocalOrigin)
 
-		-- Node was skipped, get new target
+	if nodesToSkip > 0 then
+		Log:Debug("NodeSkipper decided to skip %d nodes", nodesToSkip)
+
+		-- Skip the requested number of nodes
+		for i = 1, nodesToSkip do
+			Navigation.RemoveCurrentNode()
+		end
+
+		-- Node(s) were skipped, get new target
 		targetPos = MovementDecisions.getCurrentTarget()
 		if not targetPos then
 			result.shouldContinue = false
