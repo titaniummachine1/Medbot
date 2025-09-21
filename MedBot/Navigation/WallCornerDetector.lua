@@ -4,75 +4,21 @@
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
+local AxisCalculator = require("MedBot.Navigation.AxisCalculator")
 
 local WallCornerDetector = {}
 
 local Log = Common.Log.new("WallCornerDetector")
 
--- Group neighbors by 4 directions for an area
+-- Group connections by direction for an area
 local function groupNeighborsByDirection(area, nodes)
-	local neighbors = {
-		north = {}, -- dirY = -1
-		south = {}, -- dirY = 1
-		east = {}, -- dirX = 1
-		west = {}, -- dirX = -1
-	}
-
-	if not area.c then
-		return neighbors
-	end
-
-	for dirId, dir in pairs(area.c) do
-		if dir.connections then
-			for _, connection in ipairs(dir.connections) do
-				local targetId = (type(connection) == "table") and connection.node or connection
-				local neighbor = nodes[targetId]
-				if neighbor then
-					-- Determine direction from area to neighbor
-					local dx = neighbor.pos.x - area.pos.x
-					local dy = neighbor.pos.y - area.pos.y
-
-					if math.abs(dx) >= math.abs(dy) then
-						if dx > 0 then
-							table.insert(neighbors.east, neighbor)
-						else
-							table.insert(neighbors.west, neighbor)
-						end
-					else
-						if dy > 0 then
-							table.insert(neighbors.south, neighbor)
-						else
-							table.insert(neighbors.north, neighbor)
-						end
-					end
-				end
-			end
-		end
-	end
-
-	return neighbors
+	return AxisCalculator.GroupConnectionsByDirection(area, nodes)
 end
 
 -- Get 2 corner points for a direction edge
-local function getDirectionCorners(area, direction)
-	if not (area.nw and area.ne and area.se and area.sw) then
-		return nil, nil
-	end
-
-	if direction == "north" then
-		return area.nw, area.ne
-	end
-	if direction == "south" then
-		return area.se, area.sw
-	end
-	if direction == "east" then
-		return area.ne, area.se
-	end
-	if direction == "west" then
-		return area.sw, area.nw
-	end
-
-	return nil, nil
+local function getDirectionCorners(area, directionName)
+	local direction = AxisCalculator.DIRECTIONS[string.upper(directionName)]
+	return AxisCalculator.GetEdgeCorners(area, direction)
 end
 
 -- Calculate distance from point to line segment (2D, ignores Z completely)
@@ -105,35 +51,21 @@ local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 end
 
 -- Check if point lies on neighbor's facing boundary
-local function pointLiesOnNeighborBorder(point, neighbor, direction)
+local function pointLiesOnNeighborBorder(point, neighbor, directionName)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
 		return false
 	end
 
 	local maxDistance = 18.0
-
-	-- Only check the boundary that's facing our area
-	local facingBoundary = nil
-	if direction == "north" then
-		-- We're facing north, so neighbor must be facing south
-		facingBoundary = { neighbor.sw, neighbor.se } -- South boundary of neighbor
-	elseif direction == "south" then
-		-- We're facing south, so neighbor must be facing north
-		facingBoundary = { neighbor.nw, neighbor.ne } -- North boundary of neighbor
-	elseif direction == "east" then
-		-- We're facing east, so neighbor must be facing west
-		facingBoundary = { neighbor.sw, neighbor.nw } -- West boundary of neighbor
-	elseif direction == "west" then
-		-- We're facing west, so neighbor must be facing east
-		facingBoundary = { neighbor.se, neighbor.ne } -- East boundary of neighbor
-	end
+	local direction = AxisCalculator.DIRECTIONS[string.upper(directionName)]
+	local facingBoundary = AxisCalculator.GetFacingBoundary(neighbor, direction)
 
 	if not facingBoundary then
 		return false
 	end
 
 	-- Check distance to the facing boundary only
-	local distance = pointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
+	local distance = AxisCalculator.PointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
 	return distance <= maxDistance
 end
 
