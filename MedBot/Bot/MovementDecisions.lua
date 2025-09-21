@@ -43,25 +43,11 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		Log:Debug("Reached target - advancing waypoint/node")
 
 		-- Handle node skipping logic when we reach a node
-		if G.Menu.Main.Skip_Nodes and G.Navigation.path and #G.Navigation.path > 1 then
-			local currentNode = G.Navigation.path[1]
-			local nextNode = G.Navigation.path[2]
-
-			if currentNode and nextNode then
-				-- Reset walkability cooldown for immediate check when reaching node
-				WorkManager.resetCooldown("node_skip_walkability")
-				-- Check if next node is walkable
-				local ISWalkable = require("MedBot.Navigation.ISWalkable")
-				local isNextWalkable = ISWalkable.IsWalkable(LocalOrigin, nextNode.pos)
-
-				if isNextWalkable then
-					Log:Info("Skipping current node %d -> next node %d (walkable)", currentNode.id, nextNode.id)
-					Navigation.RemoveCurrentNode()
-					-- Don't advance waypoint/node since we skipped
-					return result
-				end
-			end
-		end
+		-- local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+		-- if NodeSkipper.CheckSkipOnReach(LocalOrigin, function() Navigation.RemoveCurrentNode() end) then
+		-- 	-- Don't advance waypoint/node since we skipped
+		-- 	return result
+		-- end
 
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
@@ -80,30 +66,14 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		end
 	end
 
-	-- Handle continuous node skipping logic (every 22 ticks)
-	if G.Menu.Main.Skip_Nodes and G.Navigation.path and #G.Navigation.path > 1 then
-		local currentNode = G.Navigation.path[1]
-		local nextNode = G.Navigation.path[2]
-
-		if currentNode and nextNode then
-			-- Always check if next node is closer (cheap operation)
-			local distanceToCurrent = Common.Distance2D(LocalOrigin, currentNode.pos)
-			local distanceToNext = Common.Distance2D(LocalOrigin, nextNode.pos)
-
-			-- If next node is closer, reset cooldown for immediate walkability check
-			if distanceToNext < distanceToCurrent then
-				WorkManager.resetCooldown("continuous_node_skip_walkability")
-			end
-		end
-
-		local skipResult = Navigation.HandleNodeSkipping(LocalOrigin)
-		if skipResult then
-			-- Node was skipped, get new target
-			targetPos = MovementDecisions.getCurrentTarget()
-			if not targetPos then
-				result.shouldContinue = false
-				return result
-			end
+	-- Handle continuous node skipping logic
+	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+	if NodeSkipper.CheckContinuousSkip(LocalOrigin, function() Navigation.RemoveCurrentNode() end) then
+		-- Node was skipped, get new target
+		targetPos = MovementDecisions.getCurrentTarget()
+		if not targetPos then
+			result.shouldContinue = false
+			return result
 		end
 	end
 
@@ -187,8 +157,8 @@ end
 -- Decision: Handle speed penalties and optimization
 function MovementDecisions.handleSpeedOptimization()
 	if G.Navigation.path and #G.Navigation.path > 1 then
-		local PathOptimizer = require("MedBot.Bot.PathOptimizer")
-		PathOptimizer.checkSpeedPenalty(
+		local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+		NodeSkipper.CheckSpeedPenalty(
 			G.pLocal.Origin,
 			MovementDecisions.getCurrentTarget(),
 			G.Navigation.path[1],

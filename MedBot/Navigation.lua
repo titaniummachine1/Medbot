@@ -205,7 +205,8 @@ function Navigation.ClearPath()
 	-- Clear path traversal history used by stuck analysis
 	G.Navigation.pathHistory = {}
 	-- Reset node skipping state
-	Navigation.ResetNodeSkipping()
+	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+	NodeSkipper.Reset()
 end
 
 -- Set the current path
@@ -225,7 +226,8 @@ function Navigation.SetCurrentPath(path)
 	-- Reset traversal history on new path
 	G.Navigation.pathHistory = {}
 	-- Reset node skipping state for new path
-	Navigation.ResetNodeSkipping()
+	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+	NodeSkipper.Reset()
 end
 
 -- Remove the current node from the path (we've reached it)
@@ -296,68 +298,6 @@ function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 		)
 		return false
 	end
-end
-
--- Handle node skipping logic
-function Navigation.HandleNodeSkipping(currentPos)
-	-- Respect Skip_Nodes menu setting
-	if not G.Menu.Main.Skip_Nodes then
-		return false
-	end
-
-	local path = G.Navigation.path
-	if not path or #path < 2 then
-		return false -- No path or not enough nodes to skip
-	end
-
-	local currentNode = path[1] -- Current target node
-	local nextNode = path[2] -- Next node to potentially skip to
-
-	if not currentNode or not nextNode then
-		return false
-	end
-
-	local currentTick = globals.TickCount()
-
-	-- Use WorkManager for timing instead of manual timer
-	local WorkManager = require("MedBot.WorkManager")
-	local checkDelay = G.Navigation.nextNodeCloser and 11 or 22
-
-	-- Check if enough time has passed since last check
-	if currentTick - G.Navigation.lastSkipCheckTick >= checkDelay then
-		G.Navigation.lastSkipCheckTick = currentTick
-		Log:Debug("Node skip check triggered after %d ticks", checkDelay)
-
-		-- Check distance comparison every time (cheap operation)
-		G.Navigation.nextNodeCloser = Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
-
-		if G.Navigation.nextNodeCloser then
-			-- Reset walkability cooldown for immediate check
-			WorkManager.resetCooldown("continuous_node_skip_walkability")
-		end
-
-		-- Use WorkManager to throttle expensive walkability checks
-		if WorkManager.attemptWork(5, "continuous_node_skip_walkability") then
-			-- Check if next node is walkable
-			local nextNodeWalkable = Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
-
-			if nextNodeWalkable then
-				Log:Info("Skipping current node %d -> next node %d (walkable)", currentNode.id, nextNode.id)
-				Navigation.RemoveCurrentNode()
-				return true -- Node was skipped
-			else
-				Log:Debug("Next node %d is not walkable - not skipping", nextNode.id)
-			end
-		end
-	end
-
-	return false -- No skip occurred
-end
-
--- Reset node skipping state
-function Navigation.ResetNodeSkipping()
-	G.Navigation.lastSkipCheckTick = 0
-	G.Navigation.nextNodeCloser = false
 end
 
 -- Build flexible waypoints: choose optimal door points, skip centers when direct door-to-door is shorter
@@ -452,11 +392,15 @@ function Navigation.AdvanceWaypoint()
 	if G.Navigation.path and #G.Navigation.path > 0 then
 		-- Reset the node timer when we reach any waypoint
 		Navigation.ResetTickTimer()
+		-- Reset node skipping cooldowns when reaching waypoints
+		-- SCRAPPED: Don't reset cooldowns on waypoint reach - let agent-based system run on its own schedule
+		-- local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+		-- NodeSkipper.ResetWalkabilityCooldown()
 		-- If we reached a center of the next area, advance the area path too
-		if current.kind == "center" then
-			-- path[1] is previous area; popping it moves us into the new area
-			Navigation.RemoveCurrentNode()
-		end
+		-- if current.kind == "center" then
+		-- 	-- path[1] is previous area; popping it moves us into the new area
+		-- 	Navigation.RemoveCurrentNode()
+		-- end
 	end
 
 	G.Navigation.currentWaypointIndex = idx + 1
@@ -652,8 +596,10 @@ function Navigation.FindPath(startNode, goalNode)
 		-- Refresh waypoints to reflect current door usage
 		Navigation.BuildDoorWaypointsFromPath()
 		-- Apply PathOptimizer for menu-controlled optimization
-		local PathOptimizer = require("MedBot.Bot.PathOptimizer")
-		PathOptimizer.optimize(G.pLocal.Origin, G.Navigation.path, goalNode.pos)
+		-- local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+		-- NodeSkipper.OptimizePath(G.pLocal.Origin, G.Navigation.path, goalNode.pos,
+		-- 	function() Navigation.RemoveCurrentNode() end,
+		-- 	function() Navigation.ResetTickTimer() end)
 		-- Reset traversed-node history for new path
 		G.Navigation.pathHistory = {}
 	end

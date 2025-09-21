@@ -144,7 +144,7 @@ local hullTraces = {}
 local lineTraces = {}
 
 -- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = true -- TEMPORARILY ENABLED FOR TESTING
+local DEBUG_TRACES = false -- Disabled for performance
 
 local function shouldHitEntity(entity)
 	return entity ~= pLocal -- Ignore self (the player being simulated)
@@ -279,33 +279,9 @@ function isWalkable.Path(startPos, goalPos, overrideMode)
 	return false -- Max iterations reached without finding a path
 end
 
--- ISWalkable result cache to prevent excessive calls for same path
-local walkableCache = {}
-local CACHE_DURATION = 0.5 -- Cache results for 0.5 seconds
-
--- Cached version of ISWalkable.Path to prevent excessive calls
-function isWalkable.PathCached(startPos, goalPos, overrideMode)
-	local cacheKey = string.format("%.1f,%.1f,%.1f_%.1f,%.1f,%.1f_%s",
-		startPos.x, startPos.y, startPos.z,
-		goalPos.x, goalPos.y, goalPos.z,
-		overrideMode or "Smooth")
-
-	local currentTime = globals.RealTime()
-	local cached = walkableCache[cacheKey]
-
-	if cached and (currentTime - cached.time) < CACHE_DURATION then
-		return cached.result
-	end
-
-	local result = isWalkable.Path(startPos, goalPos, overrideMode)
-	walkableCache[cacheKey] = { result = result, time = currentTime }
-
-	return result
-end
-
 -- Simple wrapper function for checking if a position is walkable from another position
 function isWalkable.IsWalkable(fromPos, toPos)
-	return isWalkable.PathCached(fromPos, toPos, "Fast")
+	return isWalkable.Path(fromPos, toPos)
 end
 
 return isWalkable

@@ -108,10 +108,7 @@ function CircuitBreaker.cleanup()
 
 	for connectionKey, failure in pairs(state.failures) do
 		-- Clean up old, unblocked entries
-		if
-			not failure.isBlocked
-			and (currentTick - failure.lastFailTime) > state.blockDuration * 2
-		then
+		if not failure.isBlocked and (currentTick - failure.lastFailTime) > state.blockDuration * 2 then
 			state.failures[connectionKey] = nil
 			cleaned = cleaned + 1
 		end
@@ -141,8 +138,8 @@ function CircuitBreaker.getStatus()
 		totalFailures = totalFailures,
 		settings = {
 			maxFailures = state.maxFailures,
-			blockDuration = state.blockDuration
-		}
+			blockDuration = state.blockDuration,
+		},
 	}
 end
 

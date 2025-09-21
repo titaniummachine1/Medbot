@@ -49,10 +49,8 @@ function StateHandler.handleIdleState()
 		local mapName = engine.GetMapName():lower()
 		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
 		if allowDirectWalk then
-			local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-			walkMode = "Aggressive" -- short hops favor aggressive checks
-			if ISWalkable.PathCached(G.pLocal.Origin, goalPos, walkMode) then
-				Log:Info("Direct-walk (short hop) with %s, moving immediately (dist: %.1f)", walkMode, distance)
+			if ISWalkable.Path(G.pLocal.Origin, goalPos) then
+				Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.Navigation.goalPos = goalPos
 				G.Navigation.goalNodeId = goalNode.id
@@ -110,23 +108,11 @@ function StateHandler.handleIdleState()
 	-- Avoid pathfinding if we're already at the goal
 	if startNode.id == goalNode.id then
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		local mapName = engine.GetMapName():lower()
-
-		-- Use aggressive mode for CTF intel objectives
-		if mapName:find("ctf_") then
-			local pLocal = G.pLocal.entity
-			local myItem = pLocal:GetPropInt("m_hItem")
-			if myItem <= 0 then
-				walkMode = "Aggressive"
-				Log:Info("Using Aggressive mode for CTF intel objective")
-			end
-		end
-
-		if goalPos and ISWalkable.PathCached(G.pLocal.Origin, goalPos, walkMode) then
+		if goalPos and ISWalkable.Path(G.pLocal.Origin, goalPos) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick
-			Log:Info("Moving directly to goal with %s mode from goal node %d", walkMode, startNode.id)
+			Log:Info("Moving directly to goal from goal node %d", startNode.id)
 		else
 			Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
 			G.lastPathfindingTick = currentTick

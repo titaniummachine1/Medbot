@@ -108,15 +108,15 @@ end
 function WorkManager.resetCooldown(identifier)
 	local currentTime = getCurrentTick()
 
-	-- Reset the cooldown by setting lastExecuted to current time
+	-- Reset the cooldown by setting lastExecuted to the past
 	-- This allows attemptWork to immediately allow execution on next call
 	if not WorkManager.works[identifier] then
 		WorkManager.works[identifier] = {
-			lastExecuted = currentTime,
+			lastExecuted = currentTime - 1000, -- Set far in past to guarantee immediate execution
 			delay = 1, -- Default delay if not set
 		}
 	else
-		WorkManager.works[identifier].lastExecuted = currentTime
+		WorkManager.works[identifier].lastExecuted = currentTime - 1000 -- Set far in past to guarantee immediate execution
 	end
 
 	return true

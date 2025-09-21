@@ -42,8 +42,7 @@ function PathOptimizer.optimize(origin, path, goalPos)
 
 	-- Skip if next node is closer than current (collected first node)
 	if distToNext < distToCurrent then
-		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if ISWalkable.PathCached(origin, nextNode.pos, walkMode) then
+		if ISWalkable.Path(origin, nextNode.pos) then
 			Navigation.RemoveCurrentNode()
 			Navigation.ResetTickTimer()
 			Log:Debug("Skipped to closer next node - %.1f < %.1f units", distToNext, distToCurrent)
@@ -84,8 +83,7 @@ function PathOptimizer.checkSpeedPenalty(origin, currentTarget, currentNode, pat
 	Log:Debug("Speed penalty check triggered - speed: %.1f", speed)
 
 	-- Check if direct path to current target is walkable
-	local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-	if not ISWalkable.PathCached(origin, currentTarget, walkMode) then
+	if not ISWalkable.Path(origin, currentTarget) then
 		Log:Debug("Direct path to target not walkable - adding penalty to connection")
 
 		-- Add penalty to the connection we're currently traversing
