@@ -70,57 +70,51 @@ function MovementController.walkTo(cmd, player, dest)
 		tick = 1 / 66.67
 	end
 
-	-- Current horizontal velocity (ignore Z)
+	-- Current horizontal velocity (ignore Z) - this is per second, convert to per tick
 	local vel = player:EstimateAbsVelocity() or Vector3(0, 0, 0)
 	vel.z = 0
+	local vel_per_tick = vel * tick -- displacement over this tick if we coast
 
-	-- Predict passive drag to next tick
-	local drag = math.max(0, 1 - getGroundFriction() * tick)
-	local velNext = vel * drag
-	local predicted = Vector3(pos.x + velNext.x * tick, pos.y + velNext.y * tick, pos.z)
+	-- Get max acceleration for this tick
+	local maxAccel = getGroundMaxDeltaV(player, tick)
 
-	-- Remaining displacement after coast
-	local need = dest - predicted
-	need.z = 0
-	local dist = need:Length()
-	if dist < 1.5 then
+	-- Vector from current position to destination
+	local toDest = dest - pos
+	toDest.z = 0
+	local distToDest = toDest:Length()
+
+	if distToDest < 1.5 then
 		cmd:SetForwardMove(0)
 		cmd:SetSideMove(0)
 		return
 	end
 
-	-- Velocity we need at start of next tick to land on dest
-	local deltaV = (need / tick) - velNext
-	local deltaLen = deltaV:Length()
-	if deltaLen < 0.1 then
-		cmd:SetForwardMove(0)
-		cmd:SetSideMove(0)
+	-- Counter-velocity steering: acceleration vector from tip of velocity vector to destination
+	-- Place acceleration vector on tip of velocity vector (pos + vel_per_tick), pointing at destination
+	local accelVector = toDest - vel_per_tick
+	local accelLen = accelVector:Length()
+
+	-- If destination is within reach of acceleration vector this tick, walk directly
+	local maxAccelDist = maxAccel * tick
+	if accelLen <= maxAccelDist then
+		local moveVec = computeMove(cmd, pos, dest)
+		cmd:SetForwardMove(moveVec.x)
+		cmd:SetSideMove(moveVec.y)
 		return
 	end
 
-	-- Accel clamp from sv_accelerate
-	local aMax = getGroundMaxDeltaV(player, tick)
-	local accelDir = deltaV / deltaLen
-	local accelLen = math.min(deltaLen, aMax)
+	-- Direction of acceleration vector (this counters velocity and aims at destination)
+	local accelDir = accelVector / accelLen
 
-	-- wishspeed proportional to allowed Δv
-	local wishSpeed = math.max(MAX_SPEED * (accelLen / aMax), 20)
+	-- Calculate required velocity change and clamp to physics limits
+	local desiredAccel = accelDir * maxAccel
 
-	-- Overshoot guard
-	local maxNoOvershoot = dist / tick
-	wishSpeed = math.min(wishSpeed, maxNoOvershoot)
-	if wishSpeed < 5 then
-		wishSpeed = 0
-	end
+	-- Convert acceleration direction to movement inputs
+	local accelEnd = pos + desiredAccel
+	local moveVec = computeMove(cmd, pos, accelEnd)
 
-	-- Convert accelDir into local move inputs
-	local dirEnd = pos + accelDir
-	local moveVec = computeMove(cmd, pos, dirEnd)
-	local fwd = (moveVec.x / MAX_SPEED) * wishSpeed
-	local side = (moveVec.y / MAX_SPEED) * wishSpeed
-
-	cmd:SetForwardMove(fwd)
-	cmd:SetSideMove(side)
+	cmd:SetForwardMove(moveVec.x)
+	cmd:SetSideMove(moveVec.y)
 end
 
 -- Handle camera rotation if LookingAhead is enabled

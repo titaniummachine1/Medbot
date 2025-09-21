@@ -3,7 +3,7 @@ local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local isWalkable = require("MedBot.Navigation.ISWalkable")
-local Distance = require("MedBot.Helpers.Distance")
+local MathUtils = require("MedBot.Utils.MathUtils")
 
 local Visuals = {}
 
