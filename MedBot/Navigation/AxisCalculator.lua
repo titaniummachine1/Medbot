@@ -1,233 +1,134 @@
---##########################################################################
---  AxisCalculator.lua  ·  Reusable axis-based calculations for edges and boundaries
---##########################################################################
-
 local Common = require("MedBot.Core.Common")
+local EdgeCalculator = require("MedBot.Navigation.EdgeCalculator")
 
 local AxisCalculator = {}
 
--- Direction constants
-AxisCalculator.DIRECTIONS = {
-    NORTH = {x = 0, y = -1, name = "north", axis = "y", primary = "y"},
-    SOUTH = {x = 0, y = 1, name = "south", axis = "y", primary = "y"},
-    EAST = {x = 1, y = 0, name = "east", axis = "x", primary = "x"},
-    WEST = {x = -1, y = 0, name = "west", axis = "x", primary = "x"}
-}
+local Log = Common.Log.new("AxisCalculator")
 
--- Get direction from position delta
-function AxisCalculator.GetDirection(fromPos, toPos)
-    local dx = toPos.x - fromPos.x
-    local dy = toPos.y - fromPos.y
+-- Get direction from areaA to areaB
+function AxisCalculator.GetDirection(posA, posB)
+	if not (posA and posB) then
+		return { axis = "x", isPositive = true }
+	end
 
-    if math.abs(dx) >= math.abs(dy) then
-        return (dx > 0) and AxisCalculator.DIRECTIONS.EAST or AxisCalculator.DIRECTIONS.WEST
-    else
-        return (dy > 0) and AxisCalculator.DIRECTIONS.SOUTH or AxisCalculator.DIRECTIONS.NORTH
-    end
+	local dx = posB.x - posA.x
+	local dy = posB.y - posA.y
+
+	if math.abs(dx) > math.abs(dy) then
+		-- East/West: horizontal movement, vertical edge
+		return {
+			axis = "x",
+			isPositive = dx > 0,
+			edgeAxis = "y", -- The axis along which the edge varies
+		}
+	else
+		-- North/South: vertical movement, horizontal edge
+		return {
+			axis = "y",
+			isPositive = dy > 0,
+			edgeAxis = "x", -- The axis along which the edge varies
+		}
+	end
 end
 
--- Get the two corners that form the edge for a given direction
-function AxisCalculator.GetEdgeCorners(area, direction)
-    if not (area and area.nw and area.ne and area.se and area.sw) then
-        return nil, nil
-    end
-
-    if direction == AxisCalculator.DIRECTIONS.NORTH then
-        return area.nw, area.ne
-    elseif direction == AxisCalculator.DIRECTIONS.SOUTH then
-        return area.se, area.sw
-    elseif direction == AxisCalculator.DIRECTIONS.EAST then
-        return area.ne, area.se
-    elseif direction == AxisCalculator.DIRECTIONS.WEST then
-        return area.sw, area.nw
-    end
-
-    return nil, nil
-end
-
--- Get the facing boundary of a neighbor (opposite direction)
-function AxisCalculator.GetFacingBoundary(neighbor, direction)
-    if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
-        return nil
-    end
-
-    if direction == AxisCalculator.DIRECTIONS.NORTH then
-        return {neighbor.sw, neighbor.se} -- South boundary
-    elseif direction == AxisCalculator.DIRECTIONS.SOUTH then
-        return {neighbor.nw, neighbor.ne} -- North boundary
-    elseif direction == AxisCalculator.DIRECTIONS.EAST then
-        return {neighbor.sw, neighbor.nw} -- West boundary
-    elseif direction == AxisCalculator.DIRECTIONS.WEST then
-        return {neighbor.se, neighbor.ne} -- East boundary
-    end
-
-    return nil
-end
-
--- Calculate 1D overlap between two segments on a given axis
-function AxisCalculator.CalculateOverlap(a1, a2, b1, b2)
-    if a1 > a2 then a1, a2 = a2, a1 end
-    if b1 > b2 then b1, b2 = b2, b1 end
-
-    local left = math.max(a1, b1)
-    local right = math.min(a2, b2)
-
-    if right <= left then
-        return nil
-    end
-
-    return left, right
-end
-
--- Interpolate position along an edge at parameter t [0,1]
-function AxisCalculator.InterpolateEdgePoint(edgeStart, edgeEnd, t, constantAxis)
-    t = math.max(0, math.min(1, t))
-
-    local x, y, z
-
-    if constantAxis == "x" then
-        -- Y varies, X is constant
-        x = edgeStart.x
-        y = edgeStart.y + (edgeEnd.y - edgeStart.y) * t
-        z = edgeStart.z + (edgeEnd.z - edgeStart.z) * t
-    else
-        -- X varies, Y is constant
-        x = edgeStart.x + (edgeEnd.x - edgeStart.x) * t
-        y = edgeStart.y
-        z = edgeStart.z + (edgeEnd.z - edgeStart.z) * t
-    end
-
-    return Vector3(x, y, z)
-end
-
--- Clamp a point away from obstacles on a specific axis
-function AxisCalculator.ClampPointOnAxis(point, obstacles, direction, clearance)
-    local clampedPoint = {x = point.x, y = point.y, z = point.z}
-
-    for _, obstacle in ipairs(obstacles) do
-        local dist = Common.Distance2D(point, Vector3(obstacle.x, obstacle.y, 0))
-
-        if dist < clearance then
-            if direction.axis == "x" then
-                -- Clamp on X axis (horizontal movement)
-                if obstacle.x < point.x then
-                    clampedPoint.x = obstacle.x + clearance
-                else
-                    clampedPoint.x = obstacle.x - clearance
-                end
-            else
-                -- Clamp on Y axis (vertical movement)
-                if obstacle.y < point.y then
-                    clampedPoint.y = obstacle.y + clearance
-                else
-                    clampedPoint.y = obstacle.y - clearance
-                end
-            end
-        end
-    end
-
-    return Vector3(clampedPoint.x, clampedPoint.y, clampedPoint.z)
-end
-
--- Clamp two endpoints away from obstacles
-function AxisCalculator.ClampEndpoints(leftPoint, rightPoint, obstacles, direction, clearance)
-    local clampedLeft = leftPoint
-    local clampedRight = rightPoint
-
-    for _, obstacle in ipairs(obstacles) do
-        local leftDist = Common.Distance2D(clampedLeft, Vector3(obstacle.x, obstacle.y, 0))
-        local rightDist = Common.Distance2D(clampedRight, Vector3(obstacle.x, obstacle.y, 0))
-
-        if leftDist < clearance or rightDist < clearance then
-            if direction.axis == "x" then
-                if obstacle.x < clampedLeft.x and leftDist < clearance then
-                    clampedLeft = Vector3(obstacle.x + clearance, clampedLeft.y, clampedLeft.z)
-                elseif obstacle.x > clampedRight.x and rightDist < clearance then
-                    clampedRight = Vector3(obstacle.x - clearance, clampedRight.y, clampedRight.z)
-                end
-            else
-                if obstacle.y < clampedLeft.y and leftDist < clearance then
-                    clampedLeft = Vector3(clampedLeft.x, obstacle.y + clearance, clampedLeft.z)
-                elseif obstacle.y > clampedRight.y and rightDist < clearance then
-                    clampedRight = Vector3(clampedRight.x, obstacle.y - clearance, clampedRight.z)
-                end
-            end
-        end
-    end
-
-    return clampedLeft, clampedRight
-end
-
--- Check if point lies on a boundary segment within max distance
-function AxisCalculator.PointLiesOnBoundary(point, boundaryStart, boundaryEnd, maxDistance)
-    local distance = AxisCalculator.PointToLineSegmentDistance(point, boundaryStart, boundaryEnd)
-    return distance <= maxDistance
-end
-
--- Calculate distance from point to line segment (2D, ignores Z)
-function AxisCalculator.PointToLineSegmentDistance(point, lineStart, lineEnd)
-    local dx = lineEnd.x - lineStart.x
-    local dy = lineEnd.y - lineStart.y
-    local length = Vector3(dx, dy, 0):Length2D()
-
-    if length == 0 then
-        -- Line segment is a point
-        local point2D = Vector3(point.x, point.y, 0)
-        local start2D = Vector3(lineStart.x, lineStart.y, 0)
-        return Common.Distance2D(point2D, start2D)
-    end
-
-    -- Calculate projection parameter
-    local t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (length * length)
-    t = math.max(0, math.min(1, t))
-
-    -- Calculate closest point on line segment
-    local closestX = lineStart.x + t * dx
-    local closestY = lineStart.y + t * dy
-
-    -- Final distance calculation
-    local point2D = Vector3(point.x, point.y, 0)
-    local closest2D = Vector3(closestX, closestY, 0)
-    return Common.Distance2D(point2D, closest2D)
-end
-
--- Group connections by direction for an area
-function AxisCalculator.GroupConnectionsByDirection(area, nodes)
-    local connections = {
-        north = {}, south = {}, east = {}, west = {}
-    }
-
-    if not area.c then
-        return connections
-    end
-
-    for dirId, dir in pairs(area.c) do
-        if dir.connections then
-            for _, connection in ipairs(dir.connections) do
-                local targetId = (type(connection) == "table") and connection.node or connection
-                local neighbor = nodes[targetId]
-                if neighbor then
-                    local direction = AxisCalculator.GetDirection(area.pos, neighbor.pos)
-                    table.insert(connections[direction.name], neighbor)
-                end
-            end
-        end
-    end
-
-    return connections
-end
-
--- Get the opposite direction
+-- Get opposite direction
 function AxisCalculator.GetOppositeDirection(direction)
-    if direction == AxisCalculator.DIRECTIONS.NORTH then
-        return AxisCalculator.DIRECTIONS.SOUTH
-    elseif direction == AxisCalculator.DIRECTIONS.SOUTH then
-        return AxisCalculator.DIRECTIONS.NORTH
-    elseif direction == AxisCalculator.DIRECTIONS.EAST then
-        return AxisCalculator.DIRECTIONS.WEST
-    elseif direction == AxisCalculator.DIRECTIONS.WEST then
-        return AxisCalculator.DIRECTIONS.EAST
-    end
+	return {
+		axis = direction.axis,
+		isPositive = not direction.isPositive,
+		edgeAxis = direction.edgeAxis,
+	}
+end
+
+-- Get the two corners that form the edge facing the neighbor
+function AxisCalculator.GetEdgeCorners(area, direction)
+	if not (area and direction) then
+		Log:Debug("GetEdgeCorners: area or direction is nil")
+		return nil, nil
+	end
+
+	-- Check if area has corner properties
+	if not (area.nw and area.ne and area.se and area.sw) then
+		Log:Debug("GetEdgeCorners: area %d missing corner properties: nw=%s, ne=%s, se=%s, sw=%s",
+			area.id or "unknown", tostring(area.nw), tostring(area.ne), tostring(area.se), tostring(area.sw))
+		return nil, nil
+	end
+
+	-- Determine which edge to use based on direction
+	if direction.axis == "x" then
+		-- East/West: use left or right edge
+		if direction.isPositive then
+			-- Moving east: use right edge (ne, se)
+			return area.ne, area.se
+		else
+			-- Moving west: use left edge (nw, sw)
+			return area.nw, area.sw
+		end
+	else
+		-- North/South: use top or bottom edge
+		if direction.isPositive then
+			-- Moving north: use top edge (nw, ne)
+			return area.nw, area.ne
+		else
+			-- Moving south: use bottom edge (sw, se)
+			return area.sw, area.se
+		end
+	end
+end
+
+-- Calculate overlap between two ranges
+function AxisCalculator.CalculateOverlap(a0, a1, b0, b1)
+	-- Sort each pair
+	local aMin, aMax = math.min(a0, a1), math.max(a0, a1)
+	local bMin, bMax = math.min(b0, b1), math.max(b0, b1)
+
+	-- Calculate overlap
+	local overlapMin = math.max(aMin, bMin)
+	local overlapMax = math.min(aMax, bMax)
+
+	-- Check if there's actually an overlap
+	if overlapMin < overlapMax then
+		return overlapMin, overlapMax
+	else
+		return nil, nil -- No overlap
+	end
+end
+
+-- Clamp endpoints away from wall corners
+function AxisCalculator.ClampEndpoints(left, right, wallCorners, direction, minWidth)
+	if not (left and right and wallCorners) then
+		return left, right
+	end
+
+	-- Get the axis along which the door varies (the edge axis)
+	local varyAxis = direction.edgeAxis or (direction.axis == "x" and "y" or "x")
+	local varyCoord = (varyAxis == "x") and left.x or left.y
+
+	-- Find wall corners that might interfere
+	local clampedLeft = left
+	local clampedRight = right
+	local leftChanged = false
+	local rightChanged = false
+
+	for _, corner in ipairs(wallCorners) do
+		local cornerCoord = (varyAxis == "x") and corner.x or corner.y
+
+		-- Check if corner is within the door range and close to edge
+		if cornerCoord >= varyCoord - minWidth and cornerCoord <= varyCoord + minWidth then
+			-- Corner is near our door edge, clamp away from it
+			if cornerCoord < varyCoord then
+				-- Corner is to the left of door start
+				clampedLeft = left + (right - left):Normalized() * minWidth
+				leftChanged = true
+			elseif cornerCoord > varyCoord then
+				-- Corner is to the right of door end
+				clampedRight = right - (right - left):Normalized() * minWidth
+				rightChanged = true
+			end
+		end
+	end
+
+	return clampedLeft, clampedRight
 end
 
 return AxisCalculator
