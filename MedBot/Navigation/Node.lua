@@ -142,9 +142,6 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 		return neighbors
 	end
 
-	-- Determine if current node is a door (has doorPos)
-	local currentNodeIsDoor = node.doorPos ~= nil
-
 	for dirId, dir in pairs(node.c) do
 		if dir.connections then
 			for _, connection in ipairs(dir.connections) do
@@ -152,55 +149,14 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 				local targetNode = nodes[targetId]
 
 				if targetNode then
-					-- Check if this connection is a door
-					local isDoor = connection.isDoor == true or targetNode.isDoor == true
-
-					if isDoor and type(connection) == "table" then
-						-- Door connection - add all door positions (left, middle, right)
-						if connection.left then
-							table.insert(neighbors, {
-								node = targetNode,
-								cost = (node.pos - connection.left):Length()
-									+ (ConnectionUtils.GetCost(connection) or 0),
-								isDoor = true,
-								doorPos = connection.left,
-							})
-						end
-
-						if connection.middle then
-							table.insert(neighbors, {
-								node = targetNode,
-								cost = (node.pos - connection.middle):Length()
-									+ (ConnectionUtils.GetCost(connection) or 0),
-								isDoor = true,
-								doorPos = connection.middle,
-							})
-						end
-
-						if connection.right then
-							table.insert(neighbors, {
-								node = targetNode,
-								cost = (node.pos - connection.right):Length()
-									+ (ConnectionUtils.GetCost(connection) or 0),
-								isDoor = true,
-								doorPos = connection.right,
-							})
-						end
-
-						-- Also add connection to area center as fallback
-						table.insert(neighbors, {
-							node = targetNode,
-							cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
-							isDoor = false,
-						})
-					else
-						-- Regular connection - add normal connection to area center
-						table.insert(neighbors, {
-							node = targetNode,
-							cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
-							isDoor = false,
-						})
-					end
+					-- For A* pathfinding, use center-to-center distance
+					-- Door optimization happens at the waypoint level
+					local cost = (node.pos - targetNode.pos):Length()
+					table.insert(neighbors, {
+						node = targetNode,
+						cost = cost,
+						isDoor = false, -- A* works at area level, doors are waypoints
+					})
 				end
 			end
 		end

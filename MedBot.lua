@@ -3211,7 +3211,7 @@ function Node.RemoveConnection(nodeA, nodeB)
 	end
 end
 
--- Pathfinding adjacency - simple door rules
+-- Pathfinding adjacency - proper door-based movement rules
 function Node.GetAdjacentNodesSimple(node, nodes)
 	local neighbors = {}
 
@@ -3219,8 +3219,10 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 		return neighbors
 	end
 
-	-- Determine if current node is a door (has doorPos)
-	local currentNodeIsDoor = node.doorPos ~= nil
+	-- For door-based pathfinding, we need to know if we're at a center or door position
+	local currentPos = node.doorPos or node.pos
+	local currentAreaId = node.id
+	local currentDoorDir = node.doorDir -- Track which direction we entered this area from
 
 	for dirId, dir in pairs(node.c) do
 		if dir.connections then
@@ -3228,59 +3230,114 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 				local targetId = ConnectionUtils.GetNodeId(connection)
 				local targetNode = nodes[targetId]
 
-				if targetNode then
-					-- Check if this connection is a door
-					local isDoor = connection.isDoor == true or targetNode.isDoor == true
+				if targetNode and type(connection) == "table" then
+					local targetAreaId = targetId
 
-					if isDoor and type(connection) == "table" then
-						-- Door connection - add all door positions (left, middle, right)
-						if connection.left then
-							table.insert(neighbors, {
-								node = targetNode,
-								cost = (node.pos - connection.left):Length()
-									+ (ConnectionUtils.GetCost(connection) or 0),
-								isDoor = true,
-								doorPos = connection.left,
-							})
-						end
+					-- Add door positions as neighbors (left, middle, right)
+					local doorPositions = {}
+					if connection.left then table.insert(doorPositions, {pos = connection.left, name = "left"}) end
+					if connection.middle then table.insert(doorPositions, {pos = connection.middle, name = "middle"}) end
+					if connection.right then table.insert(doorPositions, {pos = connection.right, name = "right"}) end
 
-						if connection.middle then
-							table.insert(neighbors, {
-								node = targetNode,
-								cost = (node.pos - connection.middle):Length()
-									+ (ConnectionUtils.GetCost(connection) or 0),
-								isDoor = true,
-								doorPos = connection.middle,
-							})
-						end
+					for _, doorInfo in ipairs(doorPositions) do
+						local doorPos = doorInfo.pos
+						local doorName = doorInfo.name
 
-						if connection.right then
-							table.insert(neighbors, {
-								node = targetNode,
-								cost = (node.pos - connection.right):Length()
-									+ (ConnectionUtils.GetCost(connection) or 0),
-								isDoor = true,
-								doorPos = connection.right,
-							})
-						end
+						-- Create a "door node" with area info
+						local doorNode = {
+							id = targetAreaId,
+							pos = doorPos,
+							doorPos = doorPos,
+							doorDir = dirId, -- Direction this door faces
+							areaId = targetAreaId,
+							isDoor = true
+						}
 
-						-- Also add connection to area center as fallback
+						-- Cost is distance from current position to door
+						local cost = (currentPos - doorPos):Length()
+
 						table.insert(neighbors, {
-							node = targetNode,
-							cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
-							isDoor = false,
-						})
-					else
-						-- Regular connection - add normal connection to area center
-						table.insert(neighbors, {
-							node = targetNode,
-							cost = (node.pos - targetNode.pos):Length() + (ConnectionUtils.GetCost(connection) or 0),
-							isDoor = false,
+							node = doorNode,
+							cost = cost,
+							isDoor = true,
+							doorPos = doorPos,
+							doorDir = dirId
 						})
 					end
 				end
 			end
 		end
+	end
+
+	-- If we're at a door, we can also move to other doors in the same area
+	-- (except doors on the same boundary we entered from)
+	if node.isDoor and node.areaId then
+		local currentArea = nodes[node.areaId]
+		if currentArea and currentArea.c then
+			for dirId, dir in pairs(currentArea.c) do
+				-- Skip doors on the same boundary direction we entered from
+				if currentDoorDir and dirId == currentDoorDir then
+					goto continueDir
+				end
+
+				if dir.connections then
+					for _, connection in ipairs(dir.connections) do
+						if type(connection) == "table" then
+							local doorPositions = {}
+							if connection.left then table.insert(doorPositions, {pos = connection.left, name = "left"}) end
+							if connection.middle then table.insert(doorPositions, {pos = connection.middle, name = "middle"}) end
+							if connection.right then table.insert(doorPositions, {pos = connection.right, name = "right"}) end
+
+							for _, doorInfo in ipairs(doorPositions) do
+								local doorPos = doorInfo.pos
+
+								-- Don't go back to the same door we're at
+								if (doorPos - node.doorPos):Length() < 1 then
+									goto continueDoor
+								end
+
+								local doorNode = {
+									id = node.areaId,
+									pos = doorPos,
+									doorPos = doorPos,
+									doorDir = dirId,
+									areaId = node.areaId,
+									isDoor = true
+								}
+
+								local cost = (node.doorPos - doorPos):Length()
+
+								table.insert(neighbors, {
+									node = doorNode,
+									cost = cost,
+									isDoor = true,
+									doorPos = doorPos,
+									doorDir = dirId
+								})
+
+								::continueDoor::
+							end
+						end
+					end
+				end
+				::continueDir::
+			end
+		end
+
+		-- From a door, can also return to the center of the current area
+		local centerNode = {
+			id = node.areaId,
+			pos = nodes[node.areaId].pos,
+			areaId = node.areaId,
+			isDoor = false
+		}
+
+		local cost = (node.doorPos - nodes[node.areaId].pos):Length()
+		table.insert(neighbors, {
+			node = centerNode,
+			cost = cost,
+			isDoor = false
+		})
 	end
 
 	return neighbors
@@ -5572,8 +5629,8 @@ local NodeSkipper = {}
 local Log = Common.Log.new("NodeSkipper")
 
 -- Constants for timing
-local CONTINUOUS_SKIP_COOLDOWN = 2 -- ticks (~366ms) for active skipping
-local AGENT_SKIP_COOLDOWN = 4 -- ticks (~550ms) for agent system (slower, more expensive)
+local CONTINUOUS_SKIP_COOLDOWN = 2
+local AGENT_SKIP_COOLDOWN = 4
 
 -- ============================================================================
 -- AGENT SYSTEM
@@ -5672,7 +5729,12 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 	-- PASSIVE SYSTEM: Distance-based skipping (cheap, runs every 11 ticks)
 	if WorkManager.attemptWork(11, "passive_skip_check") then
 		if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-			Common.DebugLog("Debug", "Passive skip: Next node %d closer than current %d - skip 1 node", nextNode.id, currentNode.id)
+			Common.DebugLog(
+				"Debug",
+				"Passive skip: Next node %d closer than current %d - skip 1 node",
+				nextNode.id,
+				currentNode.id
+			)
 			maxNodesToSkip = math.max(maxNodesToSkip, 1)
 		end
 	end

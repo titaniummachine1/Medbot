@@ -13,8 +13,8 @@ local NodeSkipper = {}
 local Log = Common.Log.new("NodeSkipper")
 
 -- Constants for timing
-local CONTINUOUS_SKIP_COOLDOWN = 2 -- ticks (~366ms) for active skipping
-local AGENT_SKIP_COOLDOWN = 4 -- ticks (~550ms) for agent system (slower, more expensive)
+local CONTINUOUS_SKIP_COOLDOWN = 2
+local AGENT_SKIP_COOLDOWN = 4
 
 -- ============================================================================
 -- AGENT SYSTEM
@@ -113,7 +113,12 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 	-- PASSIVE SYSTEM: Distance-based skipping (cheap, runs every 11 ticks)
 	if WorkManager.attemptWork(11, "passive_skip_check") then
 		if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-			Common.DebugLog("Debug", "Passive skip: Next node %d closer than current %d - skip 1 node", nextNode.id, currentNode.id)
+			Common.DebugLog(
+				"Debug",
+				"Passive skip: Next node %d closer than current %d - skip 1 node",
+				nextNode.id,
+				currentNode.id
+			)
 			maxNodesToSkip = math.max(maxNodesToSkip, 1)
 		end
 	end
