@@ -19,8 +19,6 @@ local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local AStar = require("MedBot.Algorithms.A-Star")
---local DStar = require("MedBot.Algorithms.DStar")
---local DStar = require("MedBot.Utils.DStar")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -29,18 +27,13 @@ Log.Level = 0
 local STEP_HEIGHT = 18
 local UP_VECTOR = Vector3(0, 0, 1)
 local DROP_HEIGHT = 144 -- Define your constants outside the function
-local Jump_Height = 72 --duck jump height
-local MAX_SLOPE_ANGLE = 55 -- Maximum angle (in degrees) that is climbable
-local GRAVITY = 800 -- Gravity in units per second squared
-local MIN_STEP_SIZE = 5 -- Minimum step size in units
-local preferredSteps = 10 --prefered number oif steps for simulations
 local HULL_MIN = G.pLocal.vHitbox.Min
 local HULL_MAX = G.pLocal.vHitbox.Max
 local TRACE_MASK = MASK_PLAYERSOLID
 local TICK_RATE = 66
-
 local GROUND_TRACE_OFFSET_START = Vector3(0, 0, 5)
 local GROUND_TRACE_OFFSET_END = Vector3(0, 0, -67)
+local MAX_SLOPE_ANGLE = 55 -- Maximum angle (in degrees) that is climbable
 
 -- Add a connection between two nodes
 function Navigation.AddConnection(nodeA, nodeB)
@@ -661,66 +654,6 @@ function Navigation.FindPath(startNode, goalNode)
 	end
 
 	return Navigation
-end
-
--- A* internal navigation for smooth movement within larger areas
-function Navigation.GetInternalPath(startPos, endPos, maxDistance)
-	maxDistance = maxDistance or 200 -- Maximum distance to consider internal navigation
-
-	local distance = (endPos - startPos):Length()
-	if distance < 50 then
-		return nil -- Too close, direct movement is fine
-	end
-
-	if distance > maxDistance then
-		return nil -- Too far, use regular pathfinding
-	end
-
-	-- Hierarchical pathfinding removed - using simplified system
-
-	return nil -- No internal path available
-end
-
--- Find the best exit point from an area towards another area
-function Navigation.FindBestAreaExitPoint(currentArea, nextArea, areaInfo)
-	if not areaInfo or not areaInfo.edgePoints or #areaInfo.edgePoints == 0 then
-		return nil
-	end
-
-	local bestPoint = nil
-	local minDistance = math.huge
-
-	-- Find edge point closest to the next area
-	for _, edgePoint in ipairs(areaInfo.edgePoints) do
-		local distance = (edgePoint.pos - nextArea.pos):Length()
-		if distance < minDistance then
-			minDistance = distance
-			bestPoint = edgePoint
-		end
-	end
-
-	return bestPoint
-end
-
--- Find the best entry point into an area from another area
-function Navigation.FindBestAreaEntryPoint(currentArea, prevArea, areaInfo)
-	if not areaInfo or not areaInfo.edgePoints or #areaInfo.edgePoints == 0 then
-		return nil
-	end
-
-	local bestPoint = nil
-	local minDistance = math.huge
-
-	-- Find edge point closest to the previous area
-	for _, edgePoint in ipairs(areaInfo.edgePoints) do
-		local distance = (edgePoint.pos - prevArea.pos):Length()
-		if distance < minDistance then
-			minDistance = distance
-			bestPoint = edgePoint
-		end
-	end
-
-	return bestPoint
 end
 
 return Navigation
