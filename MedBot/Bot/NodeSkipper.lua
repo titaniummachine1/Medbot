@@ -14,7 +14,7 @@ local Log = Common.Log.new("NodeSkipper")
 
 -- Constants for timing
 local CONTINUOUS_SKIP_COOLDOWN = 22 -- ticks (~366ms) for active skipping
-local AGENT_SKIP_COOLDOWN = 22 -- ticks (~550ms) for agent system (slower, more expensive)
+local AGENT_SKIP_COOLDOWN = 2 -- ticks (~550ms) for agent system (slower, more expensive)
 
 -- ============================================================================
 -- AGENT SYSTEM
