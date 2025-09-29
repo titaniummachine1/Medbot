@@ -231,6 +231,11 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Display node ID numbers on the map for debugging")
 		TimMenu.NextLine()
 
+		G.Menu.Visuals.simplifiedConnections = G.Menu.Visuals.simplifiedConnections or false
+		G.Menu.Visuals.simplifiedConnections = TimMenu.Checkbox("Simplified Connections", G.Menu.Visuals.simplifiedConnections)
+		TimMenu.Tooltip("Only show area center <-> door connections (hides intra-area and door-to-door)")
+		TimMenu.NextLine()
+
 		TimMenu.EndSector()
 	end
 

@@ -44,6 +44,12 @@ local function RunAgentSkipping(currentPos)
 			break -- End of path
 		end
 
+		-- Stop agent if next node is a door - doors are transition points
+		if nextCheckNode.isDoor then
+			Common.DebugLog("Debug", "Agent stopped: next node %d is a door (transition point)", nextCheckNode.id)
+			break
+		end
+
 		Common.DebugLog("Debug", "Agent at node %d, checking walkability to node %d", agentNode.id, nextCheckNode.id)
 
 		-- Check if path from AGENT's current position to next check node is walkable
@@ -106,6 +112,11 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 	local nextNode = path[2]
 
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		return 0
+	end
+
+	-- NEVER skip door nodes - they are transition points, not walkable destinations
+	if nextNode.isDoor then
 		return 0
 	end
 

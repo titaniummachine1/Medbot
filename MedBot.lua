@@ -1754,6 +1754,11 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Display node ID numbers on the map for debugging")
 		TimMenu.NextLine()
 
+		G.Menu.Visuals.simplifiedConnections = G.Menu.Visuals.simplifiedConnections or false
+		G.Menu.Visuals.simplifiedConnections = TimMenu.Checkbox("Simplified Connections", G.Menu.Visuals.simplifiedConnections)
+		TimMenu.Tooltip("Only show area center <-> door connections (hides intra-area and door-to-door)")
+		TimMenu.NextLine()
+
 		TimMenu.EndSector()
 	end
 
@@ -2834,6 +2839,27 @@ local function OnDraw()
 
                         -- Only draw connections if the other node is also within depth limit
                         if otherNode and filteredNodes[nid] then
+                            -- Simplified connections: ONLY area ↔ door_middle
+                            if G.Menu.Visuals.simplifiedConnections then
+                                -- Skip door-to-door
+                                if node.isDoor and otherNode.isDoor then
+                                    goto continue
+                                end
+                                
+                                -- Skip area-to-area
+                                if not node.isDoor and not otherNode.isDoor then
+                                    goto continue
+                                end
+                                
+                                -- If door is involved, it MUST be _middle
+                                if node.isDoor and not node.id:match("_middle$") then
+                                    goto continue
+                                end
+                                if otherNode.isDoor and not otherNode.id:match("_middle$") then
+                                    goto continue
+                                end
+                            end
+                            
                             local pos1 = node.pos + UP_VECTOR
                             local pos2 = otherNode.pos + UP_VECTOR
                             local s1 = client.WorldToScreen(pos1)
@@ -2872,6 +2898,8 @@ local function OnDraw()
                                 if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
                                 draw.Line(s1[1], s1[2], s2[1], s2[2])
                             end
+                            
+                            ::continue::
                         end
                     end
                 end
@@ -2902,31 +2930,50 @@ local function OnDraw()
         end
     end
 
-    -- Draw Doors (left, middle, right) if enabled
+    -- Draw Doors as cyan lines between door points (elevated 1 unit)
     if G.Menu.Visuals.showDoors then
+        local drawnDoors = {} -- Track drawn door groups to avoid duplicates
+        local UP_OFFSET = Vector3(0, 0, 1)
+        
         for id, entry in pairs(filteredNodes) do
-            local node = entry.node
-            for dir = 1, 4 do
-                local cDir = node.c[dir]
-                if cDir and cDir.connections then
-                    for _, conn in ipairs(cDir.connections) do
-                        -- Handle new door node format: connections are now door node IDs
-                        local targetId = (type(conn) == "table") and conn.node or conn
-                        local doorNode = G.Navigation.nodes and G.Navigation.nodes[targetId]
-
-                        if doorNode and doorNode.isDoor then
-                            -- Door node exists - get its position
-                            local doorPos = doorNode.pos + UP_VECTOR
-                            local doorScreen = client.WorldToScreen(doorPos)
-
-                            if doorScreen then
-                                -- Draw door marker as a single point (since doors are now individual nodes)
-                                draw.Color(0, 180, 255, 255) -- Blue for door nodes
-                                draw.FilledRect(doorScreen[1] - 3, doorScreen[2] - 3,
-                                              doorScreen[1] + 3, doorScreen[2] + 3)
+            local doorNode = entry.node
+            if doorNode and doorNode.isDoor then
+                -- Extract door base ID (e.g., "4229_4231" from "4229_4231_left")
+                local doorId = doorNode.id
+                local doorBaseId = doorId:match("^(.+)_[^_]+$") -- Remove last suffix
+                
+                if doorBaseId and not drawnDoors[doorBaseId] then
+                    drawnDoors[doorBaseId] = true
+                    
+                    -- Find all 3 door points (left, middle, right) for this door
+                    local doorPoints = {}
+                    for _, suffix in ipairs({"_left", "_middle", "_right"}) do
+                        local pointId = doorBaseId .. suffix
+                        local pointNode = G.Navigation.nodes[pointId]
+                        if pointNode and pointNode.pos then
+                            table.insert(doorPoints, pointNode.pos + UP_OFFSET)
+                        end
+                    end
+                    
+                    -- Draw cyan line between min and max points
+                    if #doorPoints >= 2 then
+                        -- Find min and max points (leftmost and rightmost)
+                        local minPoint = doorPoints[1]
+                        local maxPoint = doorPoints[1]
+                        
+                        for _, pt in ipairs(doorPoints) do
+                            if (pt - doorPoints[1]):Length() > (maxPoint - doorPoints[1]):Length() then
+                                maxPoint = pt
                             end
                         end
-                        -- Removed fallback door drawing - doors are now always individual nodes
+                        
+                        local screen1 = client.WorldToScreen(minPoint)
+                        local screen2 = client.WorldToScreen(maxPoint)
+                        
+                        if screen1 and screen2 then
+                            draw.Color(0, 255, 255, 200) -- Cyan for doors
+                            draw.Line(screen1[1], screen1[2], screen2[1], screen2[2])
+                        end
                     end
                 end
             end
@@ -6129,6 +6176,12 @@ local function RunAgentSkipping(currentPos)
 			break -- End of path
 		end
 
+		-- Stop agent if next node is a door - doors are transition points
+		if nextCheckNode.isDoor then
+			Common.DebugLog("Debug", "Agent stopped: next node %d is a door (transition point)", nextCheckNode.id)
+			break
+		end
+
 		Common.DebugLog("Debug", "Agent at node %d, checking walkability to node %d", agentNode.id, nextCheckNode.id)
 
 		-- Check if path from AGENT's current position to next check node is walkable
@@ -6191,6 +6244,11 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 	local nextNode = path[2]
 
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		return 0
+	end
+
+	-- NEVER skip door nodes - they are transition points, not walkable destinations
+	if nextNode.isDoor then
 		return 0
 	end
 
