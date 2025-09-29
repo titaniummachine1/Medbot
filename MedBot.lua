@@ -6131,13 +6131,14 @@ local function RunAgentSkipping(currentPos)
 
 		Common.DebugLog("Debug", "Agent at node %d, checking walkability to node %d", agentNode.id, nextCheckNode.id)
 
-		-- Check if path from current position to next check node is walkable
-		if ISWalkable.Path(currentPos, nextCheckNode.pos) then
-			Common.DebugLog("Debug", "Agent: Path to node %d walkable, advancing agent", nextCheckNode.id)
+		-- Check if path from AGENT's current position to next check node is walkable
+		-- Agent position = where the agent currently is on the path (not player position)
+		if ISWalkable.Path(agentNode.pos, nextCheckNode.pos) then
+			Common.DebugLog("Debug", "Agent: Path from %d to %d walkable, advancing agent", agentNode.id, nextCheckNode.id)
 			agentIndex = agentIndex + 1
 			skipCount = skipCount + 1
 		else
-			Common.DebugLog("Debug", "Agent: Path to node %d not walkable, stopping agent", nextCheckNode.id)
+			Common.DebugLog("Debug", "Agent: Path from %d to %d not walkable, stopping agent", agentNode.id, nextCheckNode.id)
 			break -- Found obstacle, stop here
 		end
 	end
@@ -6195,16 +6196,24 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 
 	local maxNodesToSkip = 0
 
-	-- PASSIVE SYSTEM: Distance-based skipping (cheap, runs every 11 ticks)
+	-- PASSIVE SYSTEM: Distance + walkability check (runs every 11 ticks)
 	if WorkManager.attemptWork(11, "passive_skip_check") then
 		if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-			Common.DebugLog(
-				"Debug",
-				"Passive skip: Next node %d closer than current %d - skip 1 node",
-				nextNode.id,
-				currentNode.id
-			)
-			maxNodesToSkip = math.max(maxNodesToSkip, 1)
+			-- Node is closer, but also check if path is walkable
+			if ISWalkable.Path(currentPos, nextNode.pos) then
+				Common.DebugLog(
+					"Debug",
+					"Passive skip: Next node %d closer and walkable - skip 1 node",
+					nextNode.id
+				)
+				maxNodesToSkip = math.max(maxNodesToSkip, 1)
+			else
+				Common.DebugLog(
+					"Debug",
+					"Passive skip: Next node %d closer but NOT walkable - no skip",
+					nextNode.id
+				)
+			end
 		end
 	end
 
@@ -7875,11 +7884,14 @@ function StateHandler.handleStuckState(userCmd)
 	local pLocal = G.pLocal.entity
 	if pLocal then
 		local velocity = pLocal:EstimateAbsVelocity()
-		local speed2D = velocity and math.sqrt(velocity.x^2 + velocity.y^2) or 0
+		local speed2D = 0
+		if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
+			speed2D = math.sqrt(velocity.x^2 + velocity.y^2)
+		end
 
 		-- MAIN TRIGGER: Velocity < 50 = STUCK
 		if speed2D < 50 then
-			Log:Warn("STUCK DETECTED: velocity %.1f < 50 - adding penalties and repathing", speed2D)
+			Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
 
 			-- Add cost penalties to current connection (node->node, node->door, door->door)
 			StateHandler.addStuckPenalties()
@@ -7920,7 +7932,7 @@ function StateHandler.addStuckPenalties()
 				local connection = Node.GetConnectionEntry(fromNode, toNode)
 				if connection then
 					connection.cost = (connection.cost or 1) + 50
-					Log:Info("Added 50 cost penalty to connection %d -> %d (stuck penalty)", fromId, toId)
+					Log:Info("Added 50 cost penalty to connection " .. tostring(fromId) .. " -> " .. tostring(toId) .. " (stuck penalty)")
 				end
 			end
 		end

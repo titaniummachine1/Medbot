@@ -176,11 +176,14 @@ function StateHandler.handleStuckState(userCmd)
 	local pLocal = G.pLocal.entity
 	if pLocal then
 		local velocity = pLocal:EstimateAbsVelocity()
-		local speed2D = velocity and math.sqrt(velocity.x^2 + velocity.y^2) or 0
+		local speed2D = 0
+		if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
+			speed2D = math.sqrt(velocity.x^2 + velocity.y^2)
+		end
 
 		-- MAIN TRIGGER: Velocity < 50 = STUCK
 		if speed2D < 50 then
-			Log:Warn("STUCK DETECTED: velocity %.1f < 50 - adding penalties and repathing", speed2D)
+			Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
 
 			-- Add cost penalties to current connection (node->node, node->door, door->door)
 			StateHandler.addStuckPenalties()
@@ -221,7 +224,7 @@ function StateHandler.addStuckPenalties()
 				local connection = Node.GetConnectionEntry(fromNode, toNode)
 				if connection then
 					connection.cost = (connection.cost or 1) + 50
-					Log:Info("Added 50 cost penalty to connection %d -> %d (stuck penalty)", fromId, toId)
+					Log:Info("Added 50 cost penalty to connection " .. tostring(fromId) .. " -> " .. tostring(toId) .. " (stuck penalty)")
 				end
 			end
 		end
