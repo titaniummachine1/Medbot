@@ -189,52 +189,60 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	local owner = geometry.owner
 	local a0, a1, b0, b1 = geometry.a0, geometry.a1, geometry.b0, geometry.b1
 
-	-- Determine 1D overlap along edge axis and reconstruct points on OWNER edge
-	local oL, oR, edgeConst, axis -- axis: "x" or "y" varying
-	if dirX ~= 0 then
-		-- East/West: vertical edge, y varies, x constant
-		oL, oR = overlap1D(a0.y, a1.y, b0.y, b1.y)
-		axis = "y"
-		edgeConst = owner == "B" and b0.x or a0.x
+	-- Pick higher Z border as base (simple: compare max Z of each edge)
+	local aMaxZ = math.max(a0.z, a1.z)
+	local bMaxZ = math.max(b0.z, b1.z)
+	local baseEdge0, baseEdge1
+	if bMaxZ > aMaxZ + 0.5 then
+		baseEdge0, baseEdge1 = b0, b1 -- Use B's edge
 	else
-		-- North/South: horizontal edge, x varies, y constant
-		oL, oR = overlap1D(a0.x, a1.x, b0.x, b1.x)
+		baseEdge0, baseEdge1 = a0, a1 -- Use A's edge (or tie)
+	end
+
+	-- Determine shared axis: vertical edge (Y varies) or horizontal edge (X varies)
+	local axis, constAxis
+	if dirX ~= 0 then
+		-- East/West connection → vertical shared edge → Y axis varies
+		axis = "y"
+		constAxis = "x"
+	else
+		-- North/South connection → horizontal shared edge → X axis varies
 		axis = "x"
-		edgeConst = owner == "B" and b0.y or a0.y
-	end
-	if not oL then
-		return nil
+		constAxis = "y"
 	end
 
-	-- Helper to get endpoint pair on chosen owner edge
-	local e0, e1 = (owner == "B" and b0 or a0), (owner == "B" and b1 or a1)
-	local function pointOnOwnerEdge(val)
-		-- compute t along owner edge based on axis coordinate
-		local denom = (axis == "x") and (e1.x - e0.x) or (e1.y - e0.y)
-		local t = denom ~= 0 and ((val - ((axis == "x") and e0.x or e0.y)) / denom) or 0
+	-- Pure 1D overlap on shared axis
+	local aMin = math.min(a0[axis], a1[axis])
+	local aMax = math.max(a0[axis], a1[axis])
+	local bMin = math.min(b0[axis], b1[axis])
+	local bMax = math.max(b0[axis], b1[axis])
+
+	local overlapMin = math.max(aMin, bMin)
+	local overlapMax = math.min(aMax, bMax)
+
+	if overlapMax - overlapMin < HITBOX_WIDTH then
+		return nil -- No valid overlap
+	end
+
+	-- Build door points on chosen base edge using 1D overlap
+	local function pointOnBase(axisVal)
+		local t = (baseEdge1[axis] - baseEdge0[axis]) ~= 0
+				and ((axisVal - baseEdge0[axis]) / (baseEdge1[axis] - baseEdge0[axis]))
+			or 0.5
 		t = math.max(0, math.min(1, t))
-		local x = (axis == "x") and val or edgeConst
-		local y = (axis == "y") and val or edgeConst
-		local z = lerp(e0.z, e1.z, t)
-		return Vector3(x, y, z)
+
+		local pos = Vector3(0, 0, 0)
+		pos[axis] = axisVal
+		pos[constAxis] = baseEdge0[constAxis]
+		pos.z = lerp(baseEdge0.z, baseEdge1.z, t)
+		return pos
 	end
 
-	local overlapLeft = pointOnOwnerEdge(oL)
-	local overlapRight = pointOnOwnerEdge(oR)
-
-	-- SIMPLIFIED: No clamping - just use raw overlap
-	-- clampDoorAwayFromWalls() disabled for now
-	
+	local overlapLeft = pointOnBase(overlapMin)
+	local overlapRight = pointOnBase(overlapMax)
 	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
-
-	-- Validate width on the edge axis only (2D length)
-	local doorWidth = (overlapRight - overlapLeft):Length()
-	if doorWidth < HITBOX_WIDTH then
-		return nil
-	end
 
 	return {
 		left = overlapLeft,
@@ -256,6 +264,19 @@ function ConnectionBuilder.BuildDoorsForConnections()
 	local doorNodes = {} -- Store created door nodes
 
 	-- Find all unique area-to-area connections
+	-- Count total connections first for debugging
+	local totalConnections = 0
+	for nodeId, node in pairs(nodes) do
+		if node.c and not node.isDoor then
+			for dirId, dir in pairs(node.c) do
+				if dir.connections then
+					totalConnections = totalConnections + #dir.connections
+				end
+			end
+		end
+	end
+	Log:Info("Total area connections found: %d", totalConnections)
+
 	for nodeId, node in pairs(nodes) do
 		if node.c and not node.isDoor then -- Only process actual areas
 			for dirId, dir in pairs(node.c) do
@@ -282,7 +303,11 @@ function ConnectionBuilder.BuildDoorsForConnections()
 												if ConnectionUtils.GetNodeId(tConn) == nodeId then
 													hasReverse = true
 													revDir = tDirId
-													Log:Debug("Connection %s->%s: Found reverse (bidirectional)", nodeId, targetId)
+													Log:Debug(
+														"Connection %s->%s: Found reverse (bidirectional)",
+														nodeId,
+														targetId
+													)
 													break
 												end
 											end
@@ -292,13 +317,20 @@ function ConnectionBuilder.BuildDoorsForConnections()
 										end
 									end
 								end
-								
+
 								if not hasReverse then
 									Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
 								end
 
 								-- Create SHARED doors (use canonical ordering for IDs)
 								local door = createDoorForAreas(node, targetNode)
+								if not door then
+									Log:Warn(
+										"Door creation FAILED for %s->%s (no valid overlap or too narrow)",
+										nodeId,
+										targetId
+									)
+								end
 								if door then
 									local fwdDir = dirId
 
@@ -528,7 +560,7 @@ function ConnectionBuilder.BuildDoorToDoorConnections()
 						-- One-way doors (dirCount == 1) should not participate in door-to-door
 						local doorAIsBidirectional = false
 						local doorBIsBidirectional = false
-						
+
 						if doorA.c then
 							local dirCount = 0
 							for _ in pairs(doorA.c) do
@@ -536,7 +568,7 @@ function ConnectionBuilder.BuildDoorToDoorConnections()
 							end
 							doorAIsBidirectional = (dirCount >= 2)
 						end
-						
+
 						if doorB.c then
 							local dirCount = 0
 							for _ in pairs(doorB.c) do
