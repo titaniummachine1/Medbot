@@ -346,21 +346,32 @@ local function OnDraw()
                             local s1 = client.WorldToScreen(pos1)
                             local s2 = client.WorldToScreen(pos2)
                             if s1 and s2 then
-                                -- determine if other->id exists in its connections
+                                -- determine if connection is bidirectional
                                 local bidir = false
 
-                                for d2 = 1, 4 do
-                                    local otherCDir = otherNode.c[d2]
-                                    if otherCDir and otherCDir.connections then
-                                        for _, backConn in ipairs(otherCDir.connections) do
-                                            local backId = (type(backConn) == "table") and backConn.node or backConn
-                                            if backId == id then
-                                                bidir = true
+                                -- If otherNode is a door, check if door connects back to ANY area (not just this one)
+                                if otherNode.isDoor then
+                                    -- Door is bidirectional if it has 2+ direction keys (connects both ways)
+                                    local dirCount = 0
+                                    for _ in pairs(otherNode.c or {}) do
+                                        dirCount = dirCount + 1
+                                    end
+                                    bidir = (dirCount >= 2)
+                                else
+                                    -- For area nodes, check if it connects back to this node
+                                    for d2 = 1, 4 do
+                                        local otherCDir = otherNode.c[d2]
+                                        if otherCDir and otherCDir.connections then
+                                            for _, backConn in ipairs(otherCDir.connections) do
+                                                local backId = (type(backConn) == "table") and backConn.node or backConn
+                                                if backId == id then
+                                                    bidir = true
+                                                    break
+                                                end
+                                            end
+                                            if bidir then
                                                 break
                                             end
-                                        end
-                                        if bidir then
-                                            break
                                         end
                                     end
                                 end
