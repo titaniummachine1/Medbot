@@ -254,7 +254,7 @@ function ConnectionBuilder.BuildDoorsForConnections()
 	local doorsBuilt = 0
 	local processedPairs = {} -- Track processed area pairs to avoid duplicates
 	local doorNodes = {} -- Store created door nodes
-	
+
 	-- Find all unique area-to-area connections
 	for nodeId, node in pairs(nodes) do
 		if node.c and not node.isDoor then -- Only process actual areas
@@ -263,16 +263,15 @@ function ConnectionBuilder.BuildDoorsForConnections()
 					for _, connection in ipairs(dir.connections) do
 						local targetId = ConnectionUtils.GetNodeId(connection)
 						local targetNode = nodes[targetId]
-						
+
 						if targetNode and not targetNode.isDoor then
 							-- Create unique pair key (sorted to avoid duplicates)
-							local pairKey = nodeId < targetId 
-								and (nodeId .. "_" .. targetId) 
+							local pairKey = nodeId < targetId and (nodeId .. "_" .. targetId)
 								or (targetId .. "_" .. nodeId)
-							
+
 							if not processedPairs[pairKey] then
 								processedPairs[pairKey] = true
-								
+
 								-- Find reverse direction (if exists)
 								local revDir = nil
 								local hasReverse = false
@@ -286,71 +285,95 @@ function ConnectionBuilder.BuildDoorsForConnections()
 													break
 												end
 											end
-											if hasReverse then break end
+											if hasReverse then
+												break
+											end
 										end
 									end
 								end
-								
+
 								-- Create SHARED doors (use canonical ordering for IDs)
 								local door = createDoorForAreas(node, targetNode)
 								if door then
 									local fwdDir = dirId
-									
+
 									-- Use smaller nodeId first for canonical door IDs
-									local doorPrefix = (nodeId < targetId) and (nodeId .. "_" .. targetId) or (targetId .. "_" .. nodeId)
-									
+									local doorPrefix = (nodeId < targetId) and (nodeId .. "_" .. targetId)
+										or (targetId .. "_" .. nodeId)
+
+									-- Calculate which SIDE of area the door is on (based on position, not connection direction)
+									local function getDoorSide(doorPos, areaPos)
+										local dx = doorPos.x - areaPos.x
+										local dy = doorPos.y - areaPos.y
+
+										-- Determine which axis has larger difference
+										if math.abs(dx) > math.abs(dy) then
+											-- Door is on East or West side
+											return (dx > 0) and 4 or 8 -- East=4, West=8
+										else
+											-- Door is on North or South side
+											return (dy > 0) and 2 or 1 -- South=2, North=1
+										end
+									end
+
 									-- Create door nodes with bidirectional connections (if applicable)
 									if door.left then
 										local doorId = doorPrefix .. "_left"
+										local doorSide = getDoorSide(door.left, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.left,
 											isDoor = true,
 											areaId = nodeId, -- Store both area associations
 											targetAreaId = targetId,
+											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
-												[fwdDir] = { connections = {targetId}, count = 1 }
-											}
+												[fwdDir] = { connections = { targetId }, count = 1 },
+											},
 										}
 										-- Add reverse connection if bidirectional
 										if hasReverse and revDir then
-											doorNodes[doorId].c[revDir] = { connections = {nodeId}, count = 1 }
+											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
 										end
 										doorsBuilt = doorsBuilt + 1
 									end
 
 									if door.middle then
 										local doorId = doorPrefix .. "_middle"
+										local doorSide = getDoorSide(door.middle, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.middle,
 											isDoor = true,
 											areaId = nodeId,
 											targetAreaId = targetId,
+											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
-												[fwdDir] = { connections = {targetId}, count = 1 }
-											}
+												[fwdDir] = { connections = { targetId }, count = 1 },
+											},
 										}
 										if hasReverse and revDir then
-											doorNodes[doorId].c[revDir] = { connections = {nodeId}, count = 1 }
+											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
 										end
 										doorsBuilt = doorsBuilt + 1
 									end
 
 									if door.right then
 										local doorId = doorPrefix .. "_right"
+										local doorSide = getDoorSide(door.right, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.right,
 											isDoor = true,
 											areaId = nodeId,
 											targetAreaId = targetId,
+											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
-												[fwdDir] = { connections = {targetId}, count = 1 }
-											}
+												[fwdDir] = { connections = { targetId }, count = 1 },
+											},
 										}
 										if hasReverse and revDir then
-											doorNodes[doorId].c[revDir] = { connections = {nodeId}, count = 1 }
+											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
 										end
 										doorsBuilt = doorsBuilt + 1
 									end
@@ -362,41 +385,46 @@ function ConnectionBuilder.BuildDoorsForConnections()
 			end
 		end
 	end
-	
+
 	-- Add door nodes to graph
 	for doorId, doorNode in pairs(doorNodes) do
 		nodes[doorId] = doorNode
 	end
-	
-	-- Replace area-to-area connections with area-to-door connections
+
+	-- Build door-to-door connections FIRST (while area graph is intact)
+	ConnectionBuilder.BuildDoorToDoorConnections()
+
+	-- THEN replace area-to-area connections with area-to-door connections
 	for nodeId, node in pairs(nodes) do
 		if node.c and not node.isDoor then
 			for dirId, dir in pairs(node.c) do
 				if dir.connections then
 					local newConnections = {}
-					
+
 					for _, connection in ipairs(dir.connections) do
 						local targetId = ConnectionUtils.GetNodeId(connection)
 						local targetNode = nodes[targetId]
-						
+
 						if targetNode and not targetNode.isDoor then
 							-- Find door nodes - try both orderings (canonical pair key)
 							local doorPrefix1 = nodeId .. "_" .. targetId
 							local doorPrefix2 = targetId .. "_" .. nodeId
 							local foundDoors = false
-							
+
 							-- Try both possible door ID patterns
-							for _, prefix in ipairs({doorPrefix1, doorPrefix2}) do
-								for suffix in pairs({_left=true, _middle=true, _right=true}) do
+							for _, prefix in ipairs({ doorPrefix1, doorPrefix2 }) do
+								for suffix in pairs({ _left = true, _middle = true, _right = true }) do
 									local doorId = prefix .. suffix
 									if nodes[doorId] then
 										table.insert(newConnections, doorId)
 										foundDoors = true
 									end
 								end
-								if foundDoors then break end -- Found doors with this prefix
+								if foundDoors then
+									break
+								end -- Found doors with this prefix
 							end
-							
+
 							-- If no doors found, keep original connection
 							if not foundDoors then
 								table.insert(newConnections, connection)
@@ -406,16 +434,13 @@ function ConnectionBuilder.BuildDoorsForConnections()
 							table.insert(newConnections, connection)
 						end
 					end
-					
+
 					dir.connections = newConnections
 					dir.count = #newConnections
 				end
 			end
 		end
 	end
-
-	-- Create door-to-door connections
-	ConnectionBuilder.BuildDoorToDoorConnections()
 
 	Log:Info("Built " .. doorsBuilt .. " door nodes for connections")
 end
@@ -424,7 +449,7 @@ end
 local function calculateSpatialDirection(fromPos, toPos)
 	local dx = toPos.x - fromPos.x
 	local dy = toPos.y - fromPos.y
-	
+
 	if math.abs(dx) >= math.abs(dy) then
 		return (dx > 0) and 4 or 8 -- East or West
 	else
@@ -461,59 +486,105 @@ function ConnectionBuilder.BuildDoorToDoorConnections()
 		end
 	end
 
-	-- Connect doors within each area (bidirectionally)
+	-- Helper to calculate which side a door is on relative to an area
+	local function getDoorSideForArea(doorPos, areaId)
+		local area = nodes[areaId]
+		if not area or not area.pos then
+			return nil
+		end
+
+		local dx = doorPos.x - area.pos.x
+		local dy = doorPos.y - area.pos.y
+
+		if math.abs(dx) > math.abs(dy) then
+			return (dx > 0) and 4 or 8 -- East=4, West=8
+		else
+			return (dy > 0) and 2 or 1 -- South=2, North=1
+		end
+	end
+
+	-- Connect doors within each area (respecting one-way connections)
 	for areaId, doors in pairs(doorsByArea) do
 		for i = 1, #doors do
 			local doorA = doors[i]
-			
-			for j = i + 1, #doors do -- Only process each pair once
-				local doorB = doors[j]
-				
-				-- Only connect doors on different sides (different direction)
-				if doorA.direction ~= doorB.direction then
-					-- Calculate spatial directions (bidirectional)
-					local spatialDirAtoB = calculateSpatialDirection(doorA.pos, doorB.pos)
-					local spatialDirBtoA = calculateSpatialDirection(doorB.pos, doorA.pos)
-					
-					-- Initialize connection tables if needed
-					if not doorA.c then doorA.c = {} end
-					if not doorA.c[spatialDirAtoB] then
-						doorA.c[spatialDirAtoB] = { connections = {}, count = 0 }
-					end
-					
-					if not doorB.c then doorB.c = {} end
-					if not doorB.c[spatialDirBtoA] then
-						doorB.c[spatialDirBtoA] = { connections = {}, count = 0 }
-					end
 
-					-- Add A→B connection
-					local alreadyConnectedAtoB = false
-					for _, conn in ipairs(doorA.c[spatialDirAtoB].connections) do
-						if ConnectionUtils.GetNodeId(conn) == doorB.id then
-							alreadyConnectedAtoB = true
-							break
+			for j = 1, #doors do
+				if i ~= j then
+					local doorB = doors[j]
+
+					-- Calculate which side each door is on RELATIVE TO THIS AREA
+					local sideA = getDoorSideForArea(doorA.pos, areaId)
+					local sideB = getDoorSideForArea(doorB.pos, areaId)
+
+					-- ONLY connect doors on DIFFERENT sides to avoid wall collisions
+					if sideA and sideB and sideA ~= sideB then
+						-- Check if doorA's connection is bidirectional by looking at AREA graph
+						-- Determine which area doorA connects FROM and TO relative to current areaId
+						local otherAreaId = (doorA.areaId == areaId) and doorA.targetAreaId or doorA.areaId
+						-- Check if the AREA connection from this area to other area is bidirectional
+						local areaConnectionIsBidirectional = false
+						local currentArea = nodes[areaId]
+						local otherArea = nodes[otherAreaId]
+						if currentArea and otherArea and currentArea.c and otherArea.c then
+							-- Check if current area connects to other area
+							local currentToOther = false
+							for _, dir in pairs(currentArea.c) do
+								if dir.connections then
+									for _, conn in ipairs(dir.connections) do
+										if ConnectionUtils.GetNodeId(conn) == otherAreaId then
+											currentToOther = true
+											break
+										end
+									end
+									if currentToOther then
+										break
+									end
+								end
+							end
+
+							-- Check if other area connects back to current area
+							local otherToCurrent = false
+							for _, dir in pairs(otherArea.c) do
+								if dir.connections then
+									for _, conn in ipairs(dir.connections) do
+										if ConnectionUtils.GetNodeId(conn) == areaId then
+											otherToCurrent = true
+											break
+										end
+									end
+									if otherToCurrent then
+										break
+									end
+								end
+							end
+
+							-- Bidirectional if both directions exist
+							areaConnectionIsBidirectional = currentToOther and otherToCurrent
 						end
-					end
-					
-					if not alreadyConnectedAtoB then
-						table.insert(doorA.c[spatialDirAtoB].connections, doorB.id)
-						doorA.c[spatialDirAtoB].count = #doorA.c[spatialDirAtoB].connections
-						connectionsAdded = connectionsAdded + 1
-					end
-					
-					-- Add B→A connection (reverse)
-					local alreadyConnectedBtoA = false
-					for _, conn in ipairs(doorB.c[spatialDirBtoA].connections) do
-						if ConnectionUtils.GetNodeId(conn) == doorA.id then
-							alreadyConnectedBtoA = true
-							break
+
+						-- Only create door-to-door if the area connection is bidirectional
+						if areaConnectionIsBidirectional then
+							local spatialDirAtoB = calculateSpatialDirection(doorA.pos, doorB.pos)
+
+							if not doorA.c[spatialDirAtoB] then
+								doorA.c[spatialDirAtoB] = { connections = {}, count = 0 }
+							end
+
+							-- Add A→B connection
+							local alreadyConnected = false
+							for _, conn in ipairs(doorA.c[spatialDirAtoB].connections) do
+								if ConnectionUtils.GetNodeId(conn) == doorB.id then
+									alreadyConnected = true
+									break
+								end
+							end
+
+							if not alreadyConnected then
+								table.insert(doorA.c[spatialDirAtoB].connections, doorB.id)
+								doorA.c[spatialDirAtoB].count = #doorA.c[spatialDirAtoB].connections
+								connectionsAdded = connectionsAdded + 1
+							end
 						end
-					end
-					
-					if not alreadyConnectedBtoA then
-						table.insert(doorB.c[spatialDirBtoA].connections, doorA.id)
-						doorB.c[spatialDirBtoA].count = #doorB.c[spatialDirBtoA].connections
-						connectionsAdded = connectionsAdded + 1
 					end
 				end
 			end
@@ -540,7 +611,7 @@ function ConnectionBuilder.GetConnectionEntry(nodeA, nodeB)
 						-- For door connections (strings), return basic info
 						return {
 							nodeId = connection,
-							isDoorConnection = true
+							isDoorConnection = true,
 						}
 					end
 				end
@@ -566,7 +637,7 @@ function ConnectionBuilder.GetDoorTargetPoint(areaA, areaB)
 	local doorPositions = {}
 
 	-- Check all three door positions (left, middle, right)
-	for _, suffix in ipairs({"_left", "_middle", "_right"}) do
+	for _, suffix in ipairs({ "_left", "_middle", "_right" }) do
 		local doorId = doorBaseId .. suffix
 		local doorNode = nodes[doorId]
 		if doorNode and doorNode.pos then
