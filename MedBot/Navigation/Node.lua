@@ -70,9 +70,12 @@ function Node.GetClosestNode(pos)
 
 	local closestNode, closestDist = nil, math.huge
 	for _, node in pairs(G.Navigation.nodes) do
-		local dist = (node.pos - pos):Length()
-		if dist < closestDist then
-			closestNode, closestDist = node, dist
+		-- Skip door nodes - only return actual area nodes
+		if not node.isDoor then
+			local dist = (node.pos - pos):Length()
+			if dist < closestDist then
+				closestNode, closestDist = node, dist
+			end
 		end
 	end
 	return closestNode

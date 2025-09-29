@@ -226,6 +226,11 @@ local function OnDrawMenu()
 		G.Menu.Visuals.memoryUsage = TimMenu.Checkbox("Show Memory Usage", G.Menu.Visuals.memoryUsage)
 		TimMenu.NextLine()
 
+		G.Menu.Visuals.showNodeIds = G.Menu.Visuals.showNodeIds or false
+		G.Menu.Visuals.showNodeIds = TimMenu.Checkbox("Show Node IDs", G.Menu.Visuals.showNodeIds)
+		TimMenu.Tooltip("Display node ID numbers on the map for debugging")
+		TimMenu.NextLine()
+
 		TimMenu.EndSector()
 	end
 

@@ -38,11 +38,6 @@ function EdgeCalculator.Length2D(ax, ay)
 	return math.sqrt(ax * ax + ay * ay)
 end
 
-function EdgeCalculator.Distance3D(p, q)
-	local dx, dy, dz = p.x - q.x, p.y - q.y, p.z - q.z
-	return math.sqrt(dx * dx + dy * dy + dz * dz)
-end
-
 function EdgeCalculator.LerpVec(a, b, t)
 	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
 end

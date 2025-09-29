@@ -433,28 +433,48 @@ local function OnDraw()
     if G.Menu.Visuals.showAreas then
         for id, entry in pairs(filteredNodes) do
             local node = entry.node
-            -- Collect the four corner vectors from the node
-            local worldCorners = { node.nw, node.ne, node.se, node.sw }
-            local scr = {}
-            local ok = true
-            for i, corner in ipairs(worldCorners) do
-                local s = client.WorldToScreen(corner)
-                if not s then
-                    ok = false
-                    break
+            -- Skip door nodes - they don't have area corners
+            if not node.isDoor then
+                -- Collect the four corner vectors from the node
+                local worldCorners = { node.nw, node.ne, node.se, node.sw }
+                if worldCorners[1] and worldCorners[2] and worldCorners[3] and worldCorners[4] then
+                    local scr = {}
+                    local ok = true
+                    for i, corner in ipairs(worldCorners) do
+                        local s = client.WorldToScreen(corner)
+                        if not s then
+                            ok = false
+                            break
+                        end
+                        scr[i] = { s[1], s[2] }
+                    end
+                    -- Only draw if all corners are visible on screen
+                    if ok then
+                        -- filled polygon
+                        fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
+                        -- outline
+                        draw.Color(table.unpack(AREA_OUTLINE_COLOR))
+                        for i = 1, 4 do
+                            local a = scr[i]
+                            local b = scr[i % 4 + 1]
+                            draw.Line(a[1], a[2], b[1], b[2])
+                        end
+                    end
                 end
-                scr[i] = { s[1], s[2] }
             end
-            -- Only draw if all corners are visible on screen
-            if ok then
-                -- filled polygon
-                fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
-                -- outline
-                draw.Color(table.unpack(AREA_OUTLINE_COLOR))
-                for i = 1, 4 do
-                    local a = scr[i]
-                    local b = scr[i % 4 + 1]
-                    draw.Line(a[1], a[2], b[1], b[2])
+        end
+    end
+
+    -- Draw node IDs if enabled
+    if G.Menu.Visuals.showNodeIds then
+        draw.SetFont(Fonts.Verdana)
+        for id, entry in pairs(filteredNodes) do
+            local node = entry.node
+            if not node.isDoor then -- Only show IDs for area nodes, not door nodes
+                local scr = client.WorldToScreen(node.pos + UP_VECTOR)
+                if scr then
+                    draw.Color(255, 255, 255, 255)
+                    draw.Text(scr[1], scr[2], tostring(node.id))
                 end
             end
         end

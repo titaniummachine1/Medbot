@@ -260,7 +260,7 @@ function MovementDecisions.handleMovingState(userCmd)
 	if targetPos then
 		local LocalOrigin = G.pLocal.Origin
 		local direction = targetPos - LocalOrigin
-		G.BotMovementDirection = direction:Length() > 0 and (direction / direction:Length()) or Vector3(0, 0, 0)
+		G.BotMovementDirection = direction:Length() > 0 and Common.Normalize(direction) or Vector3(0, 0, 0)
 		G.BotIsMoving = true
 		G.Navigation.currentTargetPos = targetPos
 	end

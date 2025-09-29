@@ -157,9 +157,9 @@ end
 ---@param p3 Vector3 Triangle vertex 3
 ---@return number Triangle area
 function MathUtils.TriangleArea(p1, p2, p3)
-	local a = MathUtils.Distance3D(p1, p2)
-	local b = MathUtils.Distance3D(p2, p3)
-	local c = MathUtils.Distance3D(p3, p1)
+	local a = MathUtils.Distance(p1, p2)
+	local b = MathUtils.Distance(p2, p3)
+	local c = MathUtils.Distance(p3, p1)
 	local s = (a + b + c) / 2
 	return math.sqrt(s * (s - a) * (s - b) * (s - c))
 end
