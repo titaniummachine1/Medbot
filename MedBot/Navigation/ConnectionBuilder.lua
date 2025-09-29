@@ -225,14 +225,14 @@ local function createDoorForAreas(areaA, areaB)
 	local overlapLeft = pointOnOwnerEdge(oL)
 	local overlapRight = pointOnOwnerEdge(oR)
 
-	-- Clamp door away from wall corners
-	overlapLeft, overlapRight = clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
-
+	-- SIMPLIFIED: No clamping - just use raw overlap
+	-- clampDoorAwayFromWalls() disabled for now
+	
 	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
 
-	-- Validate width on the edge axis only (2D length) - after clamping
-	local clampedWidth = (overlapRight - overlapLeft):Length()
-	if clampedWidth < HITBOX_WIDTH then
+	-- Validate width on the edge axis only (2D length)
+	local doorWidth = (overlapRight - overlapLeft):Length()
+	if doorWidth < HITBOX_WIDTH then
 		return nil
 	end
 

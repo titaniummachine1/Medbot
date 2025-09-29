@@ -341,7 +341,7 @@ local function OnDraw()
 
                         -- Only draw connections if the other node is also within depth limit
                         if otherNode and filteredNodes[nid] then
-                            -- Simplified connections: ONLY area ↔ door_middle
+                            -- Simplified connections: ONLY area ↔ door (draw to middle point)
                             if G.Menu.Visuals.simplifiedConnections then
                                 -- Skip door-to-door
                                 if node.isDoor and otherNode.isDoor then
@@ -352,18 +352,40 @@ local function OnDraw()
                                 if not node.isDoor and not otherNode.isDoor then
                                     goto continue
                                 end
-                                
-                                -- If door is involved, it MUST be _middle
-                                if node.isDoor and not node.id:match("_middle$") then
-                                    goto continue
-                                end
-                                if otherNode.isDoor and not otherNode.id:match("_middle$") then
-                                    goto continue
-                                end
                             end
                             
                             local pos1 = node.pos + UP_VECTOR
                             local pos2 = otherNode.pos + UP_VECTOR
+                            
+                            -- In simplified mode, redirect door positions to middle point
+                            if G.Menu.Visuals.simplifiedConnections then
+                                if node.isDoor then
+                                    -- Get middle point for this door
+                                    local doorBaseId = node.id:match("^(.+)_[^_]+$")
+                                    if doorBaseId then
+                                        local middleNode = G.Navigation.nodes[doorBaseId .. "_middle"]
+                                        if middleNode and middleNode.pos then
+                                            pos1 = middleNode.pos + UP_VECTOR
+                                        else
+                                            -- Fallback: use the actual door point if middle doesn't exist
+                                            pos1 = node.pos + UP_VECTOR
+                                        end
+                                    end
+                                end
+                                if otherNode.isDoor then
+                                    -- Get middle point for this door
+                                    local doorBaseId = otherNode.id:match("^(.+)_[^_]+$")
+                                    if doorBaseId then
+                                        local middleNode = G.Navigation.nodes[doorBaseId .. "_middle"]
+                                        if middleNode and middleNode.pos then
+                                            pos2 = middleNode.pos + UP_VECTOR
+                                        else
+                                            -- Fallback: use the actual door point if middle doesn't exist
+                                            pos2 = otherNode.pos + UP_VECTOR
+                                        end
+                                    end
+                                end
+                            end
                             local s1 = client.WorldToScreen(pos1)
                             local s2 = client.WorldToScreen(pos2)
                             if s1 and s2 then
