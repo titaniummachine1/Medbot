@@ -69,6 +69,7 @@ local SmartJump = require("MedBot.Bot.SmartJump")
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")
+local DoorSystem = require("MedBot.Navigation.DoorSystem")
 
 --[[ Setup ]]
 local Lib = Common.Lib
@@ -270,6 +271,1253 @@ if entities.GetLocalPlayer() then
 end
 
 Log:Info("MedBot modular system initialized - %d modules loaded", 7)
+
+end)
+__bundle_register("MedBot.Navigation.DoorSystem", function(require, _LOADED, __bundle_register, __bundle_modules)
+--[[
+Door System - Black Box API for Door Generation and Management
+Provides a simple, extensible interface for all door-related operations.
+Prioritizes readability and maintainability over performance.
+
+API:
+- DoorSystem.GenerateDoorsForAreas(area1, area2) - Generate doors between areas
+- DoorSystem.ProcessConnectionDoors(connection) - Process doors for a connection
+- DoorSystem.GetDoorById(id) - Get door by ID
+- DoorSystem.RegisterProcessor(name, processor) - Add custom door processing
+]]
+
+local DoorSystem = {}
+
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
+local DoorGenerator = require("MedBot.Navigation.DoorGenerator")
+local DoorRegistry = require("MedBot.Navigation.DoorRegistry")
+
+local Log = Common.Log.new("DoorSystem")
+
+-- Processing pipeline for extensible door operations
+local processors = {}
+
+-- ============================================================================
+-- PUBLIC API
+-- ============================================================================
+
+---Generate doors for a connection between two areas
+---@param area1 table First area
+---@param area2 table Second area
+---@return table|nil Generated door data, or nil if no door created
+function DoorSystem.GenerateDoorsForAreas(area1, area2)
+    if not area1 or not area2 then
+        Log:Warn("GenerateDoorsForAreas: Missing area data")
+        return nil
+    end
+
+    -- Generate door geometry
+    local door = DoorGenerator.CreateDoorForAreas(area1, area2)
+    if not door then
+        return nil
+    end
+
+    -- Register the door
+    DoorRegistry.RegisterDoor(door)
+
+    -- Run processing pipeline
+    DoorSystem._RunProcessors(door, "postGenerate")
+
+    return door
+end
+
+---Process doors for an existing connection
+---@param connection table Connection data with door information
+function DoorSystem.ProcessConnectionDoors(connection)
+    if not connection or not connection.doors then
+        return
+    end
+
+    for _, doorId in ipairs(connection.doors) do
+        local door = DoorRegistry.GetDoor(doorId)
+        if door then
+            DoorSystem._RunProcessors(door, "process")
+        end
+    end
+end
+
+---Get door by ID
+---@param id any Door identifier
+---@return table|nil Door data or nil if not found
+function DoorSystem.GetDoorById(id)
+    return DoorRegistry.GetDoor(id)
+end
+
+---Register a custom door processor
+---@param name string Processor name for identification
+---@param processor table Processor with process function
+function DoorSystem.RegisterProcessor(name, processor)
+    if not processor or type(processor.process) ~= "function" then
+        Log:Warn("RegisterProcessor: Invalid processor for '%s'", name)
+        return
+    end
+
+    processors[name] = processor
+    Log:Info("Registered door processor: %s", name)
+end
+
+---Get all registered doors
+---@return table Array of all doors
+function DoorSystem.GetAllDoors()
+    return DoorRegistry.GetAllDoors()
+end
+
+---Clear all doors (for cleanup/reset)
+function DoorSystem.ClearAllDoors()
+    DoorRegistry.ClearAllDoors()
+    Log:Info("Cleared all doors")
+end
+
+-- ============================================================================
+-- INTERNAL METHODS
+-- ============================================================================
+
+---Run processing pipeline for a door
+---@param door table Door data
+---@param stage string Processing stage ("postGenerate", "process", etc.)
+function DoorSystem._RunProcessors(door, stage)
+    for name, processor in pairs(processors) do
+        if processor[stage] then
+            local success, err = pcall(processor[stage], door)
+            if not success then
+                Log:Warn("Processor '%s' failed in stage '%s': %s", name, stage, err)
+            end
+        end
+    end
+end
+
+-- ============================================================================
+-- INITIALIZATION
+-- ============================================================================
+
+---Initialize the door system
+function DoorSystem.Initialize()
+    Log:Info("Door System initialized")
+end
+
+return DoorSystem
+
+end)
+__bundle_register("MedBot.Navigation.DoorRegistry", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  DoorRegistry.lua  ·  Centralized door lookup system
+--##########################################################################
+
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
+
+local DoorRegistry = {}
+local Log = Common.Log.new("DoorRegistry")
+
+-- Central door storage: doorId -> {left, middle, right, needJump, owner}
+local doors = {}
+
+-- Generate unique door ID for area pair (order-independent)
+local function getDoorId(areaIdA, areaIdB)
+	local minId = math.min(areaIdA, areaIdB)
+	local maxId = math.max(areaIdA, areaIdB)
+	return minId .. "_" .. maxId
+end
+
+-- Store door geometry in central registry
+function DoorRegistry.RegisterDoor(areaIdA, areaIdB, doorData)
+	if not doorData then
+		return false
+	end
+
+	local doorId = getDoorId(areaIdA, areaIdB)
+	doors[doorId] = {
+		left = doorData.left,
+		middle = doorData.middle,
+		right = doorData.right,
+		needJump = doorData.needJump,
+		owner = doorData.owner,
+	}
+	return true
+end
+
+-- Get door geometry for area pair
+function DoorRegistry.GetDoor(areaIdA, areaIdB)
+	local doorId = getDoorId(areaIdA, areaIdB)
+	return doors[doorId]
+end
+
+-- Get optimal door point for pathfinding (closest to destination)
+function DoorRegistry.GetDoorTarget(areaIdA, areaIdB, destinationPos)
+	local door = DoorRegistry.GetDoor(areaIdA, areaIdB)
+	if not door then
+		return nil
+	end
+
+	-- If no destination specified, use middle
+	if not destinationPos then
+		return door.middle
+	end
+
+	-- Choose closest door position to destination
+	local doorPositions = {}
+	if door.left then
+		table.insert(doorPositions, door.left)
+	end
+	if door.middle then
+		table.insert(doorPositions, door.middle)
+	end
+	if door.right then
+		table.insert(doorPositions, door.right)
+	end
+
+	if #doorPositions == 0 then
+		return nil
+	end
+
+	local bestPos = doorPositions[1]
+	local bestDist = (doorPositions[1] - destinationPos):Length()
+
+	for i = 2, #doorPositions do
+		local dist = (doorPositions[i] - destinationPos):Length()
+		if dist < bestDist then
+			bestPos = doorPositions[i]
+			bestDist = dist
+		end
+	end
+
+	return bestPos
+end
+
+-- Clear all doors (for map changes)
+function DoorRegistry.Clear()
+	doors = {}
+	Log:Info("Door registry cleared")
+end
+
+-- Get door count for debugging
+function DoorRegistry.GetDoorCount()
+	local count = 0
+	for _ in pairs(doors) do
+		count = count + 1
+	end
+	return count
+end
+
+return DoorRegistry
+
+end)
+__bundle_register("MedBot.Core.Globals", function(require, _LOADED, __bundle_register, __bundle_modules)
+local DefaultConfig = require("MedBot.Utils.DefaultConfig")
+-- Define the G module
+local G = {}
+
+G.Menu = DefaultConfig
+
+G.Default = {
+	entity = nil,
+	index = 1,
+	team = 1,
+	Class = 1,
+	flags = 1,
+	OnGround = true,
+	Origin = Vector3(0, 0, 0),
+	ViewAngles = EulerAngles(90, 0, 0),
+	Viewheight = Vector3(0, 0, 75),
+	VisPos = Vector3(0, 0, 75),
+	vHitbox = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 45) },
+}
+
+G.pLocal = G.Default
+
+G.World_Default = {
+	players = {},
+	healthPacks = {}, -- Stores positions of health packs
+	spawns = {}, -- Stores positions of spawn points
+	payloads = {}, -- Stores payload entities in payload maps
+	flags = {}, -- Stores flag entities in CTF maps (implicitly included in the logic)
+}
+
+G.World = G.World_Default
+
+G.Misc = {
+	NodeTouchDistance = 24,
+	NodeTouchHeight = 82,
+	workLimit = 1,
+}
+
+G.Navigation = {
+	path = nil,
+	nodes = nil,
+	currentNodeIndex = 1, -- Current node we're moving towards (1 = first node in path)
+	currentNodeTicks = 0,
+	stuckStartTick = nil, -- Track when we first entered stuck state
+	FirstAgentNode = 1,
+	SecondAgentNode = 2,
+	lastKnownTargetPosition = nil, -- Remember last position of follow target
+	goalPos = nil, -- Current goal world position
+	goalNodeId = nil, -- Closest node to the goal position
+	navMeshUpdated = false, -- Set when navmesh is rebuilt
+	-- Node skipping system
+	lastSkipCheckTick = 0, -- Last tick when we performed skip check
+	nextNodeCloser = false, -- Flag indicating if next node is closer
+}
+
+-- SmartJump integration
+G.ShouldJump = false -- Set by SmartJump module when jump should be performed
+G.LastSmartJumpAttempt = 0 -- Track last time SmartJump was attempted
+G.LastEmergencyJump = 0 -- Track last emergency jump time
+G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
+G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
+
+-- SmartJump configuration
+G.Menu.SmartJump = {
+	Enable = true,
+	Debug = false,
+}
+
+-- SmartJump runtime state and constants
+G.SmartJump = G.SmartJump
+	or {
+		-- Constants (must be defined first)
+		Constants = {
+			GRAVITY = 800, -- Gravity per second squared
+			JUMP_FORCE = 271, -- Initial vertical boost for a duck jump
+			MAX_JUMP_HEIGHT = Vector3(0, 0, 72), -- Maximum jump height vector
+			MAX_WALKABLE_ANGLE = 45, -- Maximum angle considered walkable
+
+			-- State definitions
+			STATE_IDLE = "STATE_IDLE",
+			STATE_PREPARE_JUMP = "STATE_PREPARE_JUMP",
+			STATE_CTAP = "STATE_CTAP",
+			STATE_ASCENDING = "STATE_ASCENDING",
+			STATE_DESCENDING = "STATE_DESCENDING",
+		},
+
+		-- Runtime state
+		jumpState = "STATE_IDLE",
+		ShouldJump = false,
+		LastSmartJumpAttempt = 0,
+		LastEmergencyJump = 0,
+		ObstacleDetected = false,
+		RequestEmergencyJump = false,
+
+		-- Movement state
+		SimulationPath = {},
+		PredPos = nil,
+		JumpPeekPos = nil,
+		HitObstacle = false,
+		lastAngle = nil,
+		stateStartTime = 0,
+		lastState = nil,
+		lastJumpTime = 0,
+		LastObstacleHeight = 0,
+	}
+
+-- Bot movement tracking (for SmartJump integration)
+G.BotIsMoving = false -- Track if bot is actively moving
+G.BotMovementDirection = Vector3(0, 0, 0) -- Bot's intended movement direction
+
+-- Memory management and cache tracking
+G.Cache = {
+	lastCleanup = 0,
+	cleanupInterval = 500, -- Clean up every 500 ticks (~8 seconds) instead of 2000
+	maxCacheSize = 1000, -- Maximum number of cached items
+}
+
+G.Tasks = {
+	None = 0,
+	Objective = 1,
+	Follow = 2,
+	Health = 3,
+	Medic = 4,
+	Goto = 5,
+}
+
+G.Current_Tasks = {}
+G.Current_Task = G.Tasks.Objective
+
+G.Benchmark = {
+	MemUsage = 0,
+}
+
+-- Define states
+G.States = {
+	IDLE = "IDLE",
+	PATHFINDING = "PATHFINDING",
+	MOVING = "MOVING",
+	STUCK = "STUCK",
+}
+
+G.currentState = nil
+G.prevState = nil -- Track previous bot state
+G.wasManualWalking = false -- Track if user manually walked last tick
+
+return G
+
+end)
+__bundle_register("MedBot.Utils.DefaultConfig", function(require, _LOADED, __bundle_register, __bundle_modules)
+local defaultconfig
+defaultconfig = {
+	Tab = "Main",
+	Tabs = {
+		Main = true,
+		Settings = false,
+		Visuals = false,
+		Movement = false,
+	},
+
+	Main = {
+		Enable = true,
+		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
+		shouldfindhealth = true, -- Path to health
+		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
+		smoothFactor = 0.05,
+		LookingAhead = true, -- Enable automatic camera rotation towards target node
+		WalkableMode = "Smooth", -- "Smooth" uses 18-unit steps, "Aggressive" allows 72-unit jumps
+		CleanupConnections = true, -- Cleanup invalid connections during map load (disable to prevent crashes)
+		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
+		Duck_Grab = true,
+		Debug = false, -- Enable debug logging across all modules
+	},
+	Visuals = {
+		EnableVisuals = true,
+		connectionDepth = 4, -- Flood-fill depth: how many connection steps from player to visualize (1-50)
+		memoryUsage = true,
+		drawPath = true, -- Draws the path to the current goal
+		showConnections = true, -- Show connections between nodes
+		showAreas = true, -- Show area outlines
+		showDoors = true,
+		showCornerConnections = true, -- Show corner connections
+	},
+	Movement = {
+		lookatpath = true, -- Look at where we are walking
+		smoothLookAtPath = true, -- Set this to true to enable smooth look at path
+		Smart_Jump = true, -- jumps perfectly before obstacle to be at peek of jump height when at colision point
+	},
+	SmartJump = {
+		Enable = true,
+		Debug = false,
+	},
+}
+
+return defaultconfig
+
+end)
+__bundle_register("MedBot.Core.Common", function(require, _LOADED, __bundle_register, __bundle_modules)
+---@diagnostic disable: duplicate-set-field, undefined-field
+---@class Common
+local Common = {}
+
+--[[ Imports ]]
+-- Use literal require to allow luabundle to treat it as an external/static require
+local libLoaded, Lib = pcall(require, "LNXlib")
+assert(libLoaded, "LNXlib not found, please install it!")
+assert(Lib.GetVersion() >= 1.0, "LNXlib version is too old, please update it!")
+
+Common.Lib = Lib
+Common.Notify = Lib.UI.Notify
+Common.TF2 = Lib.TF2
+Common.Log = Lib.Utils.Logger
+Common.Math = Lib.Utils.Math
+Common.Conversion = Lib.Utils.Conversion
+Common.WPlayer = Lib.TF2.WPlayer
+Common.PR = Lib.TF2.PlayerResource
+Common.Helpers = Lib.TF2.Helpers
+
+-- JSON support
+local JSON = {}
+function JSON.parse(str)
+	-- Simple JSON parser for basic objects/arrays
+	if not str or str == "" then
+		return nil
+	end
+
+	-- Remove whitespace
+	str = str:gsub("%s+", "")
+
+	-- Handle simple object
+	if str:match("^{.-}$") then
+		local result = {}
+		for k, v in str:gmatch('"([^"]+)":([^,}]+)') do
+			if v:match('^".*"$') then
+				result[k] = v:sub(2, -2) -- Remove quotes
+			elseif v == "true" then
+				result[k] = true
+			elseif v == "false" then
+				result[k] = false
+			elseif tonumber(v) then
+				result[k] = tonumber(v)
+			end
+		end
+		return result
+	end
+
+	return nil
+end
+
+function JSON.stringify(obj)
+	if type(obj) ~= "table" then
+		return tostring(obj)
+	end
+
+	local parts = {}
+	for k, v in pairs(obj) do
+		local key = '"' .. tostring(k) .. '"'
+		local value
+		if type(v) == "string" then
+			value = '"' .. v .. '"'
+		elseif type(v) == "boolean" then
+			value = tostring(v)
+		else
+			value = tostring(v)
+		end
+		table.insert(parts, key .. ":" .. value)
+	end
+	return "{" .. table.concat(parts, ",") .. "}"
+end
+
+Common.JSON = JSON
+
+-- Vector helpers
+function Common.Normalize(vec)
+	return vec / vec:Length()
+end
+
+-- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
+function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
+	assert(start_pos and end_pos, "Common.DrawArrowLine: start_pos and end_pos are required")
+	assert(
+		arrowhead_length and arrowhead_width,
+		"Common.DrawArrowLine: arrowhead_length and arrowhead_width are required"
+	)
+
+	-- If invert is true, swap start_pos and end_pos
+	if invert then
+		start_pos, end_pos = end_pos, start_pos
+	end
+
+	-- Calculate direction from start to end
+	local direction = end_pos - start_pos
+	local direction_length = direction:Length()
+	assert(direction_length > 0, "Common.DrawArrowLine: start_pos and end_pos cannot be the same")
+
+	-- Normalize the direction vector safely
+	local normalized_direction = direction / direction_length
+
+	-- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
+	local arrow_base = end_pos - normalized_direction * arrowhead_length
+
+	-- Calculate the perpendicular vector for the arrow width
+	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
+
+	-- Convert world positions to screen positions
+	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
+	local w2s_arrow_base = client.WorldToScreen(arrow_base)
+	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
+	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
+
+	-- Only draw if all screen positions are valid
+	if w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2 then
+		-- Set color before drawing
+		draw.Color(255, 255, 255, 255) -- White for arrows
+
+		-- Draw the line from start to the base of the arrow (not all the way to the end)
+		draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
+
+		-- Draw the sides of the arrowhead
+		draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
+		draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
+
+		-- Optionally, draw the base of the arrowhead to close it
+		draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
+	end
+end
+
+function Common.VectorToString(vec)
+	if not vec then
+		return "nil"
+	end
+	return string.format("(%.1f, %.1f, %.1f)", vec.x, vec.y, vec.z)
+end
+
+-- Distance helpers (legacy compatibility - use Distance module for new code)
+function Common.Distance2D(a, b)
+	return (a - b):Length2D()
+end
+
+function Common.Distance3D(a, b)
+	return (a - b):Length()
+end
+
+-- Dynamic hull size functions (access via Common for consistency)
+function Common.GetPlayerHull()
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal then
+		-- Fallback to hardcoded values if no player
+		return {
+			Min = Vector3(-24, -24, 0),
+			Max = Vector3(24, 24, 82),
+		}
+	end
+
+	-- Get dynamic hull size from player
+	return {
+		Min = pLocal:GetPropVector("m_vecMins") or Vector3(-24, -24, 0),
+		Max = pLocal:GetPropVector("m_vecMaxs") or Vector3(24, 24, 82),
+	}
+end
+
+function Common.GetHullMin()
+	return Common.GetPlayerHull().Min
+end
+
+function Common.GetHullMax()
+	return Common.GetPlayerHull().Max
+end
+
+-- Trace hull utilities (centralized for consistency)
+Common.Trace = {}
+
+function Common.Trace.Hull(startPos, endPos, hullMin, hullMax, mask, shouldHitEntity)
+	assert(startPos and endPos, "Trace.Hull: startPos and endPos are required")
+	assert(hullMin and hullMax, "Trace.Hull: hullMin and hullMax are required")
+
+	local mask = mask or MASK_PLAYERSOLID
+	local shouldHitEntity = shouldHitEntity or function(entity)
+		return entity ~= entities.GetLocalPlayer()
+	end
+
+	return engine.TraceHull(startPos, endPos, hullMin, hullMax, mask, shouldHitEntity)
+end
+
+function Common.Trace.PlayerHull(startPos, endPos, shouldHitEntity)
+	local hull = Common.GetPlayerHull()
+	return Common.Trace.Hull(startPos, endPos, hull.Min, hull.Max, MASK_PLAYERSOLID, shouldHitEntity)
+end
+
+-- Drawing utilities (centralized for consistency)
+Common.Drawing = {}
+
+function Common.Drawing.SetColor(r, g, b, a)
+	draw.Color(r, g, b, a)
+end
+
+function Common.Drawing.DrawLine(x1, y1, x2, y2)
+	draw.Line(x1, y1, x2, y2)
+end
+
+function Common.Drawing.WorldToScreen(worldPos)
+	return client.WorldToScreen(worldPos)
+end
+
+function Common.Drawing.Draw3DBox(size, pos)
+	local halfSize = size / 2
+	-- Recompute corners every call to ensure correct size; caching caused wrong sizes
+	local corners = {
+		Vector3(-halfSize, -halfSize, -halfSize),
+		Vector3(halfSize, -halfSize, -halfSize),
+		Vector3(halfSize, halfSize, -halfSize),
+		Vector3(-halfSize, halfSize, -halfSize),
+		Vector3(-halfSize, -halfSize, halfSize),
+		Vector3(halfSize, -halfSize, halfSize),
+		Vector3(halfSize, halfSize, halfSize),
+		Vector3(-halfSize, halfSize, halfSize),
+	}
+
+	local linesToDraw = {
+		{ 1, 2 },
+		{ 2, 3 },
+		{ 3, 4 },
+		{ 4, 1 },
+		{ 5, 6 },
+		{ 6, 7 },
+		{ 7, 8 },
+		{ 8, 5 },
+		{ 1, 5 },
+		{ 2, 6 },
+		{ 3, 7 },
+		{ 4, 8 },
+	}
+
+	local screenPositions = {}
+	for _, cornerPos in ipairs(corners) do
+		local worldPos = pos + cornerPos
+		local screenPos = Common.Drawing.WorldToScreen(worldPos)
+		if screenPos then
+			table.insert(screenPositions, { x = screenPos[1], y = screenPos[2] })
+		end
+	end
+
+	for _, line in ipairs(linesToDraw) do
+		local p1, p2 = screenPositions[line[1]], screenPositions[line[2]]
+		if p1 and p2 then
+			Common.Drawing.DrawLine(p1.x, p1.y, p2.x, p2.y)
+		end
+	end
+end
+
+-- Dynamic values cache (updated periodically to avoid repeated cvar calls)
+Common.Dynamic = {
+	LastUpdate = 0,
+	UpdateInterval = 1.0, -- Update every second
+	Values = {},
+}
+
+function Common.Dynamic.Update()
+	local currentTime = globals.RealTime()
+	if currentTime - Common.Dynamic.LastUpdate < Common.Dynamic.UpdateInterval then
+		return -- Not time to update yet
+	end
+
+	Common.Dynamic.LastUpdate = currentTime
+
+	-- Update dynamic values from cvars and player properties
+	local pLocal = entities.GetLocalPlayer()
+	if pLocal then
+		Common.Dynamic.Values.MaxSpeed = pLocal:GetPropFloat("m_flMaxspeed") or 450
+		Common.Dynamic.Values.StepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or 18
+		Common.Dynamic.Values.HullMin = pLocal:GetPropVector("m_vecMins") or Vector3(-24, -24, 0)
+		Common.Dynamic.Values.HullMax = pLocal:GetPropVector("m_vecMaxs") or Vector3(24, 24, 82)
+	end
+
+	Common.Dynamic.Values.Gravity = client.GetConVar("sv_gravity") or 800
+	Common.Dynamic.Values.TickInterval = globals.TickInterval()
+end
+
+function Common.Dynamic.GetMaxSpeed()
+	Common.Dynamic.Update()
+	return Common.Dynamic.Values.MaxSpeed or 450
+end
+
+function Common.Dynamic.GetStepSize()
+	Common.Dynamic.Update()
+	return Common.Dynamic.Values.StepSize or 18
+end
+
+function Common.Dynamic.GetGravity()
+	Common.Dynamic.Update()
+	return Common.Dynamic.Values.Gravity or 800
+end
+
+function Common.Dynamic.GetTickInterval()
+	Common.Dynamic.Update()
+	return Common.Dynamic.Values.TickInterval or (1 / 66.67)
+end
+
+function Common.Dynamic.GetHullMin()
+	Common.Dynamic.Update()
+	return Common.Dynamic.Values.HullMin or Vector3(-24, -24, 0)
+end
+
+function Common.Dynamic.GetHullMax()
+	Common.Dynamic.Update()
+	return Common.Dynamic.Values.HullMax or Vector3(24, 24, 82)
+end
+
+-- Performance optimization utilities
+Common.Cache = {}
+
+function Common.Cache.GetOrCompute(key, computeFunc, ttl)
+	local currentTime = globals.RealTime()
+	local cached = Common.Cache[key]
+
+	if cached and (currentTime - cached.time) < (ttl or 1.0) then
+		return cached.value
+	end
+
+	local value = computeFunc()
+	Common.Cache[key] = { value = value, time = currentTime }
+	return value
+end
+
+function Common.Cache.Clear()
+	Common.Cache = {}
+end
+
+-- Optimized math operations
+function Common.Math.Clamp(value, min, max)
+	return math.max(min, math.min(max, value))
+end
+
+function Common.Math.DistanceSquared(a, b)
+	local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+	return dx * dx + dy * dy + dz * dz
+end
+
+-- Debug logging wrapper that respects the general debug setting
+function Common.DebugLog(level, ...)
+	local G = require("MedBot.Core.Globals")
+	if G.Menu.Main.Debug then
+		Common.Log[level](...)
+	end
+end
+
+return Common
+
+end)
+__bundle_register("MedBot.Navigation.DoorGenerator", function(require, _LOADED, __bundle_register, __bundle_modules)
+--[[
+Door Generator - Core Door Geometry Generation
+Generates door geometry between navigation areas.
+Focuses on clean, readable door creation algorithms.
+]]
+
+local DoorGenerator = {}
+
+local Common = require("MedBot.Core.Common")
+local MathUtils = require("MedBot.Utils.MathUtils")
+
+local Log = Common.Log.new("DoorGenerator")
+
+-- ============================================================================
+-- DOOR GEOMETRY CALCULATION
+-- ============================================================================
+
+---Calculate door points on a single edge
+---@param edge table Edge data with start/end points
+---@param center Vector3 Center point for door
+---@param width number Door width
+---@return table Door points {left, middle, right}
+function DoorGenerator.CalculateDoorPoints(edge, center, width)
+    local edgeVector = edge.endPos - edge.startPos
+    local edgeLength = edgeVector:Length()
+
+    if edgeLength == 0 then
+        return nil -- Invalid edge
+    end
+
+    -- Find closest point on edge to center
+    local toCenter = center - edge.startPos
+    local projection = toCenter:Dot(edgeVector) / (edgeLength * edgeLength)
+
+    -- Clamp to edge bounds
+    projection = MathUtils.Clamp(projection, 0, 1)
+
+    -- Calculate door center on edge
+    local doorCenter = edge.startPos + edgeVector * projection
+
+    -- Calculate door extent along edge
+    local halfWidth = width / 2
+    local edgeDir = edgeVector:Normalized()
+    local offset = edgeDir * halfWidth
+
+    -- Ensure door stays within edge bounds
+    local leftDist = (doorCenter - edge.startPos):Length()
+    local rightDist = (edge.endPos - doorCenter):Length()
+
+    if leftDist < halfWidth then
+        offset = edgeDir * leftDist
+    elseif rightDist < halfWidth then
+        offset = edgeDir * -rightDist
+    end
+
+    return {
+        left = doorCenter - offset,
+        middle = doorCenter,
+        right = doorCenter + offset
+    }
+end
+
+---Create door geometry between two areas
+---@param area1 table First area with corner data
+---@param area2 table Second area with corner data
+---@return table|nil Door data or nil if creation failed
+function DoorGenerator.CreateDoorForAreas(area1, area2)
+    if not area1 or not area2 then
+        Log:Warn("CreateDoorForAreas: Missing area data")
+        return nil
+    end
+
+    -- Find facing edges between areas
+    local edge1, edge2 = DoorGenerator.FindFacingEdges(area1, area2)
+    if not edge1 or not edge2 then
+        return nil -- No facing edges found
+    end
+
+    -- Calculate door center
+    local center = DoorGenerator.CalculateDoorCenter(edge1, edge2)
+
+    -- Generate door points on both edges
+    local doorPoints1 = DoorGenerator.CalculateDoorPoints(edge1, center, 32) -- Standard door width
+    local doorPoints2 = DoorGenerator.CalculateDoorPoints(edge2, center, 32)
+
+    if not doorPoints1 or not doorPoints2 then
+        return nil
+    end
+
+    -- Create door data structure
+    local door = {
+        id = DoorGenerator.GenerateDoorId(area1, area2),
+        owner = area1.id, -- Higher area owns the door
+        left = doorPoints1.left,
+        middle = doorPoints1.middle,
+        right = doorPoints1.right,
+        zMin = math.min(edge1.zMin or 0, edge2.zMin or 0),
+        zMax = math.max(edge1.zMax or 0, edge2.zMax or 0),
+        areas = {area1.id, area2.id},
+        edge1 = edge1,
+        edge2 = edge2
+    }
+
+    return door
+end
+
+---Find edges that face each other between two areas
+---@param area1 table First area
+---@param area2 table Second area
+---@return table|nil, table|nil Facing edges or nil if not found
+function DoorGenerator.FindFacingEdges(area1, area2)
+    -- This would contain the logic to find which edges face each other
+    -- Simplified for readability - actual implementation would check edge normals
+    -- and proximity between areas
+
+    -- Placeholder - actual implementation would be more complex
+    local edge1 = DoorGenerator.GetAreaEdges(area1)[1] -- First edge of area1
+    local edge2 = DoorGenerator.GetAreaEdges(area2)[1] -- First edge of area2
+
+    return edge1, edge2
+end
+
+---Calculate center point for door between two edges
+---@param edge1 table First edge
+---@param edge2 table Second edge
+---@return Vector3 Center point
+function DoorGenerator.CalculateDoorCenter(edge1, edge2)
+    -- Calculate midpoint between edge centers
+    local edge1Center = (edge1.startPos + edge1.endPos) / 2
+    local edge2Center = (edge2.startPos + edge2.endPos) / 2
+
+    return (edge1Center + edge2Center) / 2
+end
+
+---Get edges for an area
+---@param area table Area data
+---@return table Array of edge data
+function DoorGenerator.GetAreaEdges(area)
+    -- Convert area corners to edges
+    local edges = {}
+    local corners = area.corners or {}
+
+    for i = 1, #corners do
+        local startCorner = corners[i]
+        local endCorner = corners[i % #corners + 1]
+
+        edges[#edges + 1] = {
+            startPos = Vector3(startCorner.x, startCorner.y, startCorner.z),
+            endPos = Vector3(endCorner.x, endCorner.y, endCorner.z),
+            zMin = startCorner.z,
+            zMax = endCorner.z
+        }
+    end
+
+    return edges
+end
+
+---Generate unique door ID
+---@param area1 table First area
+---@param area2 table Second area
+---@return string Unique door identifier
+function DoorGenerator.GenerateDoorId(area1, area2)
+    local id1 = math.min(area1.id, area2.id)
+    local id2 = math.max(area1.id, area2.id)
+    return string.format("door_%d_%d", id1, id2)
+end
+
+return DoorGenerator
+
+end)
+__bundle_register("MedBot.Utils.MathUtils", function(require, _LOADED, __bundle_register, __bundle_modules)
+--[[
+MedBot Math Utilities Module
+Consolidated math functions used across the codebase
+--]]
+
+local MathUtils = {}
+
+-- ============================================================================
+-- CONSTANTS
+-- ============================================================================
+
+local DEG_TO_RAD = math.pi / 180
+local RAD_TO_DEG = 180 / math.pi
+
+-- ============================================================================
+-- VECTOR MATH UTILITIES
+-- ============================================================================
+
+---Linear interpolation between two values
+---@param a number Start value
+---@param b number End value
+---@param t number Interpolation factor (0-1)
+---@return number Interpolated value
+function MathUtils.Lerp(a, b, t)
+	return a + (b - a) * t
+end
+
+---Linear interpolation between two Vector3 values
+---@param a Vector3 Start vector
+---@param b Vector3 End vector
+---@param t number Interpolation factor (0-1)
+---@return Vector3 Interpolated vector
+function MathUtils.LerpVec(a, b, t)
+	return Vector3(MathUtils.Lerp(a.x, b.x, t), MathUtils.Lerp(a.y, b.y, t), MathUtils.Lerp(a.z, b.z, t))
+end
+
+---Clamp a value between min and max
+---@param value number Value to clamp
+---@param min number Minimum value
+---@param max number Maximum value
+---@return number Clamped value
+function MathUtils.Clamp(value, min, max)
+	return math.max(min, math.min(max, value))
+end
+
+---Clamp a Vector3 between min and max values
+---@param vec Vector3 Vector to clamp
+---@param min number Minimum value
+---@param max number Maximum value
+---@return Vector3 Clamped vector
+function MathUtils.ClampVec(vec, min, max)
+	return Vector3(MathUtils.Clamp(vec.x, min, max), MathUtils.Clamp(vec.y, min, max), MathUtils.Clamp(vec.z, min, max))
+end
+
+---Convert degrees to radians
+---@param degrees number Angle in degrees
+---@return number Angle in radians
+function MathUtils.DegToRad(degrees)
+	return degrees * DEG_TO_RAD
+end
+
+---Convert radians to degrees
+---@param radians number Angle in radians
+---@return number Angle in degrees
+function MathUtils.RadToDeg(radians)
+	return radians * RAD_TO_DEG
+end
+
+---Calculate 2D distance between two Vector3 points
+---@param a Vector3 First point
+---@param b Vector3 Second point
+---@return number Distance between points
+function MathUtils.Distance2D(a, b)
+	return (a - b):Length2D()
+end
+
+---Calculate 3D distance between two Vector3 points
+---@param a Vector3 First point
+---@param b Vector3 Second point
+---@return number Distance between points
+function MathUtils.Distance(a, b)
+	return (a - b):Length()
+end
+
+---Rotate a vector around the Y axis by the given angle (in radians)
+---@param vector Vector3 Vector to rotate
+---@param angle number Rotation angle in radians
+---@return Vector3 Rotated vector
+function MathUtils.RotateVectorByYaw(vector, angle)
+	local cos = math.cos(angle)
+	local sin = math.sin(angle)
+	return Vector3(cos * vector.x - sin * vector.y, sin * vector.x + cos * vector.y, vector.z)
+end
+
+---Get the angle between two vectors
+---@param a Vector3 First vector
+---@param b Vector3 Second vector
+---@return number Angle in radians
+function MathUtils.AngleBetweenVectors(a, b)
+	local dot = a:Dot(b)
+	local lenA = a:Length()
+	local lenB = b:Length()
+	if lenA == 0 or lenB == 0 then
+		return 0
+	end
+	local cos = dot / (lenA * lenB)
+	return math.acos(MathUtils.Clamp(cos, -1, 1))
+end
+
+---Get the angle between two vectors (in degrees)
+---@param a Vector3 First vector
+---@param b Vector3 Second vector
+---@return number Angle in degrees
+function MathUtils.AngleBetweenVectorsDeg(a, b)
+	return MathUtils.RadToDeg(MathUtils.AngleBetweenVectors(a, b))
+end
+
+-- ============================================================================
+-- GEOMETRY UTILITIES
+-- ============================================================================
+
+---Calculate the normal of a triangle given three points
+---@param p1 Vector3 First point
+---@param p2 Vector3 Second point
+---@param p3 Vector3 Third point
+---@return Vector3 Normal vector
+function MathUtils.CalculateTriangleNormal(p1, p2, p3)
+	local u = p2 - p1
+	local v = p3 - p1
+	return Vector3(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x)
+end
+
+---Check if a point is inside a triangle
+---@param point Vector3 Point to check
+---@param tri1 Vector3 Triangle vertex 1
+---@param tri2 Vector3 Triangle vertex 2
+---@param tri3 Vector3 Triangle vertex 3
+---@return boolean True if point is inside triangle
+function MathUtils.IsPointInTriangle(point, tri1, tri2, tri3)
+	local function sign(p1, p2, p3)
+		return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
+	end
+
+	local d1 = sign(point, tri1, tri2)
+	local d2 = sign(point, tri2, tri3)
+	local d3 = sign(point, tri3, tri1)
+
+	local has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+	local has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+
+	return not (has_neg and has_pos)
+end
+
+---Calculate the area of a triangle
+---@param p1 Vector3 Triangle vertex 1
+---@param p2 Vector3 Triangle vertex 2
+---@param p3 Vector3 Triangle vertex 3
+---@return number Triangle area
+function MathUtils.TriangleArea(p1, p2, p3)
+	local a = MathUtils.Distance3D(p1, p2)
+	local b = MathUtils.Distance3D(p2, p3)
+	local c = MathUtils.Distance3D(p3, p1)
+	local s = (a + b + c) / 2
+	return math.sqrt(s * (s - a) * (s - b) * (s - c))
+end
+
+-- ============================================================================
+-- INTERPOLATION AND EASING
+-- ============================================================================
+
+---Smooth step function (0-1 range)
+---@param t number Input value (0-1)
+---@return number Smooth stepped value
+function MathUtils.SmoothStep(t)
+	t = MathUtils.Clamp(t, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
+---Smooth step function with custom edges
+---@param t number Input value
+---@param edge0 number Lower edge
+---@param edge1 number Upper edge
+---@return number Smooth stepped value
+function MathUtils.SmoothStepRange(t, edge0, edge1)
+	local x = (t - edge0) / (edge1 - edge0)
+	return MathUtils.SmoothStep(MathUtils.Clamp(x, 0, 1))
+end
+
+---Quadratic easing in (acceleration from zero velocity)
+---@param t number Input value (0-1)
+---@return number Eased value
+function MathUtils.EaseInQuad(t)
+	return t * t
+end
+
+---Quadratic easing out (deceleration to zero velocity)
+---@param t number Input value (0-1)
+---@return number Eased value
+function MathUtils.EaseOutQuad(t)
+	return t * (2 - t)
+end
+
+---Quadratic easing in-out
+---@param t number Input value (0-1)
+---@return number Eased value
+function MathUtils.EaseInOutQuad(t)
+	if t < 0.5 then
+		return 2 * t * t
+	else
+		return -1 + (4 - 2 * t) * t
+	end
+end
+
+-- ============================================================================
+-- ARRAY AND TABLE UTILITIES
+-- ============================================================================
+
+---Find the minimum value in an array
+---@param array number[] Array of numbers
+---@return number Minimum value
+function MathUtils.Min(array)
+	local min = array[1]
+	for i = 2, #array do
+		if array[i] < min then
+			min = array[i]
+		end
+	end
+	return min
+end
+
+---Find the maximum value in an array
+---@param array number[] Array of numbers
+---@return number Maximum value
+function MathUtils.Max(array)
+	local max = array[1]
+	for i = 2, #array do
+		if array[i] > max then
+			max = array[i]
+		end
+	end
+	return max
+end
+
+---Calculate the average of an array
+---@param array number[] Array of numbers
+---@return number Average value
+function MathUtils.Average(array)
+	local sum = 0
+	for _, value in ipairs(array) do
+		sum = sum + value
+	end
+	return sum / #array
+end
+
+---Calculate the median of an array
+---@param array number[] Array of numbers
+---@return number Median value
+function MathUtils.Median(array)
+	local temp = {}
+	for _, value in ipairs(array) do
+		table.insert(temp, value)
+	end
+	table.sort(temp)
+
+	local count = #temp
+	if count % 2 == 0 then
+		return (temp[count / 2] + temp[count / 2 + 1]) / 2
+	else
+		return temp[math.ceil(count / 2)]
+	end
+end
+
+---Round a number to the nearest integer
+---@param value number Value to round
+---@return integer Rounded integer
+function MathUtils.Round(value)
+	return math.floor(value + 0.5)
+end
+
+---Round a number to specified decimal places
+---@param value number Value to round
+---@param decimals number Number of decimal places
+---@return number Rounded number
+function MathUtils.RoundTo(value, decimals)
+	local mult = 10 ^ decimals
+	return math.floor(value * mult + 0.5) / mult
+end
+
+return MathUtils
 
 end)
 __bundle_register("MedBot.Menu", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -513,203 +1761,6 @@ callbacks.Unregister("Draw", "MedBot.DrawMenu")
 callbacks.Register("Draw", "MedBot.DrawMenu", OnDrawMenu)
 
 return MenuModule
-
-end)
-__bundle_register("MedBot.Core.Globals", function(require, _LOADED, __bundle_register, __bundle_modules)
-local DefaultConfig = require("MedBot.Utils.DefaultConfig")
--- Define the G module
-local G = {}
-
-G.Menu = DefaultConfig
-
-G.Default = {
-	entity = nil,
-	index = 1,
-	team = 1,
-	Class = 1,
-	flags = 1,
-	OnGround = true,
-	Origin = Vector3(0, 0, 0),
-	ViewAngles = EulerAngles(90, 0, 0),
-	Viewheight = Vector3(0, 0, 75),
-	VisPos = Vector3(0, 0, 75),
-	vHitbox = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 45) },
-}
-
-G.pLocal = G.Default
-
-G.World_Default = {
-	players = {},
-	healthPacks = {}, -- Stores positions of health packs
-	spawns = {}, -- Stores positions of spawn points
-	payloads = {}, -- Stores payload entities in payload maps
-	flags = {}, -- Stores flag entities in CTF maps (implicitly included in the logic)
-}
-
-G.World = G.World_Default
-
-G.Misc = {
-	NodeTouchDistance = 24,
-	NodeTouchHeight = 82,
-	workLimit = 1,
-}
-
-G.Navigation = {
-	path = nil,
-	nodes = nil,
-	currentNodeIndex = 1, -- Current node we're moving towards (1 = first node in path)
-	currentNodeTicks = 0,
-	stuckStartTick = nil, -- Track when we first entered stuck state
-	FirstAgentNode = 1,
-	SecondAgentNode = 2,
-	lastKnownTargetPosition = nil, -- Remember last position of follow target
-	goalPos = nil, -- Current goal world position
-	goalNodeId = nil, -- Closest node to the goal position
-	navMeshUpdated = false, -- Set when navmesh is rebuilt
-	-- Node skipping system
-	lastSkipCheckTick = 0, -- Last tick when we performed skip check
-	nextNodeCloser = false, -- Flag indicating if next node is closer
-}
-
--- SmartJump integration
-G.ShouldJump = false -- Set by SmartJump module when jump should be performed
-G.LastSmartJumpAttempt = 0 -- Track last time SmartJump was attempted
-G.LastEmergencyJump = 0 -- Track last emergency jump time
-G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
-G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
-
--- SmartJump configuration
-G.Menu.SmartJump = {
-	Enable = true,
-	Debug = false,
-}
-
--- SmartJump runtime state and constants
-G.SmartJump = G.SmartJump
-	or {
-		-- Constants (must be defined first)
-		Constants = {
-			GRAVITY = 800, -- Gravity per second squared
-			JUMP_FORCE = 271, -- Initial vertical boost for a duck jump
-			MAX_JUMP_HEIGHT = Vector3(0, 0, 72), -- Maximum jump height vector
-			MAX_WALKABLE_ANGLE = 45, -- Maximum angle considered walkable
-
-			-- State definitions
-			STATE_IDLE = "STATE_IDLE",
-			STATE_PREPARE_JUMP = "STATE_PREPARE_JUMP",
-			STATE_CTAP = "STATE_CTAP",
-			STATE_ASCENDING = "STATE_ASCENDING",
-			STATE_DESCENDING = "STATE_DESCENDING",
-		},
-
-		-- Runtime state
-		jumpState = "STATE_IDLE",
-		ShouldJump = false,
-		LastSmartJumpAttempt = 0,
-		LastEmergencyJump = 0,
-		ObstacleDetected = false,
-		RequestEmergencyJump = false,
-
-		-- Movement state
-		SimulationPath = {},
-		PredPos = nil,
-		JumpPeekPos = nil,
-		HitObstacle = false,
-		lastAngle = nil,
-		stateStartTime = 0,
-		lastState = nil,
-		lastJumpTime = 0,
-		LastObstacleHeight = 0,
-	}
-
--- Bot movement tracking (for SmartJump integration)
-G.BotIsMoving = false -- Track if bot is actively moving
-G.BotMovementDirection = Vector3(0, 0, 0) -- Bot's intended movement direction
-
--- Memory management and cache tracking
-G.Cache = {
-	lastCleanup = 0,
-	cleanupInterval = 500, -- Clean up every 500 ticks (~8 seconds) instead of 2000
-	maxCacheSize = 1000, -- Maximum number of cached items
-}
-
-G.Tasks = {
-	None = 0,
-	Objective = 1,
-	Follow = 2,
-	Health = 3,
-	Medic = 4,
-	Goto = 5,
-}
-
-G.Current_Tasks = {}
-G.Current_Task = G.Tasks.Objective
-
-G.Benchmark = {
-	MemUsage = 0,
-}
-
--- Define states
-G.States = {
-	IDLE = "IDLE",
-	PATHFINDING = "PATHFINDING",
-	MOVING = "MOVING",
-	STUCK = "STUCK",
-}
-
-G.currentState = nil
-G.prevState = nil -- Track previous bot state
-G.wasManualWalking = false -- Track if user manually walked last tick
-
-return G
-
-end)
-__bundle_register("MedBot.Utils.DefaultConfig", function(require, _LOADED, __bundle_register, __bundle_modules)
-local defaultconfig
-defaultconfig = {
-	Tab = "Main",
-	Tabs = {
-		Main = true,
-		Settings = false,
-		Visuals = false,
-		Movement = false,
-	},
-
-	Main = {
-		Enable = true,
-		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
-		shouldfindhealth = true, -- Path to health
-		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
-		smoothFactor = 0.05,
-		LookingAhead = true, -- Enable automatic camera rotation towards target node
-		WalkableMode = "Smooth", -- "Smooth" uses 18-unit steps, "Aggressive" allows 72-unit jumps
-		CleanupConnections = true, -- Cleanup invalid connections during map load (disable to prevent crashes)
-		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
-		Duck_Grab = true,
-		Debug = false, -- Enable debug logging across all modules
-	},
-	Visuals = {
-		EnableVisuals = true,
-		connectionDepth = 4, -- Flood-fill depth: how many connection steps from player to visualize (1-50)
-		memoryUsage = true,
-		drawPath = true, -- Draws the path to the current goal
-		showConnections = true, -- Show connections between nodes
-		showAreas = true, -- Show area outlines
-		showDoors = true,
-		showCornerConnections = true, -- Show corner connections
-	},
-	Movement = {
-		lookatpath = true, -- Look at where we are walking
-		smoothLookAtPath = true, -- Set this to true to enable smooth look at path
-		Smart_Jump = true, -- jumps perfectly before obstacle to be at peek of jump height when at colision point
-	},
-	SmartJump = {
-		Enable = true,
-		Debug = false,
-	},
-}
-
-return defaultconfig
 
 end)
 __bundle_register("MedBot.Utils.Config", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -1434,358 +2485,6 @@ end
 return json
 
 end)
-__bundle_register("MedBot.Core.Common", function(require, _LOADED, __bundle_register, __bundle_modules)
----@diagnostic disable: duplicate-set-field, undefined-field
----@class Common
-local Common = {}
-
---[[ Imports ]]
--- Use literal require to allow luabundle to treat it as an external/static require
-local libLoaded, Lib = pcall(require, "LNXlib")
-assert(libLoaded, "LNXlib not found, please install it!")
-assert(Lib.GetVersion() >= 1.0, "LNXlib version is too old, please update it!")
-
-Common.Lib = Lib
-Common.Notify = Lib.UI.Notify
-Common.TF2 = Lib.TF2
-Common.Log = Lib.Utils.Logger
-Common.Math = Lib.Utils.Math
-Common.Conversion = Lib.Utils.Conversion
-Common.WPlayer = Lib.TF2.WPlayer
-Common.PR = Lib.TF2.PlayerResource
-Common.Helpers = Lib.TF2.Helpers
-
--- JSON support
-local JSON = {}
-function JSON.parse(str)
-	-- Simple JSON parser for basic objects/arrays
-	if not str or str == "" then
-		return nil
-	end
-
-	-- Remove whitespace
-	str = str:gsub("%s+", "")
-
-	-- Handle simple object
-	if str:match("^{.-}$") then
-		local result = {}
-		for k, v in str:gmatch('"([^"]+)":([^,}]+)') do
-			if v:match('^".*"$') then
-				result[k] = v:sub(2, -2) -- Remove quotes
-			elseif v == "true" then
-				result[k] = true
-			elseif v == "false" then
-				result[k] = false
-			elseif tonumber(v) then
-				result[k] = tonumber(v)
-			end
-		end
-		return result
-	end
-
-	return nil
-end
-
-function JSON.stringify(obj)
-	if type(obj) ~= "table" then
-		return tostring(obj)
-	end
-
-	local parts = {}
-	for k, v in pairs(obj) do
-		local key = '"' .. tostring(k) .. '"'
-		local value
-		if type(v) == "string" then
-			value = '"' .. v .. '"'
-		elseif type(v) == "boolean" then
-			value = tostring(v)
-		else
-			value = tostring(v)
-		end
-		table.insert(parts, key .. ":" .. value)
-	end
-	return "{" .. table.concat(parts, ",") .. "}"
-end
-
-Common.JSON = JSON
-
--- Vector helpers
-function Common.Normalize(vec)
-	return vec / vec:Length()
-end
-
--- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
-function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
-	assert(start_pos and end_pos, "Common.DrawArrowLine: start_pos and end_pos are required")
-	assert(
-		arrowhead_length and arrowhead_width,
-		"Common.DrawArrowLine: arrowhead_length and arrowhead_width are required"
-	)
-
-	-- If invert is true, swap start_pos and end_pos
-	if invert then
-		start_pos, end_pos = end_pos, start_pos
-	end
-
-	-- Calculate direction from start to end
-	local direction = end_pos - start_pos
-	local direction_length = direction:Length()
-	assert(direction_length > 0, "Common.DrawArrowLine: start_pos and end_pos cannot be the same")
-
-	-- Normalize the direction vector safely
-	local normalized_direction = direction / direction_length
-
-	-- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
-	local arrow_base = end_pos - normalized_direction * arrowhead_length
-
-	-- Calculate the perpendicular vector for the arrow width
-	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
-
-	-- Convert world positions to screen positions
-	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-	local w2s_arrow_base = client.WorldToScreen(arrow_base)
-	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
-	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
-
-	-- Only draw if all screen positions are valid
-	if w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2 then
-		-- Set color before drawing
-		draw.Color(255, 255, 255, 255) -- White for arrows
-
-		-- Draw the line from start to the base of the arrow (not all the way to the end)
-		draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
-
-		-- Draw the sides of the arrowhead
-		draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
-		draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
-
-		-- Optionally, draw the base of the arrowhead to close it
-		draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
-	end
-end
-
-function Common.VectorToString(vec)
-	if not vec then
-		return "nil"
-	end
-	return string.format("(%.1f, %.1f, %.1f)", vec.x, vec.y, vec.z)
-end
-
--- Distance helpers (legacy compatibility - use Distance module for new code)
-function Common.Distance2D(a, b)
-	return (a - b):Length2D()
-end
-
-function Common.Distance3D(a, b)
-	return (a - b):Length()
-end
-
--- Dynamic hull size functions (access via Common for consistency)
-function Common.GetPlayerHull()
-	local pLocal = entities.GetLocalPlayer()
-	if not pLocal then
-		-- Fallback to hardcoded values if no player
-		return {
-			Min = Vector3(-24, -24, 0),
-			Max = Vector3(24, 24, 82),
-		}
-	end
-
-	-- Get dynamic hull size from player
-	return {
-		Min = pLocal:GetPropVector("m_vecMins") or Vector3(-24, -24, 0),
-		Max = pLocal:GetPropVector("m_vecMaxs") or Vector3(24, 24, 82),
-	}
-end
-
-function Common.GetHullMin()
-	return Common.GetPlayerHull().Min
-end
-
-function Common.GetHullMax()
-	return Common.GetPlayerHull().Max
-end
-
--- Trace hull utilities (centralized for consistency)
-Common.Trace = {}
-
-function Common.Trace.Hull(startPos, endPos, hullMin, hullMax, mask, shouldHitEntity)
-	assert(startPos and endPos, "Trace.Hull: startPos and endPos are required")
-	assert(hullMin and hullMax, "Trace.Hull: hullMin and hullMax are required")
-
-	local mask = mask or MASK_PLAYERSOLID
-	local shouldHitEntity = shouldHitEntity or function(entity)
-		return entity ~= entities.GetLocalPlayer()
-	end
-
-	return engine.TraceHull(startPos, endPos, hullMin, hullMax, mask, shouldHitEntity)
-end
-
-function Common.Trace.PlayerHull(startPos, endPos, shouldHitEntity)
-	local hull = Common.GetPlayerHull()
-	return Common.Trace.Hull(startPos, endPos, hull.Min, hull.Max, MASK_PLAYERSOLID, shouldHitEntity)
-end
-
--- Drawing utilities (centralized for consistency)
-Common.Drawing = {}
-
-function Common.Drawing.SetColor(r, g, b, a)
-	draw.Color(r, g, b, a)
-end
-
-function Common.Drawing.DrawLine(x1, y1, x2, y2)
-	draw.Line(x1, y1, x2, y2)
-end
-
-function Common.Drawing.WorldToScreen(worldPos)
-	return client.WorldToScreen(worldPos)
-end
-
-function Common.Drawing.Draw3DBox(size, pos)
-	local halfSize = size / 2
-	-- Recompute corners every call to ensure correct size; caching caused wrong sizes
-	local corners = {
-		Vector3(-halfSize, -halfSize, -halfSize),
-		Vector3(halfSize, -halfSize, -halfSize),
-		Vector3(halfSize, halfSize, -halfSize),
-		Vector3(-halfSize, halfSize, -halfSize),
-		Vector3(-halfSize, -halfSize, halfSize),
-		Vector3(halfSize, -halfSize, halfSize),
-		Vector3(halfSize, halfSize, halfSize),
-		Vector3(-halfSize, halfSize, halfSize),
-	}
-
-	local linesToDraw = {
-		{ 1, 2 },
-		{ 2, 3 },
-		{ 3, 4 },
-		{ 4, 1 },
-		{ 5, 6 },
-		{ 6, 7 },
-		{ 7, 8 },
-		{ 8, 5 },
-		{ 1, 5 },
-		{ 2, 6 },
-		{ 3, 7 },
-		{ 4, 8 },
-	}
-
-	local screenPositions = {}
-	for _, cornerPos in ipairs(corners) do
-		local worldPos = pos + cornerPos
-		local screenPos = Common.Drawing.WorldToScreen(worldPos)
-		if screenPos then
-			table.insert(screenPositions, { x = screenPos[1], y = screenPos[2] })
-		end
-	end
-
-	for _, line in ipairs(linesToDraw) do
-		local p1, p2 = screenPositions[line[1]], screenPositions[line[2]]
-		if p1 and p2 then
-			Common.Drawing.DrawLine(p1.x, p1.y, p2.x, p2.y)
-		end
-	end
-end
-
--- Dynamic values cache (updated periodically to avoid repeated cvar calls)
-Common.Dynamic = {
-	LastUpdate = 0,
-	UpdateInterval = 1.0, -- Update every second
-	Values = {},
-}
-
-function Common.Dynamic.Update()
-	local currentTime = globals.RealTime()
-	if currentTime - Common.Dynamic.LastUpdate < Common.Dynamic.UpdateInterval then
-		return -- Not time to update yet
-	end
-
-	Common.Dynamic.LastUpdate = currentTime
-
-	-- Update dynamic values from cvars and player properties
-	local pLocal = entities.GetLocalPlayer()
-	if pLocal then
-		Common.Dynamic.Values.MaxSpeed = pLocal:GetPropFloat("m_flMaxspeed") or 450
-		Common.Dynamic.Values.StepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or 18
-		Common.Dynamic.Values.HullMin = pLocal:GetPropVector("m_vecMins") or Vector3(-24, -24, 0)
-		Common.Dynamic.Values.HullMax = pLocal:GetPropVector("m_vecMaxs") or Vector3(24, 24, 82)
-	end
-
-	Common.Dynamic.Values.Gravity = client.GetConVar("sv_gravity") or 800
-	Common.Dynamic.Values.TickInterval = globals.TickInterval()
-end
-
-function Common.Dynamic.GetMaxSpeed()
-	Common.Dynamic.Update()
-	return Common.Dynamic.Values.MaxSpeed or 450
-end
-
-function Common.Dynamic.GetStepSize()
-	Common.Dynamic.Update()
-	return Common.Dynamic.Values.StepSize or 18
-end
-
-function Common.Dynamic.GetGravity()
-	Common.Dynamic.Update()
-	return Common.Dynamic.Values.Gravity or 800
-end
-
-function Common.Dynamic.GetTickInterval()
-	Common.Dynamic.Update()
-	return Common.Dynamic.Values.TickInterval or (1 / 66.67)
-end
-
-function Common.Dynamic.GetHullMin()
-	Common.Dynamic.Update()
-	return Common.Dynamic.Values.HullMin or Vector3(-24, -24, 0)
-end
-
-function Common.Dynamic.GetHullMax()
-	Common.Dynamic.Update()
-	return Common.Dynamic.Values.HullMax or Vector3(24, 24, 82)
-end
-
--- Performance optimization utilities
-Common.Cache = {}
-
-function Common.Cache.GetOrCompute(key, computeFunc, ttl)
-	local currentTime = globals.RealTime()
-	local cached = Common.Cache[key]
-
-	if cached and (currentTime - cached.time) < (ttl or 1.0) then
-		return cached.value
-	end
-
-	local value = computeFunc()
-	Common.Cache[key] = { value = value, time = currentTime }
-	return value
-end
-
-function Common.Cache.Clear()
-	Common.Cache = {}
-end
-
--- Optimized math operations
-function Common.Math.Clamp(value, min, max)
-	return math.max(min, math.min(max, value))
-end
-
-function Common.Math.DistanceSquared(a, b)
-	local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
-	return dx * dx + dy * dy + dz * dz
-end
-
--- Debug logging wrapper that respects the general debug setting
-function Common.DebugLog(level, ...)
-	local G = require("MedBot.Core.Globals")
-	if G.Menu.Main.Debug then
-		Common.Log[level](...)
-	end
-end
-
-return Common
-
-end)
 __bundle_register("MedBot.Visuals", function(require, _LOADED, __bundle_register, __bundle_modules)
 --[[ Imports ]]
 local Common = require("MedBot.Core.Common")
@@ -2195,37 +2894,23 @@ local function OnDraw()
                 local cDir = node.c[dir]
                 if cDir and cDir.connections then
                     for _, conn in ipairs(cDir.connections) do
-                        local doorLeft = conn.left and (conn.left + UP_VECTOR)
-                        local doorMid = conn.middle and (conn.middle + UP_VECTOR)
-                        local doorRight = conn.right and (conn.right + UP_VECTOR)
-                        if doorLeft and doorMid and doorRight then
-                            local sL = client.WorldToScreen(doorLeft)
-                            local sM = client.WorldToScreen(doorMid)
-                            local sR = client.WorldToScreen(doorRight)
-                            if sL and sM and sR then
-                                -- Door line - blue for whole door
-                                draw.Color(0, 180, 255, 220)
-                                draw.Line(sL[1], sL[2], sR[1], sR[2])
-                                -- Left and right ticks - blue
-                                draw.Color(0, 180, 255, 255)
-                                draw.FilledRect(sL[1] - 2, sL[2] - 2, sL[1] + 2, sL[2] + 2)
-                                draw.FilledRect(sR[1] - 2, sR[2] - 2, sR[1] + 2, sR[2] + 2)
-                                -- Middle marker - also blue (consistent color)
-                                draw.Color(0, 180, 255, 255)
-                                draw.FilledRect(sM[1] - 2, sM[2] - 2, sM[1] + 2, sM[2] + 2)
-                            else
-                                -- If only two points present (left/right), compute middle as midpoint
-                                local sL2 = doorLeft and client.WorldToScreen(doorLeft)
-                                local sR2 = doorRight and client.WorldToScreen(doorRight)
-                                if sL2 and sR2 then
-                                    draw.Color(0, 180, 255, 220)
-                                    draw.Line(sL2[1], sL2[2], sR2[1], sR2[2])
-                                    draw.Color(0, 180, 255, 255)
-                                    draw.FilledRect(sL2[1] - 2, sL2[2] - 2, sL2[1] + 2, sL2[2] + 2)
-                                    draw.FilledRect(sR2[1] - 2, sR2[2] - 2, sR2[1] + 2, sR2[2] + 2)
-                                end
+                        -- Handle new door node format: connections are now door node IDs
+                        local targetId = (type(conn) == "table") and conn.node or conn
+                        local doorNode = G.Navigation.nodes and G.Navigation.nodes[targetId]
+
+                        if doorNode and doorNode.isDoor then
+                            -- Door node exists - get its position
+                            local doorPos = doorNode.pos + UP_VECTOR
+                            local doorScreen = client.WorldToScreen(doorPos)
+
+                            if doorScreen then
+                                -- Draw door marker as a single point (since doors are now individual nodes)
+                                draw.Color(0, 180, 255, 255) -- Blue for door nodes
+                                draw.FilledRect(doorScreen[1] - 3, doorScreen[2] - 3,
+                                              doorScreen[1] + 3, doorScreen[2] + 3)
                             end
                         end
+                        -- Removed fallback door drawing - doors are now always individual nodes
                     end
                 end
             end
@@ -2248,6 +2933,7 @@ local function OnDraw()
                 end
                 scr[i] = { s[1], s[2] }
             end
+            -- Only draw if all corners are visible on screen
             if ok then
                 -- filled polygon
                 fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
@@ -2490,298 +3176,6 @@ callbacks.Unregister("Draw", "MCT_Draw")       -- unregister the "Draw" callback
 callbacks.Register("Draw", "MCT_Draw", OnDraw) -- Register the "Draw" callback
 
 return Visuals
-
-end)
-__bundle_register("MedBot.Utils.MathUtils", function(require, _LOADED, __bundle_register, __bundle_modules)
---[[
-MedBot Math Utilities Module
-Consolidated math functions used across the codebase
---]]
-
-local MathUtils = {}
-
--- ============================================================================
--- CONSTANTS
--- ============================================================================
-
-local DEG_TO_RAD = math.pi / 180
-local RAD_TO_DEG = 180 / math.pi
-
--- ============================================================================
--- VECTOR MATH UTILITIES
--- ============================================================================
-
----Linear interpolation between two values
----@param a number Start value
----@param b number End value
----@param t number Interpolation factor (0-1)
----@return number Interpolated value
-function MathUtils.Lerp(a, b, t)
-	return a + (b - a) * t
-end
-
----Linear interpolation between two Vector3 values
----@param a Vector3 Start vector
----@param b Vector3 End vector
----@param t number Interpolation factor (0-1)
----@return Vector3 Interpolated vector
-function MathUtils.LerpVec(a, b, t)
-	return Vector3(MathUtils.Lerp(a.x, b.x, t), MathUtils.Lerp(a.y, b.y, t), MathUtils.Lerp(a.z, b.z, t))
-end
-
----Clamp a value between min and max
----@param value number Value to clamp
----@param min number Minimum value
----@param max number Maximum value
----@return number Clamped value
-function MathUtils.Clamp(value, min, max)
-	return math.max(min, math.min(max, value))
-end
-
----Clamp a Vector3 between min and max values
----@param vec Vector3 Vector to clamp
----@param min number Minimum value
----@param max number Maximum value
----@return Vector3 Clamped vector
-function MathUtils.ClampVec(vec, min, max)
-	return Vector3(MathUtils.Clamp(vec.x, min, max), MathUtils.Clamp(vec.y, min, max), MathUtils.Clamp(vec.z, min, max))
-end
-
----Convert degrees to radians
----@param degrees number Angle in degrees
----@return number Angle in radians
-function MathUtils.DegToRad(degrees)
-	return degrees * DEG_TO_RAD
-end
-
----Convert radians to degrees
----@param radians number Angle in radians
----@return number Angle in degrees
-function MathUtils.RadToDeg(radians)
-	return radians * RAD_TO_DEG
-end
-
----Calculate 2D distance between two Vector3 points
----@param a Vector3 First point
----@param b Vector3 Second point
----@return number Distance between points
-function MathUtils.Distance2D(a, b)
-	return (a - b):Length2D()
-end
-
----Calculate 3D distance between two Vector3 points
----@param a Vector3 First point
----@param b Vector3 Second point
----@return number Distance between points
-function MathUtils.Distance(a, b)
-	return (a - b):Length()
-end
-
----Rotate a vector around the Y axis by the given angle (in radians)
----@param vector Vector3 Vector to rotate
----@param angle number Rotation angle in radians
----@return Vector3 Rotated vector
-function MathUtils.RotateVectorByYaw(vector, angle)
-	local cos = math.cos(angle)
-	local sin = math.sin(angle)
-	return Vector3(cos * vector.x - sin * vector.y, sin * vector.x + cos * vector.y, vector.z)
-end
-
----Get the angle between two vectors
----@param a Vector3 First vector
----@param b Vector3 Second vector
----@return number Angle in radians
-function MathUtils.AngleBetweenVectors(a, b)
-	local dot = a:Dot(b)
-	local lenA = a:Length()
-	local lenB = b:Length()
-	if lenA == 0 or lenB == 0 then
-		return 0
-	end
-	local cos = dot / (lenA * lenB)
-	return math.acos(MathUtils.Clamp(cos, -1, 1))
-end
-
----Get the angle between two vectors (in degrees)
----@param a Vector3 First vector
----@param b Vector3 Second vector
----@return number Angle in degrees
-function MathUtils.AngleBetweenVectorsDeg(a, b)
-	return MathUtils.RadToDeg(MathUtils.AngleBetweenVectors(a, b))
-end
-
--- ============================================================================
--- GEOMETRY UTILITIES
--- ============================================================================
-
----Calculate the normal of a triangle given three points
----@param p1 Vector3 First point
----@param p2 Vector3 Second point
----@param p3 Vector3 Third point
----@return Vector3 Normal vector
-function MathUtils.CalculateTriangleNormal(p1, p2, p3)
-	local u = p2 - p1
-	local v = p3 - p1
-	return Vector3(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x)
-end
-
----Check if a point is inside a triangle
----@param point Vector3 Point to check
----@param tri1 Vector3 Triangle vertex 1
----@param tri2 Vector3 Triangle vertex 2
----@param tri3 Vector3 Triangle vertex 3
----@return boolean True if point is inside triangle
-function MathUtils.IsPointInTriangle(point, tri1, tri2, tri3)
-	local function sign(p1, p2, p3)
-		return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
-	end
-
-	local d1 = sign(point, tri1, tri2)
-	local d2 = sign(point, tri2, tri3)
-	local d3 = sign(point, tri3, tri1)
-
-	local has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
-	local has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
-
-	return not (has_neg and has_pos)
-end
-
----Calculate the area of a triangle
----@param p1 Vector3 Triangle vertex 1
----@param p2 Vector3 Triangle vertex 2
----@param p3 Vector3 Triangle vertex 3
----@return number Triangle area
-function MathUtils.TriangleArea(p1, p2, p3)
-	local a = MathUtils.Distance3D(p1, p2)
-	local b = MathUtils.Distance3D(p2, p3)
-	local c = MathUtils.Distance3D(p3, p1)
-	local s = (a + b + c) / 2
-	return math.sqrt(s * (s - a) * (s - b) * (s - c))
-end
-
--- ============================================================================
--- INTERPOLATION AND EASING
--- ============================================================================
-
----Smooth step function (0-1 range)
----@param t number Input value (0-1)
----@return number Smooth stepped value
-function MathUtils.SmoothStep(t)
-	t = MathUtils.Clamp(t, 0, 1)
-	return t * t * (3 - 2 * t)
-end
-
----Smooth step function with custom edges
----@param t number Input value
----@param edge0 number Lower edge
----@param edge1 number Upper edge
----@return number Smooth stepped value
-function MathUtils.SmoothStepRange(t, edge0, edge1)
-	local x = (t - edge0) / (edge1 - edge0)
-	return MathUtils.SmoothStep(MathUtils.Clamp(x, 0, 1))
-end
-
----Quadratic easing in (acceleration from zero velocity)
----@param t number Input value (0-1)
----@return number Eased value
-function MathUtils.EaseInQuad(t)
-	return t * t
-end
-
----Quadratic easing out (deceleration to zero velocity)
----@param t number Input value (0-1)
----@return number Eased value
-function MathUtils.EaseOutQuad(t)
-	return t * (2 - t)
-end
-
----Quadratic easing in-out
----@param t number Input value (0-1)
----@return number Eased value
-function MathUtils.EaseInOutQuad(t)
-	if t < 0.5 then
-		return 2 * t * t
-	else
-		return -1 + (4 - 2 * t) * t
-	end
-end
-
--- ============================================================================
--- ARRAY AND TABLE UTILITIES
--- ============================================================================
-
----Find the minimum value in an array
----@param array number[] Array of numbers
----@return number Minimum value
-function MathUtils.Min(array)
-	local min = array[1]
-	for i = 2, #array do
-		if array[i] < min then
-			min = array[i]
-		end
-	end
-	return min
-end
-
----Find the maximum value in an array
----@param array number[] Array of numbers
----@return number Maximum value
-function MathUtils.Max(array)
-	local max = array[1]
-	for i = 2, #array do
-		if array[i] > max then
-			max = array[i]
-		end
-	end
-	return max
-end
-
----Calculate the average of an array
----@param array number[] Array of numbers
----@return number Average value
-function MathUtils.Average(array)
-	local sum = 0
-	for _, value in ipairs(array) do
-		sum = sum + value
-	end
-	return sum / #array
-end
-
----Calculate the median of an array
----@param array number[] Array of numbers
----@return number Median value
-function MathUtils.Median(array)
-	local temp = {}
-	for _, value in ipairs(array) do
-		table.insert(temp, value)
-	end
-	table.sort(temp)
-
-	local count = #temp
-	if count % 2 == 0 then
-		return (temp[count / 2] + temp[count / 2 + 1]) / 2
-	else
-		return temp[math.ceil(count / 2)]
-	end
-end
-
----Round a number to the nearest integer
----@param value number Value to round
----@return integer Rounded integer
-function MathUtils.Round(value)
-	return math.floor(value + 0.5)
-end
-
----Round a number to specified decimal places
----@param value number Value to round
----@param decimals number Number of decimal places
----@return number Rounded number
-function MathUtils.RoundTo(value, decimals)
-	local mult = 10 ^ decimals
-	return math.floor(value * mult + 0.5) / mult
-end
-
-return MathUtils
 
 end)
 __bundle_register("MedBot.Navigation.ISWalkable", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -3211,7 +3605,7 @@ function Node.RemoveConnection(nodeA, nodeB)
 	end
 end
 
--- Pathfinding adjacency - proper door-based movement rules
+-- Door-aware adjacency: handles areas, doors, and door-to-door connections
 function Node.GetAdjacentNodesSimple(node, nodes)
 	local neighbors = {}
 
@@ -3219,125 +3613,22 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 		return neighbors
 	end
 
-	-- For door-based pathfinding, we need to know if we're at a center or door position
-	local currentPos = node.doorPos or node.pos
-	local currentAreaId = node.id
-	local currentDoorDir = node.doorDir -- Track which direction we entered this area from
-
 	for dirId, dir in pairs(node.c) do
 		if dir.connections then
 			for _, connection in ipairs(dir.connections) do
 				local targetId = ConnectionUtils.GetNodeId(connection)
 				local targetNode = nodes[targetId]
 
-				if targetNode and type(connection) == "table" then
-					local targetAreaId = targetId
-
-					-- Add door positions as neighbors (left, middle, right)
-					local doorPositions = {}
-					if connection.left then table.insert(doorPositions, {pos = connection.left, name = "left"}) end
-					if connection.middle then table.insert(doorPositions, {pos = connection.middle, name = "middle"}) end
-					if connection.right then table.insert(doorPositions, {pos = connection.right, name = "right"}) end
-
-					for _, doorInfo in ipairs(doorPositions) do
-						local doorPos = doorInfo.pos
-						local doorName = doorInfo.name
-
-						-- Create a "door node" with area info
-						local doorNode = {
-							id = targetAreaId,
-							pos = doorPos,
-							doorPos = doorPos,
-							doorDir = dirId, -- Direction this door faces
-							areaId = targetAreaId,
-							isDoor = true
-						}
-
-						-- Cost is distance from current position to door
-						local cost = (currentPos - doorPos):Length()
-
-						table.insert(neighbors, {
-							node = doorNode,
-							cost = cost,
-							isDoor = true,
-							doorPos = doorPos,
-							doorDir = dirId
-						})
-					end
+				if targetNode then
+					-- Simple adjacency - just return connected nodes
+					local cost = (node.pos - targetNode.pos):Length()
+					table.insert(neighbors, {
+						node = targetNode,
+						cost = cost,
+					})
 				end
 			end
 		end
-	end
-
-	-- If we're at a door, we can also move to other doors in the same area
-	-- (except doors on the same boundary we entered from)
-	if node.isDoor and node.areaId then
-		local currentArea = nodes[node.areaId]
-		if currentArea and currentArea.c then
-			for dirId, dir in pairs(currentArea.c) do
-				-- Skip doors on the same boundary direction we entered from
-				if currentDoorDir and dirId == currentDoorDir then
-					goto continueDir
-				end
-
-				if dir.connections then
-					for _, connection in ipairs(dir.connections) do
-						if type(connection) == "table" then
-							local doorPositions = {}
-							if connection.left then table.insert(doorPositions, {pos = connection.left, name = "left"}) end
-							if connection.middle then table.insert(doorPositions, {pos = connection.middle, name = "middle"}) end
-							if connection.right then table.insert(doorPositions, {pos = connection.right, name = "right"}) end
-
-							for _, doorInfo in ipairs(doorPositions) do
-								local doorPos = doorInfo.pos
-
-								-- Don't go back to the same door we're at
-								if (doorPos - node.doorPos):Length() < 1 then
-									goto continueDoor
-								end
-
-								local doorNode = {
-									id = node.areaId,
-									pos = doorPos,
-									doorPos = doorPos,
-									doorDir = dirId,
-									areaId = node.areaId,
-									isDoor = true
-								}
-
-								local cost = (node.doorPos - doorPos):Length()
-
-								table.insert(neighbors, {
-									node = doorNode,
-									cost = cost,
-									isDoor = true,
-									doorPos = doorPos,
-									doorDir = dirId
-								})
-
-								::continueDoor::
-							end
-						end
-					end
-				end
-				::continueDir::
-			end
-		end
-
-		-- From a door, can also return to the center of the current area
-		local centerNode = {
-			id = node.areaId,
-			pos = nodes[node.areaId].pos,
-			areaId = node.areaId,
-			isDoor = false
-		}
-
-		local cost = (node.doorPos - nodes[node.areaId].pos):Length()
-		table.insert(neighbors, {
-			node = centerNode,
-			cost = cost,
-			isDoor = false
-		})
 	end
 
 	return neighbors
@@ -3352,7 +3643,8 @@ function Node.GetAdjacentNodesOnly(node, nodes)
 	local adjacent = {}
 	local count = 0
 
-	for _, dir in ipairs(node.c) do
+	-- FIX: Use pairs() for named directional keys, not ipairs()
+	for _, dir in pairs(node.c) do
 		local connections = dir.connections
 		if connections then
 			for i = 1, #connections do
@@ -3412,110 +3704,6 @@ function Node.StopConnectionProcessing()
 end
 
 return Node
-
-end)
-__bundle_register("MedBot.Navigation.DoorRegistry", function(require, _LOADED, __bundle_register, __bundle_modules)
---##########################################################################
---  DoorRegistry.lua  ·  Centralized door lookup system
---##########################################################################
-
-local Common = require("MedBot.Core.Common")
-local G = require("MedBot.Core.Globals")
-
-local DoorRegistry = {}
-local Log = Common.Log.new("DoorRegistry")
-
--- Central door storage: doorId -> {left, middle, right, needJump, owner}
-local doors = {}
-
--- Generate unique door ID for area pair (order-independent)
-local function getDoorId(areaIdA, areaIdB)
-	local minId = math.min(areaIdA, areaIdB)
-	local maxId = math.max(areaIdA, areaIdB)
-	return minId .. "_" .. maxId
-end
-
--- Store door geometry in central registry
-function DoorRegistry.RegisterDoor(areaIdA, areaIdB, doorData)
-	if not doorData then
-		return false
-	end
-
-	local doorId = getDoorId(areaIdA, areaIdB)
-	doors[doorId] = {
-		left = doorData.left,
-		middle = doorData.middle,
-		right = doorData.right,
-		needJump = doorData.needJump,
-		owner = doorData.owner,
-	}
-	return true
-end
-
--- Get door geometry for area pair
-function DoorRegistry.GetDoor(areaIdA, areaIdB)
-	local doorId = getDoorId(areaIdA, areaIdB)
-	return doors[doorId]
-end
-
--- Get optimal door point for pathfinding (closest to destination)
-function DoorRegistry.GetDoorTarget(areaIdA, areaIdB, destinationPos)
-	local door = DoorRegistry.GetDoor(areaIdA, areaIdB)
-	if not door then
-		return nil
-	end
-
-	-- If no destination specified, use middle
-	if not destinationPos then
-		return door.middle
-	end
-
-	-- Choose closest door position to destination
-	local doorPositions = {}
-	if door.left then
-		table.insert(doorPositions, door.left)
-	end
-	if door.middle then
-		table.insert(doorPositions, door.middle)
-	end
-	if door.right then
-		table.insert(doorPositions, door.right)
-	end
-
-	if #doorPositions == 0 then
-		return nil
-	end
-
-	local bestPos = doorPositions[1]
-	local bestDist = (doorPositions[1] - destinationPos):Length()
-
-	for i = 2, #doorPositions do
-		local dist = (doorPositions[i] - destinationPos):Length()
-		if dist < bestDist then
-			bestPos = doorPositions[i]
-			bestDist = dist
-		end
-	end
-
-	return bestPos
-end
-
--- Clear all doors (for map changes)
-function DoorRegistry.Clear()
-	doors = {}
-	Log:Info("Door registry cleared")
-end
-
--- Get door count for debugging
-function DoorRegistry.GetDoorCount()
-	local count = 0
-	for _ in pairs(doors) do
-		count = count + 1
-	end
-	return count
-end
-
-return DoorRegistry
 
 end)
 __bundle_register("MedBot.Navigation.WallCornerDetector", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -4232,11 +4420,6 @@ function ConnectionBuilder.BuildDoorsForConnections()
 		end
 	end
 
-	-- First pass: clear any existing door flags
-	for _, node in pairs(nodes) do
-		node.isDoor = false
-	end
-
 	local doorsBuilt = 0
 	for nodeId, node in pairs(nodes) do
 		if node.c then
@@ -4250,56 +4433,101 @@ function ConnectionBuilder.BuildDoorsForConnections()
 							-- Always try to create doors, even for existing connections
 							local door = createDoorForAreas(node, targetNode)
 							if door then
-								-- Mark both nodes as doors
-								node.isDoor = true
-								targetNode.isDoor = true
+								-- Create actual door nodes in the navigation graph
+								local doorBaseId = nodeId .. "_" .. targetId
 
-								-- Ensure connection is a table before populating
+								-- Create left door node
+								if door.left then
+									local doorId = doorBaseId .. "_left"
+									nodes[doorId] = {
+										id = doorId,
+										pos = door.left,
+										isDoor = true,
+										areaId = nodeId,
+										targetAreaId = targetId,
+										direction = dirId,
+										c = {
+											[dirId] = { -- Connect to target area
+												connections = {targetId},
+												count = 1
+											}
+										}
+									}
+									doorsBuilt = doorsBuilt + 1
+								end
+
+								-- Create middle door node
+								if door.middle then
+									local doorId = doorBaseId .. "_middle"
+									nodes[doorId] = {
+										id = doorId,
+										pos = door.middle,
+										isDoor = true,
+										areaId = nodeId,
+										targetAreaId = targetId,
+										direction = dirId,
+										c = {
+											[dirId] = { -- Connect to target area
+												connections = {targetId},
+												count = 1
+											}
+										}
+									}
+									doorsBuilt = doorsBuilt + 1
+								end
+
+								-- Create right door node
+								if door.right then
+									local doorId = doorBaseId .. "_right"
+									nodes[doorId] = {
+										id = doorId,
+										pos = door.right,
+										isDoor = true,
+										areaId = nodeId,
+										targetAreaId = targetId,
+										direction = dirId,
+										c = {
+											[dirId] = { -- Connect to target area
+												connections = {targetId},
+												count = 1
+											}
+										}
+									}
+									doorsBuilt = doorsBuilt + 1
+								end
+
+								-- Update area connections to include door nodes
 								if type(connection) ~= "table" then
 									local norm = ConnectionUtils.NormalizeEntry(connection)
 									dir.connections[i] = norm
 									connection = norm
 								end
 
-								-- Populate on owner side
-								if door.owner == node.id then
-									connection.left = door.left
-									connection.middle = door.middle
-									connection.right = door.right
-									connection.needJump = door.needJump
-									connection.owner = door.owner
-									doorsBuilt = doorsBuilt + 1
-									Log:Debug(
-										"Built door for connection %d -> %d (owner: %d)",
-										nodeId,
-										targetId,
-										door.owner
-									)
+								-- Replace area-to-area connection with area-to-door connections
+								dir.connections[i] = nil -- Remove direct area connection
+								local doorConnections = {}
+
+								if door.left then
+									table.insert(doorConnections, nodeId .. "_" .. targetId .. "_left")
+								end
+								if door.middle then
+									table.insert(doorConnections, nodeId .. "_" .. targetId .. "_middle")
+								end
+								if door.right then
+									table.insert(doorConnections, nodeId .. "_" .. targetId .. "_right")
 								end
 
-								-- Mirror onto reverse connection so both directions share the same geometry
-								if nodes[targetId] and nodes[targetId].c then
-									for _, tdir in pairs(nodes[targetId].c) do
-										if tdir.connections then
-											for rIndex, revConn in ipairs(tdir.connections) do
-												local backId = ConnectionUtils.GetNodeId(revConn)
-												if backId == node.id then
-													if type(revConn) ~= "table" then
-														-- normalize inline if raw id, and write back
-														local norm = ConnectionUtils.NormalizeEntry(revConn)
-														tdir.connections[rIndex] = norm
-														revConn = norm
-													end
-													revConn.left = door.left
-													revConn.middle = door.middle
-													revConn.right = door.right
-													revConn.needJump = door.needJump
-													revConn.owner = door.owner
-												end
-											end
-										end
-									end
+								-- Replace the single area connection with multiple door connections
+								for j, doorConn in ipairs(doorConnections) do
+									dir.connections[i + j - 1] = doorConn
 								end
+
+								Log:Debug(
+									"Built door nodes for connection %d -> %d (owner: %d)",
+									nodeId,
+									targetId,
+									door.owner
+								)
 							end
 						end
 					end
@@ -4308,7 +4536,84 @@ function ConnectionBuilder.BuildDoorsForConnections()
 		end
 	end
 
-	Log:Info("Built " .. doorsBuilt .. " doors for connections")
+	-- Second pass: create door-to-door connections for optimization
+	ConnectionBuilder.BuildDoorToDoorConnections()
+
+	Log:Info("Built " .. doorsBuilt .. " door nodes for connections")
+end
+
+-- Determine spatial direction between two positions
+local function calculateSpatialDirection(fromPos, toPos)
+	local dx = toPos.x - fromPos.x
+	local dy = toPos.y - fromPos.y
+	
+	if math.abs(dx) >= math.abs(dy) then
+		return (dx > 0) and 4 or 8 -- East or West
+	else
+		return (dy > 0) and 2 or 1 -- South or North
+	end
+end
+
+-- Create optimized door-to-door connections
+function ConnectionBuilder.BuildDoorToDoorConnections()
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return
+	end
+
+	local connectionsAdded = 0
+	local doorsByArea = {}
+
+	-- Group doors by area for efficient lookup
+	for doorId, doorNode in pairs(nodes) do
+		if doorNode.isDoor and doorNode.areaId then
+			if not doorsByArea[doorNode.areaId] then
+				doorsByArea[doorNode.areaId] = {}
+			end
+			table.insert(doorsByArea[doorNode.areaId], doorNode)
+		end
+	end
+
+	-- Connect doors within each area
+	for areaId, doors in pairs(doorsByArea) do
+		for i = 1, #doors do
+			local doorA = doors[i]
+			
+			for j = 1, #doors do
+				if i ~= j then
+					local doorB = doors[j]
+					
+					-- Only connect doors on different sides (different direction)
+					if doorA.direction ~= doorB.direction then
+						-- Calculate spatial direction from A to B
+						local spatialDir = calculateSpatialDirection(doorA.pos, doorB.pos)
+						
+						if not doorA.c then doorA.c = {} end
+						if not doorA.c[spatialDir] then
+							doorA.c[spatialDir] = { connections = {}, count = 0 }
+						end
+
+						-- Check if already connected
+						local alreadyConnected = false
+						for _, conn in ipairs(doorA.c[spatialDir].connections) do
+							if ConnectionUtils.GetNodeId(conn) == doorB.id then
+								alreadyConnected = true
+								break
+							end
+						end
+
+						if not alreadyConnected then
+							table.insert(doorA.c[spatialDir].connections, doorB.id)
+							doorA.c[spatialDir].count = #doorA.c[spatialDir].connections
+							connectionsAdded = connectionsAdded + 1
+						end
+					end
+				end
+			end
+		end
+	end
+
+	Log:Info("Added " .. connectionsAdded .. " door-to-door connections for path optimization")
 end
 
 function ConnectionBuilder.GetConnectionEntry(nodeA, nodeB)
@@ -4321,7 +4626,16 @@ function ConnectionBuilder.GetConnectionEntry(nodeA, nodeB)
 			for _, connection in ipairs(dir.connections) do
 				local targetId = ConnectionUtils.GetNodeId(connection)
 				if targetId == nodeB.id then
-					return connection
+					-- Return connection info if it's a table, otherwise just the ID
+					if type(connection) == "table" then
+						return connection
+					else
+						-- For door connections (strings), return basic info
+						return {
+							nodeId = connection,
+							isDoorConnection = true
+						}
+					end
 				end
 			end
 		end
@@ -4334,35 +4648,39 @@ function ConnectionBuilder.GetDoorTargetPoint(areaA, areaB)
 		return nil
 	end
 
-	local connection = ConnectionBuilder.GetConnectionEntry(areaA, areaB)
-	if connection then
-		-- Choose optimal door position based on distance to destination
-		local doorPositions = {}
-		if connection.left then
-			table.insert(doorPositions, connection.left)
-		end
-		if connection.middle then
-			table.insert(doorPositions, connection.middle)
-		end
-		if connection.right then
-			table.insert(doorPositions, connection.right)
-		end
+	-- Find door nodes that connect areaA to areaB
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return areaB.pos
+	end
 
-		if #doorPositions > 0 then
-			-- Find closest door position to destination
-			local bestPos = doorPositions[1]
-			local bestDist = (doorPositions[1] - areaB.pos):Length()
+	-- Look for door nodes that have areaA as source and areaB as target
+	local doorBaseId = areaA.id .. "_" .. areaB.id
+	local doorPositions = {}
 
-			for i = 2, #doorPositions do
-				local dist = (doorPositions[i] - areaB.pos):Length()
-				if dist < bestDist then
-					bestPos = doorPositions[i]
-					bestDist = dist
-				end
+	-- Check all three door positions (left, middle, right)
+	for _, suffix in ipairs({"_left", "_middle", "_right"}) do
+		local doorId = doorBaseId .. suffix
+		local doorNode = nodes[doorId]
+		if doorNode and doorNode.pos then
+			table.insert(doorPositions, doorNode.pos)
+		end
+	end
+
+	if #doorPositions > 0 then
+		-- Find closest door position to destination
+		local bestPos = doorPositions[1]
+		local bestDist = (doorPositions[1] - areaB.pos):Length()
+
+		for i = 2, #doorPositions do
+			local dist = (doorPositions[i] - areaB.pos):Length()
+			if dist < bestDist then
+				bestPos = doorPositions[i]
+				bestDist = dist
 			end
-
-			return bestPos
 		end
+
+		return bestPos
 	end
 
 	return areaB.pos
@@ -4495,10 +4813,16 @@ function NavLoader.ProcessNavData(navData)
 		local cX = (area.north_west.x + area.south_east.x) / 2
 		local cY = (area.north_west.y + area.south_east.y) / 2
 		local cZ = (area.north_west.z + area.south_east.z) / 2
+		
+		-- Ensure diagonal z-coordinates have valid values (fallback to adjacent corners)
+		local ne_z = area.north_east_z or area.north_west.z
+		local sw_z = area.south_west_z or area.south_east.z
+		
 		local nw = Vector3(area.north_west.x, area.north_west.y, area.north_west.z)
 		local se = Vector3(area.south_east.x, area.south_east.y, area.south_east.z)
-		local ne = Vector3(area.south_east.x, area.north_west.y, area.north_east_z)
-		local sw = Vector3(area.north_west.x, area.south_east.y, area.south_west_z)
+		local ne = Vector3(area.south_east.x, area.north_west.y, ne_z)
+		local sw = Vector3(area.north_west.x, area.south_east.y, sw_z)
+		
 		navNodes[area.id] =
 			{ pos = Vector3(cX, cY, cZ), id = area.id, c = area.connections, nw = nw, se = se, ne = ne, sw = sw }
 	end
@@ -5785,13 +6109,15 @@ function WorkManager.addWork(func, args, delay, identifier)
 	local currentTime = getCurrentTick()
 	args = args or {}
 
+	local work = WorkManager.works[identifier]
+	
 	-- Check if the work already exists
-	if WorkManager.works[identifier] then
+	if work then
 		-- Update existing work details (function, delay, args)
-		WorkManager.works[identifier].func = func
-		WorkManager.works[identifier].delay = delay or 1
-		WorkManager.works[identifier].args = args
-		WorkManager.works[identifier].wasExecuted = false
+		work.func = func
+		work.delay = delay or 1
+		work.args = args
+		work.wasExecuted = false
 	else
 		-- Add new work
 		WorkManager.works[identifier] = {
@@ -5810,21 +6136,20 @@ function WorkManager.addWork(func, args, delay, identifier)
 	end
 
 	-- Attempt to execute the work immediately if within the work limit
+	work = WorkManager.works[identifier]
 	if WorkManager.executedWorks < WorkManager.workLimit then
-		local entry = WorkManager.works[identifier]
-		if not entry.wasExecuted and currentTime - entry.lastExecuted >= entry.delay then
+		if not work.wasExecuted and currentTime - work.lastExecuted >= work.delay then
 			-- Execute the work
-			entry.result = { func(table.unpack(args)) }
-			entry.wasExecuted = true
-			entry.lastExecuted = currentTime
+			work.result = { func(table.unpack(args)) }
+			work.wasExecuted = true
+			work.lastExecuted = currentTime
 			WorkManager.executedWorks = WorkManager.executedWorks + 1
-			return table.unpack(entry.result)
+			return table.unpack(work.result)
 		end
 	end
 
 	-- Return cached result if the work cannot be executed immediately
-	local entry = WorkManager.works[identifier]
-	return table.unpack(entry.result or {})
+	return table.unpack(work.result or {})
 end
 
 --- Attempts to execute work if conditions are met
@@ -6100,6 +6425,7 @@ local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local AStar = require("MedBot.Algorithms.A-Star")
+local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -6119,7 +6445,7 @@ local MAX_SLOPE_ANGLE = 55 -- Maximum angle (in degrees) that is climbable
 -- Add a connection between two nodes
 function Navigation.AddConnection(nodeA, nodeB)
 	if not nodeA or not nodeB then
-		print("One or both nodes are nil, exiting function")
+		Log:Warn("AddConnection: One or both nodes are nil")
 		return
 	end
 	Node.AddConnection(nodeA, nodeB)
@@ -6130,7 +6456,7 @@ end
 -- Remove a connection between two nodes
 function Navigation.RemoveConnection(nodeA, nodeB)
 	if not nodeA or not nodeB then
-		print("One or both nodes are nil, exiting function")
+		Log:Warn("RemoveConnection: One or both nodes are nil")
 		return
 	end
 	Node.RemoveConnection(nodeA, nodeB)
@@ -6141,7 +6467,7 @@ end
 -- Add cost to a connection between two nodes
 function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 	if not nodeA or not nodeB then
-		print("One or both nodes are nil, exiting function")
+		Log:Warn("AddCostToConnection: One or both nodes are nil")
 		return
 	end
 
@@ -6213,7 +6539,7 @@ function Navigation.FixNode(nodeId)
 	local nodes = G.Navigation.nodes
 	local node = nodes[nodeId]
 	if not node or not node.pos then
-		print("Invalid node " .. tostring(nodeId) .. ", skipping FixNode")
+		Log:Warn("FixNode: Invalid node %s", tostring(nodeId))
 		return nil
 	end
 	if node.fixed then
@@ -6381,7 +6707,7 @@ function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	end
 end
 
--- Build flexible waypoints: choose optimal door points, skip centers when direct door-to-door is shorter
+-- Build waypoints from mixed area/door path
 function Navigation.BuildDoorWaypointsFromPath()
 	-- reuse existing table to avoid churn
 	if not G.Navigation.waypoints then
@@ -6398,47 +6724,46 @@ function Navigation.BuildDoorWaypointsFromPath()
 	end
 
 	for i = 1, #path - 1 do
-		local a, b = path[i], path[i + 1]
-		if a and b and a.pos and b.pos then
-			-- Get door entry for current edge
-			local entry = Node.GetConnectionEntry(a, b)
-			local doorPoint = nil
+		local currentNode = path[i]
+		local nextNode = path[i + 1]
 
-			if entry and (entry.left or entry.middle or entry.right) then
-				-- Choose best door point based on distance to destination
-				local bestPoint = nil
-				local bestDistance = math.huge
-
-				for _, point in ipairs({ entry.left, entry.middle, entry.right }) do
-					if point then
-						local distance = (point - b.pos):Length()
-						if distance < bestDistance then
-							bestDistance = distance
-							bestPoint = point
-						end
-					end
-				end
-
-				doorPoint = bestPoint
-			else
-				-- Fallback: use Node helper for door target
-				doorPoint = Node.GetDoorTargetPoint(a, b)
-			end
-
-			if doorPoint then
-				-- Add door waypoint
+		if currentNode and nextNode and currentNode.pos and nextNode.pos then
+			-- Handle different node type transitions
+			if currentNode.isDoor and nextNode.isDoor then
+				-- Door to Door: move directly to next door position
 				table.insert(G.Navigation.waypoints, {
 					kind = "door",
-					fromId = a.id,
-					toId = b.id,
-					pos = doorPoint,
+					fromId = currentNode.id,
+					toId = nextNode.id,
+					pos = nextNode.pos,
 				})
-
-				-- Always add center waypoint (don't do optimization here - let PathOptimizer handle it)
+			elseif not currentNode.isDoor and nextNode.isDoor then
+				-- Area to Door: move to door position
 				table.insert(G.Navigation.waypoints, {
-					pos = b.pos,
+					kind = "door",
+					fromId = currentNode.id,
+					toId = nextNode.id,
+					pos = nextNode.pos,
+				})
+			elseif currentNode.isDoor and not nextNode.isDoor then
+				-- Door to Area: first move to door position, then to area center
+				table.insert(G.Navigation.waypoints, {
+					kind = "door",
+					fromId = currentNode.id,
+					toId = nextNode.id,
+					pos = currentNode.pos,  -- Move to current door position first
+				})
+				table.insert(G.Navigation.waypoints, {
+					pos = nextNode.pos,
 					kind = "center",
-					areaId = b.id,
+					areaId = nextNode.id,
+				})
+			else
+				-- Area to Area: move to next area center
+				table.insert(G.Navigation.waypoints, {
+					pos = nextNode.pos,
+					kind = "center",
+					areaId = nextNode.id,
 				})
 			end
 		end
@@ -6741,13 +7066,12 @@ end
 
 ---@class Vector3
 local function heuristicCost(nodeA, nodeB)
-	-- Slightly favor nodes with smaller IDs to break ties consistently
-	-- Tiny 0.1% bias prefers shorter paths through doors
+	-- Euclidean distance heuristic
 	local dx = nodeA.pos.x - nodeB.pos.x
 	local dy = nodeA.pos.y - nodeB.pos.y
 	local dz = nodeA.pos.z - nodeB.pos.z
 	local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-	return dist * 0.999 + (nodeA.id * 1e-6)
+	return dist
 end
 
 ----------------------------------------------------------------

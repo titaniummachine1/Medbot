@@ -270,11 +270,6 @@ function ConnectionBuilder.BuildDoorsForConnections()
 		end
 	end
 
-	-- First pass: clear any existing door flags
-	for _, node in pairs(nodes) do
-		node.isDoor = false
-	end
-
 	local doorsBuilt = 0
 	for nodeId, node in pairs(nodes) do
 		if node.c then
@@ -288,56 +283,101 @@ function ConnectionBuilder.BuildDoorsForConnections()
 							-- Always try to create doors, even for existing connections
 							local door = createDoorForAreas(node, targetNode)
 							if door then
-								-- Mark both nodes as doors
-								node.isDoor = true
-								targetNode.isDoor = true
+								-- Create actual door nodes in the navigation graph
+								local doorBaseId = nodeId .. "_" .. targetId
 
-								-- Ensure connection is a table before populating
+								-- Create left door node
+								if door.left then
+									local doorId = doorBaseId .. "_left"
+									nodes[doorId] = {
+										id = doorId,
+										pos = door.left,
+										isDoor = true,
+										areaId = nodeId,
+										targetAreaId = targetId,
+										direction = dirId,
+										c = {
+											[dirId] = { -- Connect to target area
+												connections = {targetId},
+												count = 1
+											}
+										}
+									}
+									doorsBuilt = doorsBuilt + 1
+								end
+
+								-- Create middle door node
+								if door.middle then
+									local doorId = doorBaseId .. "_middle"
+									nodes[doorId] = {
+										id = doorId,
+										pos = door.middle,
+										isDoor = true,
+										areaId = nodeId,
+										targetAreaId = targetId,
+										direction = dirId,
+										c = {
+											[dirId] = { -- Connect to target area
+												connections = {targetId},
+												count = 1
+											}
+										}
+									}
+									doorsBuilt = doorsBuilt + 1
+								end
+
+								-- Create right door node
+								if door.right then
+									local doorId = doorBaseId .. "_right"
+									nodes[doorId] = {
+										id = doorId,
+										pos = door.right,
+										isDoor = true,
+										areaId = nodeId,
+										targetAreaId = targetId,
+										direction = dirId,
+										c = {
+											[dirId] = { -- Connect to target area
+												connections = {targetId},
+												count = 1
+											}
+										}
+									}
+									doorsBuilt = doorsBuilt + 1
+								end
+
+								-- Update area connections to include door nodes
 								if type(connection) ~= "table" then
 									local norm = ConnectionUtils.NormalizeEntry(connection)
 									dir.connections[i] = norm
 									connection = norm
 								end
 
-								-- Populate on owner side
-								if door.owner == node.id then
-									connection.left = door.left
-									connection.middle = door.middle
-									connection.right = door.right
-									connection.needJump = door.needJump
-									connection.owner = door.owner
-									doorsBuilt = doorsBuilt + 1
-									Log:Debug(
-										"Built door for connection %d -> %d (owner: %d)",
-										nodeId,
-										targetId,
-										door.owner
-									)
+								-- Replace area-to-area connection with area-to-door connections
+								dir.connections[i] = nil -- Remove direct area connection
+								local doorConnections = {}
+
+								if door.left then
+									table.insert(doorConnections, nodeId .. "_" .. targetId .. "_left")
+								end
+								if door.middle then
+									table.insert(doorConnections, nodeId .. "_" .. targetId .. "_middle")
+								end
+								if door.right then
+									table.insert(doorConnections, nodeId .. "_" .. targetId .. "_right")
 								end
 
-								-- Mirror onto reverse connection so both directions share the same geometry
-								if nodes[targetId] and nodes[targetId].c then
-									for _, tdir in pairs(nodes[targetId].c) do
-										if tdir.connections then
-											for rIndex, revConn in ipairs(tdir.connections) do
-												local backId = ConnectionUtils.GetNodeId(revConn)
-												if backId == node.id then
-													if type(revConn) ~= "table" then
-														-- normalize inline if raw id, and write back
-														local norm = ConnectionUtils.NormalizeEntry(revConn)
-														tdir.connections[rIndex] = norm
-														revConn = norm
-													end
-													revConn.left = door.left
-													revConn.middle = door.middle
-													revConn.right = door.right
-													revConn.needJump = door.needJump
-													revConn.owner = door.owner
-												end
-											end
-										end
-									end
+								-- Replace the single area connection with multiple door connections
+								for j, doorConn in ipairs(doorConnections) do
+									dir.connections[i + j - 1] = doorConn
 								end
+
+								Log:Debug(
+									"Built door nodes for connection %d -> %d (owner: %d)",
+									nodeId,
+									targetId,
+									door.owner
+								)
 							end
 						end
 					end
@@ -346,7 +386,84 @@ function ConnectionBuilder.BuildDoorsForConnections()
 		end
 	end
 
-	Log:Info("Built " .. doorsBuilt .. " doors for connections")
+	-- Second pass: create door-to-door connections for optimization
+	ConnectionBuilder.BuildDoorToDoorConnections()
+
+	Log:Info("Built " .. doorsBuilt .. " door nodes for connections")
+end
+
+-- Determine spatial direction between two positions
+local function calculateSpatialDirection(fromPos, toPos)
+	local dx = toPos.x - fromPos.x
+	local dy = toPos.y - fromPos.y
+	
+	if math.abs(dx) >= math.abs(dy) then
+		return (dx > 0) and 4 or 8 -- East or West
+	else
+		return (dy > 0) and 2 or 1 -- South or North
+	end
+end
+
+-- Create optimized door-to-door connections
+function ConnectionBuilder.BuildDoorToDoorConnections()
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return
+	end
+
+	local connectionsAdded = 0
+	local doorsByArea = {}
+
+	-- Group doors by area for efficient lookup
+	for doorId, doorNode in pairs(nodes) do
+		if doorNode.isDoor and doorNode.areaId then
+			if not doorsByArea[doorNode.areaId] then
+				doorsByArea[doorNode.areaId] = {}
+			end
+			table.insert(doorsByArea[doorNode.areaId], doorNode)
+		end
+	end
+
+	-- Connect doors within each area
+	for areaId, doors in pairs(doorsByArea) do
+		for i = 1, #doors do
+			local doorA = doors[i]
+			
+			for j = 1, #doors do
+				if i ~= j then
+					local doorB = doors[j]
+					
+					-- Only connect doors on different sides (different direction)
+					if doorA.direction ~= doorB.direction then
+						-- Calculate spatial direction from A to B
+						local spatialDir = calculateSpatialDirection(doorA.pos, doorB.pos)
+						
+						if not doorA.c then doorA.c = {} end
+						if not doorA.c[spatialDir] then
+							doorA.c[spatialDir] = { connections = {}, count = 0 }
+						end
+
+						-- Check if already connected
+						local alreadyConnected = false
+						for _, conn in ipairs(doorA.c[spatialDir].connections) do
+							if ConnectionUtils.GetNodeId(conn) == doorB.id then
+								alreadyConnected = true
+								break
+							end
+						end
+
+						if not alreadyConnected then
+							table.insert(doorA.c[spatialDir].connections, doorB.id)
+							doorA.c[spatialDir].count = #doorA.c[spatialDir].connections
+							connectionsAdded = connectionsAdded + 1
+						end
+					end
+				end
+			end
+		end
+	end
+
+	Log:Info("Added " .. connectionsAdded .. " door-to-door connections for path optimization")
 end
 
 function ConnectionBuilder.GetConnectionEntry(nodeA, nodeB)
@@ -359,7 +476,16 @@ function ConnectionBuilder.GetConnectionEntry(nodeA, nodeB)
 			for _, connection in ipairs(dir.connections) do
 				local targetId = ConnectionUtils.GetNodeId(connection)
 				if targetId == nodeB.id then
-					return connection
+					-- Return connection info if it's a table, otherwise just the ID
+					if type(connection) == "table" then
+						return connection
+					else
+						-- For door connections (strings), return basic info
+						return {
+							nodeId = connection,
+							isDoorConnection = true
+						}
+					end
 				end
 			end
 		end
@@ -372,35 +498,39 @@ function ConnectionBuilder.GetDoorTargetPoint(areaA, areaB)
 		return nil
 	end
 
-	local connection = ConnectionBuilder.GetConnectionEntry(areaA, areaB)
-	if connection then
-		-- Choose optimal door position based on distance to destination
-		local doorPositions = {}
-		if connection.left then
-			table.insert(doorPositions, connection.left)
-		end
-		if connection.middle then
-			table.insert(doorPositions, connection.middle)
-		end
-		if connection.right then
-			table.insert(doorPositions, connection.right)
-		end
+	-- Find door nodes that connect areaA to areaB
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return areaB.pos
+	end
 
-		if #doorPositions > 0 then
-			-- Find closest door position to destination
-			local bestPos = doorPositions[1]
-			local bestDist = (doorPositions[1] - areaB.pos):Length()
+	-- Look for door nodes that have areaA as source and areaB as target
+	local doorBaseId = areaA.id .. "_" .. areaB.id
+	local doorPositions = {}
 
-			for i = 2, #doorPositions do
-				local dist = (doorPositions[i] - areaB.pos):Length()
-				if dist < bestDist then
-					bestPos = doorPositions[i]
-					bestDist = dist
-				end
+	-- Check all three door positions (left, middle, right)
+	for _, suffix in ipairs({"_left", "_middle", "_right"}) do
+		local doorId = doorBaseId .. suffix
+		local doorNode = nodes[doorId]
+		if doorNode and doorNode.pos then
+			table.insert(doorPositions, doorNode.pos)
+		end
+	end
+
+	if #doorPositions > 0 then
+		-- Find closest door position to destination
+		local bestPos = doorPositions[1]
+		local bestDist = (doorPositions[1] - areaB.pos):Length()
+
+		for i = 2, #doorPositions do
+			local dist = (doorPositions[i] - areaB.pos):Length()
+			if dist < bestDist then
+				bestPos = doorPositions[i]
+				bestDist = dist
 			end
-
-			return bestPos
 		end
+
+		return bestPos
 	end
 
 	return areaB.pos

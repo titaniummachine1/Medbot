@@ -19,6 +19,7 @@ local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local AStar = require("MedBot.Algorithms.A-Star")
+local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -38,7 +39,7 @@ local MAX_SLOPE_ANGLE = 55 -- Maximum angle (in degrees) that is climbable
 -- Add a connection between two nodes
 function Navigation.AddConnection(nodeA, nodeB)
 	if not nodeA or not nodeB then
-		print("One or both nodes are nil, exiting function")
+		Log:Warn("AddConnection: One or both nodes are nil")
 		return
 	end
 	Node.AddConnection(nodeA, nodeB)
@@ -49,7 +50,7 @@ end
 -- Remove a connection between two nodes
 function Navigation.RemoveConnection(nodeA, nodeB)
 	if not nodeA or not nodeB then
-		print("One or both nodes are nil, exiting function")
+		Log:Warn("RemoveConnection: One or both nodes are nil")
 		return
 	end
 	Node.RemoveConnection(nodeA, nodeB)
@@ -60,7 +61,7 @@ end
 -- Add cost to a connection between two nodes
 function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 	if not nodeA or not nodeB then
-		print("One or both nodes are nil, exiting function")
+		Log:Warn("AddCostToConnection: One or both nodes are nil")
 		return
 	end
 
@@ -132,7 +133,7 @@ function Navigation.FixNode(nodeId)
 	local nodes = G.Navigation.nodes
 	local node = nodes[nodeId]
 	if not node or not node.pos then
-		print("Invalid node " .. tostring(nodeId) .. ", skipping FixNode")
+		Log:Warn("FixNode: Invalid node %s", tostring(nodeId))
 		return nil
 	end
 	if node.fixed then
@@ -300,7 +301,7 @@ function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	end
 end
 
--- Build flexible waypoints: choose optimal door points, skip centers when direct door-to-door is shorter
+-- Build waypoints from mixed area/door path
 function Navigation.BuildDoorWaypointsFromPath()
 	-- reuse existing table to avoid churn
 	if not G.Navigation.waypoints then
@@ -317,47 +318,46 @@ function Navigation.BuildDoorWaypointsFromPath()
 	end
 
 	for i = 1, #path - 1 do
-		local a, b = path[i], path[i + 1]
-		if a and b and a.pos and b.pos then
-			-- Get door entry for current edge
-			local entry = Node.GetConnectionEntry(a, b)
-			local doorPoint = nil
+		local currentNode = path[i]
+		local nextNode = path[i + 1]
 
-			if entry and (entry.left or entry.middle or entry.right) then
-				-- Choose best door point based on distance to destination
-				local bestPoint = nil
-				local bestDistance = math.huge
-
-				for _, point in ipairs({ entry.left, entry.middle, entry.right }) do
-					if point then
-						local distance = (point - b.pos):Length()
-						if distance < bestDistance then
-							bestDistance = distance
-							bestPoint = point
-						end
-					end
-				end
-
-				doorPoint = bestPoint
-			else
-				-- Fallback: use Node helper for door target
-				doorPoint = Node.GetDoorTargetPoint(a, b)
-			end
-
-			if doorPoint then
-				-- Add door waypoint
+		if currentNode and nextNode and currentNode.pos and nextNode.pos then
+			-- Handle different node type transitions
+			if currentNode.isDoor and nextNode.isDoor then
+				-- Door to Door: move directly to next door position
 				table.insert(G.Navigation.waypoints, {
 					kind = "door",
-					fromId = a.id,
-					toId = b.id,
-					pos = doorPoint,
+					fromId = currentNode.id,
+					toId = nextNode.id,
+					pos = nextNode.pos,
 				})
-
-				-- Always add center waypoint (don't do optimization here - let PathOptimizer handle it)
+			elseif not currentNode.isDoor and nextNode.isDoor then
+				-- Area to Door: move to door position
 				table.insert(G.Navigation.waypoints, {
-					pos = b.pos,
+					kind = "door",
+					fromId = currentNode.id,
+					toId = nextNode.id,
+					pos = nextNode.pos,
+				})
+			elseif currentNode.isDoor and not nextNode.isDoor then
+				-- Door to Area: first move to door position, then to area center
+				table.insert(G.Navigation.waypoints, {
+					kind = "door",
+					fromId = currentNode.id,
+					toId = nextNode.id,
+					pos = currentNode.pos,  -- Move to current door position first
+				})
+				table.insert(G.Navigation.waypoints, {
+					pos = nextNode.pos,
 					kind = "center",
-					areaId = b.id,
+					areaId = nextNode.id,
+				})
+			else
+				-- Area to Area: move to next area center
+				table.insert(G.Navigation.waypoints, {
+					pos = nextNode.pos,
+					kind = "center",
+					areaId = nextNode.id,
 				})
 			end
 		end

@@ -134,7 +134,7 @@ function Node.RemoveConnection(nodeA, nodeB)
 	end
 end
 
--- Pathfinding adjacency - simple door rules
+-- Door-aware adjacency: handles areas, doors, and door-to-door connections
 function Node.GetAdjacentNodesSimple(node, nodes)
 	local neighbors = {}
 
@@ -149,13 +149,11 @@ function Node.GetAdjacentNodesSimple(node, nodes)
 				local targetNode = nodes[targetId]
 
 				if targetNode then
-					-- For A* pathfinding, use center-to-center distance
-					-- Door optimization happens at the waypoint level
+					-- Simple adjacency - just return connected nodes
 					local cost = (node.pos - targetNode.pos):Length()
 					table.insert(neighbors, {
 						node = targetNode,
 						cost = cost,
-						isDoor = false, -- A* works at area level, doors are waypoints
 					})
 				end
 			end
@@ -174,7 +172,8 @@ function Node.GetAdjacentNodesOnly(node, nodes)
 	local adjacent = {}
 	local count = 0
 
-	for _, dir in ipairs(node.c) do
+	-- FIX: Use pairs() for named directional keys, not ipairs()
+	for _, dir in pairs(node.c) do
 		local connections = dir.connections
 		if connections then
 			for i = 1, #connections do

@@ -26,6 +26,7 @@ local SmartJump = require("MedBot.Bot.SmartJump")
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")
+local DoorSystem = require("MedBot.Navigation.DoorSystem")
 
 --[[ Setup ]]
 local Lib = Common.Lib

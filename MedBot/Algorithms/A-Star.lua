@@ -48,13 +48,12 @@ end
 
 ---@class Vector3
 local function heuristicCost(nodeA, nodeB)
-	-- Slightly favor nodes with smaller IDs to break ties consistently
-	-- Tiny 0.1% bias prefers shorter paths through doors
+	-- Euclidean distance heuristic
 	local dx = nodeA.pos.x - nodeB.pos.x
 	local dy = nodeA.pos.y - nodeB.pos.y
 	local dz = nodeA.pos.z - nodeB.pos.z
 	local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-	return dist * 0.999 + (nodeA.id * 1e-6)
+	return dist
 end
 
 ----------------------------------------------------------------

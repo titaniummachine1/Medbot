@@ -17,13 +17,15 @@ function WorkManager.addWork(func, args, delay, identifier)
 	local currentTime = getCurrentTick()
 	args = args or {}
 
+	local work = WorkManager.works[identifier]
+	
 	-- Check if the work already exists
-	if WorkManager.works[identifier] then
+	if work then
 		-- Update existing work details (function, delay, args)
-		WorkManager.works[identifier].func = func
-		WorkManager.works[identifier].delay = delay or 1
-		WorkManager.works[identifier].args = args
-		WorkManager.works[identifier].wasExecuted = false
+		work.func = func
+		work.delay = delay or 1
+		work.args = args
+		work.wasExecuted = false
 	else
 		-- Add new work
 		WorkManager.works[identifier] = {
@@ -42,21 +44,20 @@ function WorkManager.addWork(func, args, delay, identifier)
 	end
 
 	-- Attempt to execute the work immediately if within the work limit
+	work = WorkManager.works[identifier]
 	if WorkManager.executedWorks < WorkManager.workLimit then
-		local entry = WorkManager.works[identifier]
-		if not entry.wasExecuted and currentTime - entry.lastExecuted >= entry.delay then
+		if not work.wasExecuted and currentTime - work.lastExecuted >= work.delay then
 			-- Execute the work
-			entry.result = { func(table.unpack(args)) }
-			entry.wasExecuted = true
-			entry.lastExecuted = currentTime
+			work.result = { func(table.unpack(args)) }
+			work.wasExecuted = true
+			work.lastExecuted = currentTime
 			WorkManager.executedWorks = WorkManager.executedWorks + 1
-			return table.unpack(entry.result)
+			return table.unpack(work.result)
 		end
 	end
 
 	-- Return cached result if the work cannot be executed immediately
-	local entry = WorkManager.works[identifier]
-	return table.unpack(entry.result or {})
+	return table.unpack(work.result or {})
 end
 
 --- Attempts to execute work if conditions are met

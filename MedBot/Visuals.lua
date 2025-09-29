@@ -406,37 +406,23 @@ local function OnDraw()
                 local cDir = node.c[dir]
                 if cDir and cDir.connections then
                     for _, conn in ipairs(cDir.connections) do
-                        local doorLeft = conn.left and (conn.left + UP_VECTOR)
-                        local doorMid = conn.middle and (conn.middle + UP_VECTOR)
-                        local doorRight = conn.right and (conn.right + UP_VECTOR)
-                        if doorLeft and doorMid and doorRight then
-                            local sL = client.WorldToScreen(doorLeft)
-                            local sM = client.WorldToScreen(doorMid)
-                            local sR = client.WorldToScreen(doorRight)
-                            if sL and sM and sR then
-                                -- Door line - blue for whole door
-                                draw.Color(0, 180, 255, 220)
-                                draw.Line(sL[1], sL[2], sR[1], sR[2])
-                                -- Left and right ticks - blue
-                                draw.Color(0, 180, 255, 255)
-                                draw.FilledRect(sL[1] - 2, sL[2] - 2, sL[1] + 2, sL[2] + 2)
-                                draw.FilledRect(sR[1] - 2, sR[2] - 2, sR[1] + 2, sR[2] + 2)
-                                -- Middle marker - also blue (consistent color)
-                                draw.Color(0, 180, 255, 255)
-                                draw.FilledRect(sM[1] - 2, sM[2] - 2, sM[1] + 2, sM[2] + 2)
-                            else
-                                -- If only two points present (left/right), compute middle as midpoint
-                                local sL2 = doorLeft and client.WorldToScreen(doorLeft)
-                                local sR2 = doorRight and client.WorldToScreen(doorRight)
-                                if sL2 and sR2 then
-                                    draw.Color(0, 180, 255, 220)
-                                    draw.Line(sL2[1], sL2[2], sR2[1], sR2[2])
-                                    draw.Color(0, 180, 255, 255)
-                                    draw.FilledRect(sL2[1] - 2, sL2[2] - 2, sL2[1] + 2, sL2[2] + 2)
-                                    draw.FilledRect(sR2[1] - 2, sR2[2] - 2, sR2[1] + 2, sR2[2] + 2)
-                                end
+                        -- Handle new door node format: connections are now door node IDs
+                        local targetId = (type(conn) == "table") and conn.node or conn
+                        local doorNode = G.Navigation.nodes and G.Navigation.nodes[targetId]
+
+                        if doorNode and doorNode.isDoor then
+                            -- Door node exists - get its position
+                            local doorPos = doorNode.pos + UP_VECTOR
+                            local doorScreen = client.WorldToScreen(doorPos)
+
+                            if doorScreen then
+                                -- Draw door marker as a single point (since doors are now individual nodes)
+                                draw.Color(0, 180, 255, 255) -- Blue for door nodes
+                                draw.FilledRect(doorScreen[1] - 3, doorScreen[2] - 3,
+                                              doorScreen[1] + 3, doorScreen[2] + 3)
                             end
                         end
+                        -- Removed fallback door drawing - doors are now always individual nodes
                     end
                 end
             end
@@ -459,6 +445,7 @@ local function OnDraw()
                 end
                 scr[i] = { s[1], s[2] }
             end
+            -- Only draw if all corners are visible on screen
             if ok then
                 -- filled polygon
                 fillPolygon(scr, table.unpack(AREA_FILL_COLOR))
