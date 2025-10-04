@@ -4530,49 +4530,52 @@ local function createDoorForAreas(areaA, areaB)
 	local overlapLeft = pointOnBase(overlapMin)
 	local overlapRight = pointOnBase(overlapMax)
 
-	-- Clamp away from wall corners (axis-based, 24 units clearance)
-	overlapLeft, overlapRight = clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB, axis)
-
-	-- Ensure door stays within BOTH area bounds on varying axis
-	local finalLeftCoord = overlapLeft[axis]
-	local finalRightCoord = overlapRight[axis]
-	local finalMin = math.min(finalLeftCoord, finalRightCoord)
-	local finalMax = math.max(finalLeftCoord, finalRightCoord)
-
-	-- Clamp to stay within common bounds (intersection of both areas)
+	-- STEP 1: Apply boundary clamping FIRST (shearing - stay within common area)
 	local commonMin = math.max(areaBoundsA.min, areaBoundsB.min)
 	local commonMax = math.min(areaBoundsA.max, areaBoundsB.max)
 
-	if finalMin < commonMin then
-		-- Shift door to stay within bounds
-		if finalLeftCoord < finalRightCoord then
-			overlapLeft[axis] = commonMin
-		else
-			overlapLeft[axis] = commonMin
-		end
+	-- Clamp left endpoint to common bounds
+	local leftCoord = overlapLeft[axis]
+	local rightCoord = overlapRight[axis]
+
+	if leftCoord < commonMin then
+		overlapLeft[axis] = commonMin
+	elseif leftCoord > commonMax then
+		overlapLeft[axis] = commonMax
 	end
 
-	if finalMax > commonMax then
-		-- Shift door to stay within bounds
-		if finalRightCoord > finalLeftCoord then
-			overlapRight[axis] = commonMax
-		else
-			overlapRight[axis] = commonMax
-		end
+	-- Clamp right endpoint to common bounds
+	if rightCoord < commonMin then
+		overlapRight[axis] = commonMin
+	elseif rightCoord > commonMax then
+		overlapRight[axis] = commonMax
 	end
+
+	-- Check if door is still valid after boundary clamping
+	local afterBoundsWidth = (overlapRight - overlapLeft):Length2D()
+	if afterBoundsWidth < HITBOX_WIDTH then
+		return nil -- Door too narrow after boundary clamping
+	end
+
+	-- STEP 2: Apply wall avoidance SECOND (24 units clearance from walls)
+	overlapLeft, overlapRight = clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB, axis)
 
 	-- Final validation: ensure door is still wide enough after all clamping
 	local finalWidth = (overlapRight - overlapLeft):Length2D()
 	if finalWidth < HITBOX_WIDTH then
-		return nil -- Door too narrow after bounds/wall clamping
+		return nil -- Door too narrow after wall clamping
 	end
 
 	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
 
+	-- Check if this is a narrow passage (< 48 units = bottleneck)
+	-- If so, only create middle door (no left/right sides)
+	local isNarrowPassage = finalWidth < (HITBOX_WIDTH * 2)
+
 	return {
-		left = overlapLeft,
+		left = isNarrowPassage and nil or overlapLeft,
 		middle = middle,
-		right = overlapRight,
+		right = isNarrowPassage and nil or overlapRight,
 		owner = geometry.ownerId,
 		needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT,
 	}
