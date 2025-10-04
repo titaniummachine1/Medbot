@@ -296,30 +296,91 @@ local function createDoorForAreas(areaA, areaB)
 		overlapRight[axis] = commonMax
 	end
 
-	-- Check if door is still valid after boundary clamping
-	local afterBoundsWidth = (overlapRight - overlapLeft):Length2D()
-	if afterBoundsWidth < HITBOX_WIDTH then
-		return nil -- Door too narrow after boundary clamping
-	end
-
-	-- STEP 2: Apply wall avoidance SECOND (24 units clearance from walls)
-	overlapLeft, overlapRight = clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB, axis)
-
-	-- Final validation: ensure door is still wide enough after all clamping
+	-- Calculate door width and middle point
 	local finalWidth = (overlapRight - overlapLeft):Length2D()
 	if finalWidth < HITBOX_WIDTH then
-		return nil -- Door too narrow after wall clamping
+		return nil -- Door too narrow after boundary clamping
 	end
 
 	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
 
+	-- STEP 2: Wall avoidance - shrink door by 24 units from wall corners on door axis
+	local WALL_CLEARANCE = 24
+
+	-- Get current door bounds on varying axis
+	local leftCoordFinal = overlapLeft[axis]
+	local rightCoordFinal = overlapRight[axis]
+	local minDoor = math.min(leftCoordFinal, rightCoordFinal)
+	local maxDoor = math.max(leftCoordFinal, rightCoordFinal)
+
+	-- Track how much to shrink from each side
+	local shrinkFromMin = 0
+	local shrinkFromMax = 0
+
+	-- Check all wall corners from both areas
+	for _, area in ipairs({ areaA, areaB }) do
+		if area.wallCorners then
+			for _, wallCorner in ipairs(area.wallCorners) do
+				local cornerCoord = wallCorner[axis]
+
+				-- Check if wall corner is near the door on this axis
+				if cornerCoord >= minDoor - WALL_CLEARANCE and cornerCoord <= maxDoor + WALL_CLEARANCE then
+					-- Wall corner is close to door, determine which side
+					if cornerCoord < minDoor then
+						-- Wall is to the left of door, shrink door from left
+						local gap = minDoor - cornerCoord
+						if gap < WALL_CLEARANCE then
+							shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - gap)
+						end
+					elseif cornerCoord > maxDoor then
+						-- Wall is to the right of door, shrink door from right
+						local gap = cornerCoord - maxDoor
+						if gap < WALL_CLEARANCE then
+							shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - gap)
+						end
+					else
+						-- Wall is INSIDE door bounds - need to shrink from both sides or pick closest
+						local distFromMin = cornerCoord - minDoor
+						local distFromMax = maxDoor - cornerCoord
+						if distFromMin < distFromMax then
+							-- Closer to min side, shrink from min
+							shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - distFromMin)
+						else
+							-- Closer to max side, shrink from max
+							shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - distFromMax)
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- Apply shrinking to door endpoints
+	if shrinkFromMin > 0 then
+		if leftCoordFinal < rightCoordFinal then
+			overlapLeft[axis] = leftCoordFinal + shrinkFromMin
+		else
+			overlapLeft[axis] = leftCoordFinal - shrinkFromMin
+		end
+	end
+
+	if shrinkFromMax > 0 then
+		if rightCoordFinal > leftCoordFinal then
+			overlapRight[axis] = rightCoordFinal - shrinkFromMax
+		else
+			overlapRight[axis] = rightCoordFinal + shrinkFromMax
+		end
+	end
+
+	-- Recalculate width after wall avoidance
+	local finalWidthAfterWalls = (overlapRight - overlapLeft):Length2D()
+
 	-- Check if this is a narrow passage (< 48 units = bottleneck)
-	-- If so, only create middle door (no left/right sides)
-	local isNarrowPassage = finalWidth < (HITBOX_WIDTH * 2)
+	local isNarrowPassage = finalWidthAfterWalls < (HITBOX_WIDTH * 2)
 
 	return {
 		left = isNarrowPassage and nil or overlapLeft,
-		middle = middle,
+		middle = middle, -- Always create middle door
 		right = isNarrowPassage and nil or overlapRight,
 		owner = geometry.ownerId,
 		needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT,
