@@ -88,45 +88,54 @@ local function lerp(a, b, t)
 	return a + (b - a) * t
 end
 
-local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
-	local Common = require("MedBot.Core.Common")
+-- Clamp door endpoints away from wall corners using axis-based distance
+local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB, varyingAxis)
 	local WALL_CLEARANCE = 24
 
-	-- Determine the door's axis (X or Y) based on which coordinate varies more
+	-- Determine which axis the door varies along (door direction)
 	local doorVector = overlapRight - overlapLeft
-	local isXAxisDoor = math.abs(doorVector.x) > math.abs(doorVector.y)
+	local doorAxis = varyingAxis or (math.abs(doorVector.x) > math.abs(doorVector.y) and "x" or "y")
 
-	-- Store original positions
-	local clampedLeft = overlapLeft
-	local clampedRight = overlapRight
+	-- Get min/max on door axis
+	local leftCoord = overlapLeft[doorAxis]
+	local rightCoord = overlapRight[doorAxis]
+	local minCoord = math.min(leftCoord, rightCoord)
+	local maxCoord = math.max(leftCoord, rightCoord)
+
+	-- Track clamping adjustments
+	local clampFromLeft = 0 -- How much to shrink from left
+	local clampFromRight = 0 -- How much to shrink from right
 
 	-- Check wall corners from both areas
 	for _, area in ipairs({ areaA, areaB }) do
 		if area.wallCorners then
 			for _, wallCorner in ipairs(area.wallCorners) do
-				-- Calculate 2D distance to both door endpoints
-				local leftDist2D = Common.Distance2D(clampedLeft, Vector3(wallCorner.x, wallCorner.y, 0))
-				local rightDist2D = Common.Distance2D(clampedRight, Vector3(wallCorner.x, wallCorner.y, 0))
+				local cornerCoord = wallCorner[doorAxis]
 
-				-- Only clamp if corner is too close to either endpoint
-				if leftDist2D < WALL_CLEARANCE or rightDist2D < WALL_CLEARANCE then
-					if isXAxisDoor then
-						-- Door is horizontal (varies on X-axis), clamp on X-axis
-						if wallCorner.x < clampedLeft.x and leftDist2D < WALL_CLEARANCE then
-							-- Corner is to the left of door's left endpoint, move left endpoint right
-							clampedLeft.x = wallCorner.x + WALL_CLEARANCE
-						elseif wallCorner.x > clampedRight.x and rightDist2D < WALL_CLEARANCE then
-							-- Corner is to the right of door's right endpoint, move right endpoint left
-							clampedRight.x = wallCorner.x - WALL_CLEARANCE
+				-- Check if wall corner is within door range on the varying axis
+				if cornerCoord >= minCoord - WALL_CLEARANCE and cornerCoord <= maxCoord + WALL_CLEARANCE then
+					-- Wall corner is near the door, check which side
+					if cornerCoord < minCoord then
+						-- Wall corner is to the left, need to clamp left endpoint right
+						local requiredShift = (minCoord - cornerCoord)
+						if requiredShift < WALL_CLEARANCE then
+							clampFromLeft = math.max(clampFromLeft, WALL_CLEARANCE - requiredShift)
+						end
+					elseif cornerCoord > maxCoord then
+						-- Wall corner is to the right, need to clamp right endpoint left
+						local requiredShift = (cornerCoord - maxCoord)
+						if requiredShift < WALL_CLEARANCE then
+							clampFromRight = math.max(clampFromRight, WALL_CLEARANCE - requiredShift)
 						end
 					else
-						-- Door is vertical (varies on Y-axis), clamp on Y-axis
-						if wallCorner.y < clampedLeft.y and leftDist2D < WALL_CLEARANCE then
-							-- Corner is below door's left endpoint, move left endpoint up
-							clampedLeft.y = wallCorner.y + WALL_CLEARANCE
-						elseif wallCorner.y > clampedRight.y and rightDist2D < WALL_CLEARANCE then
-							-- Corner is above door's right endpoint, move right endpoint down
-							clampedRight.y = wallCorner.y - WALL_CLEARANCE
+						-- Wall corner is INSIDE door range - clamp away from it
+						local distFromLeft = cornerCoord - minCoord
+						local distFromRight = maxCoord - cornerCoord
+						if distFromLeft < WALL_CLEARANCE then
+							clampFromLeft = math.max(clampFromLeft, WALL_CLEARANCE - distFromLeft + 1)
+						end
+						if distFromRight < WALL_CLEARANCE then
+							clampFromRight = math.max(clampFromRight, WALL_CLEARANCE - distFromRight + 1)
 						end
 					end
 				end
@@ -134,11 +143,30 @@ local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB)
 		end
 	end
 
-	-- Ensure doors don't get too small after clamping
+	-- Apply clamping by adjusting coordinates
+	local clampedLeft = Vector3(overlapLeft.x, overlapLeft.y, overlapLeft.z)
+	local clampedRight = Vector3(overlapRight.x, overlapRight.y, overlapRight.z)
+
+	if clampFromLeft > 0 then
+		if leftCoord < rightCoord then
+			clampedLeft[doorAxis] = leftCoord + clampFromLeft
+		else
+			clampedLeft[doorAxis] = leftCoord - clampFromLeft
+		end
+	end
+
+	if clampFromRight > 0 then
+		if rightCoord > leftCoord then
+			clampedRight[doorAxis] = rightCoord - clampFromRight
+		else
+			clampedRight[doorAxis] = rightCoord + clampFromRight
+		end
+	end
+
+	-- Ensure door doesn't become too small
 	local finalWidth = (clampedRight - clampedLeft):Length2D()
 	if finalWidth < HITBOX_WIDTH then
-		-- If door became too small, revert to original positions
-		return overlapLeft, overlapRight
+		return overlapLeft, overlapRight -- Revert if too small
 	end
 
 	return clampedLeft, clampedRight
@@ -213,7 +241,7 @@ local function createDoorForAreas(areaA, areaB)
 		constAxis = "y"
 	end
 
-	-- Pure 1D overlap on shared axis
+	-- Pure 1D overlap on shared axis (common boundary)
 	local aMin = math.min(a0[axis], a1[axis])
 	local aMax = math.max(a0[axis], a1[axis])
 	local bMin = math.min(b0[axis], b1[axis])
@@ -225,6 +253,10 @@ local function createDoorForAreas(areaA, areaB)
 	if overlapMax - overlapMin < HITBOX_WIDTH then
 		return nil -- No valid overlap
 	end
+
+	-- Get area bounds on the door's varying axis
+	local areaBoundsA = { min = aMin, max = aMax }
+	local areaBoundsB = { min = bMin, max = bMax }
 
 	-- Build door points on chosen base edge using 1D overlap
 	local function pointOnBase(axisVal)
@@ -242,6 +274,44 @@ local function createDoorForAreas(areaA, areaB)
 
 	local overlapLeft = pointOnBase(overlapMin)
 	local overlapRight = pointOnBase(overlapMax)
+
+	-- Clamp away from wall corners (axis-based, 24 units clearance)
+	overlapLeft, overlapRight = clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB, axis)
+
+	-- Ensure door stays within BOTH area bounds on varying axis
+	local finalLeftCoord = overlapLeft[axis]
+	local finalRightCoord = overlapRight[axis]
+	local finalMin = math.min(finalLeftCoord, finalRightCoord)
+	local finalMax = math.max(finalLeftCoord, finalRightCoord)
+
+	-- Clamp to stay within common bounds (intersection of both areas)
+	local commonMin = math.max(areaBoundsA.min, areaBoundsB.min)
+	local commonMax = math.min(areaBoundsA.max, areaBoundsB.max)
+
+	if finalMin < commonMin then
+		-- Shift door to stay within bounds
+		if finalLeftCoord < finalRightCoord then
+			overlapLeft[axis] = commonMin
+		else
+			overlapLeft[axis] = commonMin
+		end
+	end
+
+	if finalMax > commonMax then
+		-- Shift door to stay within bounds
+		if finalRightCoord > finalLeftCoord then
+			overlapRight[axis] = commonMax
+		else
+			overlapRight[axis] = commonMax
+		end
+	end
+
+	-- Final validation: ensure door is still wide enough after all clamping
+	local finalWidth = (overlapRight - overlapLeft):Length2D()
+	if finalWidth < HITBOX_WIDTH then
+		return nil -- Door too narrow after bounds/wall clamping
+	end
+
 	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
 
 	return {
