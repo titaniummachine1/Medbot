@@ -68,16 +68,18 @@ local function RunAgentSkipping(currentPos)
 	return skipCount
 end
 
--- Check if next node is closer than current (cheap distance check)
+-- Check if we're closer to next node than current node is (geometric check)
+-- This guarantees it's better to go for next node
 local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode then
 		return false
 	end
 
-	local distToCurrent = Common.Distance3D(currentPos, currentNode.pos)
-	local distToNext = Common.Distance3D(currentPos, nextNode.pos)
+	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
+	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 
-	return distToNext < distToCurrent
+	-- If we're closer to next node than current node is, we can skip
+	return distPlayerToNext < distCurrentToNext
 end
 
 -- ============================================================================
@@ -88,8 +90,9 @@ end
 function NodeSkipper.Reset()
 	G.Navigation.nextNodeCloser = false
 	WorkManager.resetCooldown("active_skip_check") -- Reset active skip check cooldown
-	WorkManager.resetCooldown("passive_skip_check") -- Reset passive skip check cooldown
+	WorkManager.resetCooldown("passive_walkability_check") -- Reset passive walkability check cooldown
 	WorkManager.resetCooldown("agent_skip_check") -- Reset agent skip check cooldown
+	WorkManager.resetCooldown("manual_mode_walkability") -- Reset manual mode walkability check
 	Log:Debug("NodeSkipper state reset")
 end
 
@@ -122,10 +125,10 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 
 	local maxNodesToSkip = 0
 
-	-- PASSIVE SYSTEM: Distance + walkability check (runs every 11 ticks)
-	if WorkManager.attemptWork(11, "passive_skip_check") then
-		if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-			-- Node is closer, but also check if path is walkable
+	-- PASSIVE SYSTEM: Simple distance check (runs every tick - very cheap)
+	if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
+		-- We're geometrically closer to next node - check if path is walkable (throttled)
+		if WorkManager.attemptWork(11, "passive_walkability_check") then
 			if ISWalkable.Path(currentPos, nextNode.pos) then
 				Common.DebugLog(
 					"Debug",

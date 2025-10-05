@@ -254,8 +254,17 @@ local function createDoorForAreas(areaA, areaB)
 	local overlapMin = math.max(aMin, bMin)
 	local overlapMax = math.min(aMax, bMax)
 
+	-- If overlap too small, create center-only door at midpoint between areas
 	if overlapMax - overlapMin < HITBOX_WIDTH then
-		return nil -- No valid overlap
+		local centerPoint = lerpVec(a0, a1, 0.5)
+		Common.DebugLog("Info", "Door %d->%d: No overlap, using center-only door", areaA.id, areaB.id)
+		return {
+			left = nil,
+			middle = centerPoint,
+			right = nil,
+			owner = geometry.ownerId,
+			needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT,
+		}
 	end
 
 	-- Get area bounds on the door's varying axis
@@ -307,7 +316,16 @@ local function createDoorForAreas(areaA, areaB)
 	-- Calculate door width and middle point
 	local finalWidth = (overlapRight - overlapLeft):Length2D()
 	if finalWidth < HITBOX_WIDTH then
-		return nil -- Door too narrow after boundary clamping
+		-- Too narrow after clamping, use center-only door
+		local centerPoint = lerpVec(overlapLeft, overlapRight, 0.5)
+		Common.DebugLog("Info", "Door %d->%d: Too narrow after clamping, using center-only door", areaA.id, areaB.id)
+		return {
+			left = nil,
+			middle = centerPoint,
+			right = nil,
+			owner = geometry.ownerId,
+			needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT,
+		}
 	end
 
 	local middle = lerpVec(overlapLeft, overlapRight, 0.5)
@@ -468,13 +486,6 @@ function ConnectionBuilder.BuildDoorsForConnections()
 
 								-- Create SHARED doors (use canonical ordering for IDs)
 								local door = createDoorForAreas(node, targetNode)
-								if not door then
-									Log:Warn(
-										"Door creation FAILED for %s->%s (no valid overlap or too narrow)",
-										nodeId,
-										targetId
-									)
-								end
 								if door then
 									local fwdDir = dirId
 

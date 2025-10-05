@@ -21,6 +21,8 @@ function StateHandler.handleUserInput(userCmd)
 		G.currentState = G.States.IDLE
 		G.wasManualWalking = true
 		G.BotIsMoving = false
+		-- Set timestamp when user last moved to prevent immediate pathfinding
+		G.lastManualMovementTick = globals.TickCount()
 		return true
 	end
 	return false
@@ -28,6 +30,12 @@ end
 
 function StateHandler.handleIdleState()
 	G.BotIsMoving = false
+
+	-- Prevent pathfinding spam after manual movement (66 tick cooldown = 1 second)
+	local currentTick = globals.TickCount()
+	if G.lastManualMovementTick and (currentTick - G.lastManualMovementTick) < 66 then
+		return -- Still in cooldown after manual movement
+	end
 
 	-- Ensure navigation is ready before any goal work
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
@@ -76,8 +84,8 @@ function StateHandler.handleIdleState()
 		G.lastPathfindingTick = 0
 	end
 
-	-- Only allow pathfinding every 60 ticks (1 second)
-	if currentTick - G.lastPathfindingTick < 60 then
+	-- Only allow pathfinding every 90 ticks (~1.5 seconds) to prevent spam
+	if currentTick - G.lastPathfindingTick < 90 then
 		return
 	end
 
@@ -169,28 +177,32 @@ function StateHandler.handlePathfindingState()
 end
 
 -- Simplified unstuck logic - guarantee bot never gets stuck
+-- Only checks velocity/timeout when bot is walking autonomously
 function StateHandler.handleStuckState(userCmd)
 	local currentTick = globals.TickCount()
 
-	-- Check velocity for stuck detection
-	local pLocal = G.pLocal.entity
-	if pLocal then
-		local velocity = pLocal:EstimateAbsVelocity()
-		local speed2D = 0
-		if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
-			speed2D = math.sqrt(velocity.x^2 + velocity.y^2)
-		end
+	-- Velocity/timeout checks ONLY when bot is walking autonomously
+	if G.Menu.Main.EnableWalking then
+		-- Check velocity for stuck detection
+		local pLocal = G.pLocal.entity
+		if pLocal then
+			local velocity = pLocal:EstimateAbsVelocity()
+			local speed2D = 0
+			if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
+				speed2D = math.sqrt(velocity.x ^ 2 + velocity.y ^ 2)
+			end
 
-		-- MAIN TRIGGER: Velocity < 50 = STUCK
-		if speed2D < 50 then
-			Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
+			-- MAIN TRIGGER: Velocity < 50 = STUCK
+			if speed2D < 50 then
+				Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
 
-			-- Add cost penalties to current connection (node->node, node->door, door->door)
-			StateHandler.addStuckPenalties()
+				-- Add cost penalties to current connection (node->node, node->door, door->door)
+				StateHandler.addStuckPenalties()
 
-			-- ALWAYS repath when stuck (simplified approach)
-			StateHandler.forceRepath("Velocity too low")
-			return
+				-- ALWAYS repath when stuck (simplified approach)
+				StateHandler.forceRepath("Velocity too low")
+				return
+			end
 		end
 	end
 
@@ -224,15 +236,28 @@ function StateHandler.addStuckPenalties()
 				local connection = Node.GetConnectionEntry(fromNode, toNode)
 				if connection then
 					connection.cost = (connection.cost or 1) + 50
-					Log:Info("Added 50 cost penalty to connection " .. tostring(fromId) .. " -> " .. tostring(toId) .. " (stuck penalty)")
+					Log:Info(
+						"Added 50 cost penalty to connection "
+							.. tostring(fromId)
+							.. " -> "
+							.. tostring(toId)
+							.. " (stuck penalty)"
+					)
 				end
 			end
 		end
 	end
 end
 
--- Force immediate repath (simplified)
+-- Force immediate repath (with cooldown to prevent spam)
 function StateHandler.forceRepath(reason)
+	local WorkManager = require("MedBot.WorkManager")
+
+	-- Prevent repath spam with 33 tick cooldown
+	if not WorkManager.attemptWork(33, "force_repath_cooldown") then
+		return -- Still on cooldown, ignore repath request
+	end
+
 	Log:Warn("Force repath triggered: %s", reason)
 
 	-- Clear stuck state
@@ -245,7 +270,6 @@ function StateHandler.forceRepath(reason)
 	G.lastPathfindingTick = 0
 
 	-- Reset work manager to allow immediate repath
-	local WorkManager = require("MedBot.WorkManager")
 	WorkManager.clearWork("Pathfinding")
 end
 

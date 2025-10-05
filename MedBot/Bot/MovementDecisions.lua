@@ -112,7 +112,6 @@ end
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
 	Log:Debug(
-		"Node advancement - Skip_Nodes = %s, path length = %d",
 		tostring(G.Menu.Main.Skip_Nodes),
 		#G.Navigation.path
 	)
@@ -145,63 +144,62 @@ function MovementDecisions.advanceNode()
 	return true -- Continue moving
 end
 
--- Decision: Check if bot is stuck
+-- Decision: Check stuck state: Simple walkability check with cooldown
 function MovementDecisions.checkStuckState()
-	-- Increment stuck counter
-	G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
+	-- Velocity/timeout checks ONLY when bot is walking autonomously
+	if G.Menu.Main.EnableWalking then
+		local pLocal = G.pLocal.entity
+		if pLocal then
+			-- Track how long we've been on the same node
+			local currentNodeId = G.Navigation.path and G.Navigation.path[1] and G.Navigation.path[1].id
+			if currentNodeId then
+				if currentNodeId ~= G.Navigation.lastNodeId then
+					G.Navigation.lastNodeId = currentNodeId
+					G.Navigation.currentNodeTicks = 0
+				else
+					G.Navigation.currentNodeTicks = (G.Navigation.currentNodeTicks or 0) + 1
+				end
 
-	-- Check if stuck (2 seconds = 132 ticks)
-	if G.Navigation.currentNodeTicks > 132 then
-		Log:Warn("Bot stuck for 2 seconds - transitioning to STUCK state")
-		G.currentState = G.States.STUCK
-		return false -- Don't continue movement
-	end
+				-- Stuck detection: If on same node for > 200 ticks (3 seconds), force repath
+				if G.Navigation.currentNodeTicks > 200 then
+					Log:Warn("STUCK: Same node for %d ticks, switching to STUCK state", G.Navigation.currentNodeTicks)
+					G.currentState = G.States.STUCK
+					G.Navigation.currentNodeTicks = 0
+					return
+				end
+			end
 
-	return true -- Continue moving
-end
+			-- Velocity-based stuck detection
+			local velocity = pLocal:EstimateAbsVelocity()
+			if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
+				local speed2D = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
 
--- Decision: Handle speed penalties and optimization
-function MovementDecisions.handleSpeedOptimization()
-	if G.Navigation.path and #G.Navigation.path > 1 then
-		-- Speed penalty check (moved from NodeSkipper - this is stuck detection, not skipping)
-		local currentTick = globals.TickCount()
-		if not G.__lastSpeedCheckTick then
-			G.__lastSpeedCheckTick = currentTick
-		end
+				-- Critical velocity threshold: < 50 = stuck
+				if speed2D < 50 then
+					G.Navigation.lowVelocityTicks = (G.Navigation.lowVelocityTicks or 0) + 1
 
-		-- Check every 33 ticks (~0.5s at 66fps)
-		if currentTick - G.__lastSpeedCheckTick >= 33 then
-			G.__lastSpeedCheckTick = currentTick
-
-			-- Get current player speed
-			local pLocal = entities.GetLocalPlayer()
-			if pLocal then
-				local velocity = pLocal:EstimateAbsVelocity() or Vector3(0, 0, 0)
-				local speed = velocity:Length2D()
-
-				-- Only trigger if speed is below 50
-				if speed < 50 then
-					Log:Debug("Speed penalty check triggered - speed: %.1f", speed)
-
-					local targetPos = MovementDecisions.getCurrentTarget()
-					if targetPos and not ISWalkable.Path(G.pLocal.Origin, targetPos) then
-						Log:Debug("Direct path to target not walkable - adding penalty")
-
-						-- Add penalty to connection
-						if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
-							local currentNode = G.Navigation.path[1]
-							local nextNode = G.Navigation.path[2]
-							if currentNode and nextNode then
-								G.CircuitBreaker.addConnectionFailure(currentNode, nextNode)
-							end
-						end
-
-						-- Force repath
-						if G.StateHandler and G.StateHandler.forceRepath then
-							G.StateHandler.forceRepath()
-							Log:Debug("Forced repath due to unwalkable connection")
-						end
+					-- If velocity too low for 66 ticks (1 second), switch to STUCK state
+					if G.Navigation.lowVelocityTicks > 66 then
+						Log:Warn("STUCK: Low velocity (%d) for %d ticks, entering STUCK state", speed2D, G.Navigation.lowVelocityTicks)
+						G.currentState = G.States.STUCK
+						G.Navigation.lowVelocityTicks = 0
 					end
+				else
+					G.Navigation.lowVelocityTicks = 0
+				end
+			end
+		end
+	end
+	
+	-- Simple walkability check for ALL modes (with 33 tick cooldown)
+	-- Only when NOT walking autonomously (walking mode has velocity checks)
+	if not G.Menu.Main.EnableWalking then
+		if WorkManager.attemptWork(33, "stuck_walkability_check") then
+			local targetPos = MovementDecisions.getCurrentTarget()
+			if targetPos then
+				if not ISWalkable.Path(G.pLocal.Origin, targetPos) then
+					Log:Warn("STUCK: Path to current target not walkable, repathing")
+					G.currentState = G.States.STUCK
 				end
 			end
 		end
@@ -272,7 +270,6 @@ function MovementDecisions.handleMovingState(userCmd)
 	MovementDecisions.handleDebugLogging()
 	MovementDecisions.checkDistanceAndAdvance(userCmd)
 	MovementDecisions.checkStuckState()
-	MovementDecisions.handleSpeedOptimization()
 
 	-- ALWAYS execute movement at the end, regardless of decision outcomes
 	MovementDecisions.executeMovement(userCmd)

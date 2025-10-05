@@ -138,7 +138,13 @@ local function onCreateMove(userCmd)
 	elseif G.currentState == G.States.MOVING then
 		MovementDecisions.handleMovingState(userCmd)
 	elseif G.currentState == G.States.STUCK then
-		StateHandler.handleStuckState(userCmd)
+		-- Only run stuck logic if walking is enabled (manual override mode = no stuck logic)
+		if G.Menu.Main.EnableWalking then
+			StateHandler.handleStuckState(userCmd)
+		else
+			-- Manual mode: just transition back to MOVING, skipping still works
+			G.currentState = G.States.MOVING
+		end
 	end
 
 	-- Work management
@@ -4088,8 +4094,17 @@ local function createDoorForAreas(areaA, areaB)
 	local overlapMin = math.max(aMin, bMin)
 	local overlapMax = math.min(aMax, bMax)
 
+	-- If overlap too small, create center-only door at midpoint between areas
 	if overlapMax - overlapMin < HITBOX_WIDTH then
-		return nil -- No valid overlap
+		local centerPoint = lerpVec(a0, a1, 0.5)
+		Common.DebugLog("Info", "Door %d->%d: No overlap, using center-only door", areaA.id, areaB.id)
+		return {
+			left = nil,
+			middle = centerPoint,
+			right = nil,
+			owner = geometry.ownerId,
+			needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT,
+		}
 	end
 
 	-- Get area bounds on the door's varying axis
@@ -4141,7 +4156,16 @@ local function createDoorForAreas(areaA, areaB)
 	-- Calculate door width and middle point
 	local finalWidth = (overlapRight - overlapLeft):Length2D()
 	if finalWidth < HITBOX_WIDTH then
-		return nil -- Door too narrow after boundary clamping
+		-- Too narrow after clamping, use center-only door
+		local centerPoint = lerpVec(overlapLeft, overlapRight, 0.5)
+		Common.DebugLog("Info", "Door %d->%d: Too narrow after clamping, using center-only door", areaA.id, areaB.id)
+		return {
+			left = nil,
+			middle = centerPoint,
+			right = nil,
+			owner = geometry.ownerId,
+			needJump = (areaB.pos.z - areaA.pos.z) > STEP_HEIGHT,
+		}
 	end
 
 	local middle = lerpVec(overlapLeft, overlapRight, 0.5)
@@ -4302,13 +4326,6 @@ function ConnectionBuilder.BuildDoorsForConnections()
 
 								-- Create SHARED doors (use canonical ordering for IDs)
 								local door = createDoorForAreas(node, targetNode)
-								if not door then
-									Log:Warn(
-										"Door creation FAILED for %s->%s (no valid overlap or too narrow)",
-										nodeId,
-										targetId
-									)
-								end
 								if door then
 									local fwdDir = dirId
 
@@ -5729,7 +5746,6 @@ end
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
 	Log:Debug(
-		"Node advancement - Skip_Nodes = %s, path length = %d",
 		tostring(G.Menu.Main.Skip_Nodes),
 		#G.Navigation.path
 	)
@@ -5762,64 +5778,68 @@ function MovementDecisions.advanceNode()
 	return true -- Continue moving
 end
 
--- Decision: Check if bot is stuck
+-- Decision: Check stuck state: Simple walkability check with cooldown
 function MovementDecisions.checkStuckState()
-	-- Increment stuck counter
-	G.Navigation.currentNodeTicks = G.Navigation.currentNodeTicks + 1
-
-	-- Check if stuck (2 seconds = 132 ticks)
-	if G.Navigation.currentNodeTicks > 132 then
-		Log:Warn("Bot stuck for 2 seconds - transitioning to STUCK state")
-		G.currentState = G.States.STUCK
-		return false -- Don't continue movement
-	end
-
-	return true -- Continue moving
-end
-
--- Decision: Handle speed penalties and optimization
-function MovementDecisions.handleSpeedOptimization()
-	if G.Navigation.path and #G.Navigation.path > 1 then
-		-- Speed penalty check (moved from NodeSkipper - this is stuck detection, not skipping)
-		local currentTick = globals.TickCount()
-		if not G.__lastSpeedCheckTick then
-			G.__lastSpeedCheckTick = currentTick
-		end
-
-		-- Check every 33 ticks (~0.5s at 66fps)
-		if currentTick - G.__lastSpeedCheckTick >= 33 then
-			G.__lastSpeedCheckTick = currentTick
-
-			-- Get current player speed
-			local pLocal = entities.GetLocalPlayer()
-			if pLocal then
-				local velocity = pLocal:EstimateAbsVelocity() or Vector3(0, 0, 0)
-				local speed = velocity:Length2D()
-
-				-- Only trigger if speed is below 50
-				if speed < 50 then
-					Log:Debug("Speed penalty check triggered - speed: %.1f", speed)
-
-					local targetPos = MovementDecisions.getCurrentTarget()
-					if targetPos and not ISWalkable.Path(G.pLocal.Origin, targetPos) then
-						Log:Debug("Direct path to target not walkable - adding penalty")
-
-						-- Add penalty to connection
-						if G.CircuitBreaker and G.CircuitBreaker.addConnectionFailure then
-							local currentNode = G.Navigation.path[1]
-							local nextNode = G.Navigation.path[2]
-							if currentNode and nextNode then
-								G.CircuitBreaker.addConnectionFailure(currentNode, nextNode)
-							end
-						end
-
-						-- Force repath
-						if G.StateHandler and G.StateHandler.forceRepath then
-							G.StateHandler.forceRepath()
-							Log:Debug("Forced repath due to unwalkable connection")
-						end
-					end
+	-- Velocity/timeout checks ONLY when bot is walking autonomously
+	if G.Menu.Main.EnableWalking then
+		local pLocal = G.pLocal.entity
+		if pLocal then
+			-- Track how long we've been on the same node
+			local currentNodeId = G.Navigation.path and G.Navigation.path[1] and G.Navigation.path[1].id
+			if currentNodeId then
+				if currentNodeId ~= G.Navigation.lastNodeId then
+					G.Navigation.lastNodeId = currentNodeId
+					G.Navigation.currentNodeTicks = 0
+				else
+					G.Navigation.currentNodeTicks = (G.Navigation.currentNodeTicks or 0) + 1
 				end
+
+				-- Stuck detection: If on same node for > 200 ticks (3 seconds), force repath
+				if G.Navigation.currentNodeTicks > 200 then
+					Log:Warn("STUCK: Same node for %d ticks, switching to STUCK state", G.Navigation.currentNodeTicks)
+					G.currentState = G.States.STUCK
+					G.Navigation.currentNodeTicks = 0
+					return
+				end
+			end
+
+			-- Velocity-based stuck detection
+			local velocity = pLocal:EstimateAbsVelocity()
+			if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
+				local speed2D = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+
+				-- Critical velocity threshold: < 50 = stuck
+				if speed2D < 50 then
+					G.Navigation.lowVelocityTicks = (G.Navigation.lowVelocityTicks or 0) + 1
+
+					-- If velocity too low for 66 ticks (1 second), switch to STUCK state
+					if G.Navigation.lowVelocityTicks > 66 then
+						Log:Warn("STUCK: Low velocity (%d) for %d ticks, entering STUCK state", speed2D, G.Navigation.lowVelocityTicks)
+						G.currentState = G.States.STUCK
+						G.Navigation.lowVelocityTicks = 0
+					end
+				else
+					G.Navigation.lowVelocityTicks = 0
+				end
+			end
+		end
+	end
+	
+	-- Walkability check for verification (frequency depends on mode)
+	local walkCheckCooldown = G.Menu.Main.EnableWalking and 66 or 33 -- 66 ticks in auto mode, 33 in manual
+	if WorkManager.attemptWork(walkCheckCooldown, "stuck_walkability_check") then
+		local targetPos = MovementDecisions.getCurrentTarget()
+		if targetPos then
+			if not ISWalkable.Path(G.pLocal.Origin, targetPos) then
+				-- Store that path is unwalkable, but don't immediately repath in auto mode
+				G.Navigation.pathUnwalkable = true
+				if not G.Menu.Main.EnableWalking then
+					-- Manual mode: repath immediately
+					Log:Warn("STUCK: Path to current target not walkable, repathing")
+					G.currentState = G.States.STUCK
+				end
+			else
+				G.Navigation.pathUnwalkable = false
 			end
 		end
 	end
@@ -5889,7 +5909,6 @@ function MovementDecisions.handleMovingState(userCmd)
 	MovementDecisions.handleDebugLogging()
 	MovementDecisions.checkDistanceAndAdvance(userCmd)
 	MovementDecisions.checkStuckState()
-	MovementDecisions.handleSpeedOptimization()
 
 	-- ALWAYS execute movement at the end, regardless of decision outcomes
 	MovementDecisions.executeMovement(userCmd)
@@ -5972,16 +5991,18 @@ local function RunAgentSkipping(currentPos)
 	return skipCount
 end
 
--- Check if next node is closer than current (cheap distance check)
+-- Check if we're closer to next node than current node is (geometric check)
+-- This guarantees it's better to go for next node
 local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode then
 		return false
 	end
 
-	local distToCurrent = Common.Distance3D(currentPos, currentNode.pos)
-	local distToNext = Common.Distance3D(currentPos, nextNode.pos)
+	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
+	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 
-	return distToNext < distToCurrent
+	-- If we're closer to next node than current node is, we can skip
+	return distPlayerToNext < distCurrentToNext
 end
 
 -- ============================================================================
@@ -5992,8 +6013,9 @@ end
 function NodeSkipper.Reset()
 	G.Navigation.nextNodeCloser = false
 	WorkManager.resetCooldown("active_skip_check") -- Reset active skip check cooldown
-	WorkManager.resetCooldown("passive_skip_check") -- Reset passive skip check cooldown
+	WorkManager.resetCooldown("passive_walkability_check") -- Reset passive walkability check cooldown
 	WorkManager.resetCooldown("agent_skip_check") -- Reset agent skip check cooldown
+	WorkManager.resetCooldown("manual_mode_walkability") -- Reset manual mode walkability check
 	Log:Debug("NodeSkipper state reset")
 end
 
@@ -6026,10 +6048,10 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 
 	local maxNodesToSkip = 0
 
-	-- PASSIVE SYSTEM: Distance + walkability check (runs every 11 ticks)
-	if WorkManager.attemptWork(11, "passive_skip_check") then
-		if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-			-- Node is closer, but also check if path is walkable
+	-- PASSIVE SYSTEM: Simple distance check (runs every tick - very cheap)
+	if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
+		-- We're geometrically closer to next node - check if path is walkable (throttled)
+		if WorkManager.attemptWork(11, "passive_walkability_check") then
 			if ISWalkable.Path(currentPos, nextNode.pos) then
 				Common.DebugLog(
 					"Debug",
@@ -7559,6 +7581,8 @@ function StateHandler.handleUserInput(userCmd)
 		G.currentState = G.States.IDLE
 		G.wasManualWalking = true
 		G.BotIsMoving = false
+		-- Set timestamp when user last moved to prevent immediate pathfinding
+		G.lastManualMovementTick = globals.TickCount()
 		return true
 	end
 	return false
@@ -7566,6 +7590,12 @@ end
 
 function StateHandler.handleIdleState()
 	G.BotIsMoving = false
+
+	-- Prevent pathfinding spam after manual movement (66 tick cooldown = 1 second)
+	local currentTick = globals.TickCount()
+	if G.lastManualMovementTick and (currentTick - G.lastManualMovementTick) < 66 then
+		return -- Still in cooldown after manual movement
+	end
 
 	-- Ensure navigation is ready before any goal work
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
@@ -7614,8 +7644,8 @@ function StateHandler.handleIdleState()
 		G.lastPathfindingTick = 0
 	end
 
-	-- Only allow pathfinding every 60 ticks (1 second)
-	if currentTick - G.lastPathfindingTick < 60 then
+	-- Only allow pathfinding every 90 ticks (~1.5 seconds) to prevent spam
+	if currentTick - G.lastPathfindingTick < 90 then
 		return
 	end
 
@@ -7707,28 +7737,40 @@ function StateHandler.handlePathfindingState()
 end
 
 -- Simplified unstuck logic - guarantee bot never gets stuck
+-- Only checks velocity/timeout when bot is walking autonomously
 function StateHandler.handleStuckState(userCmd)
-	local currentTick = globals.TickCount()
-
-	-- Check velocity for stuck detection
-	local pLocal = G.pLocal.entity
-	if pLocal then
+	-- Velocity/timeout checks ONLY when bot is walking autonomously
+	if G.Menu.Main.EnableWalking then
+		-- Check velocity for stuck detection
+		local pLocal = G.pLocal.entity
+		-- Velocity-based stuck detection
 		local velocity = pLocal:EstimateAbsVelocity()
-		local speed2D = 0
 		if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
-			speed2D = math.sqrt(velocity.x^2 + velocity.y^2)
-		end
+			local speed2D = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
 
-		-- MAIN TRIGGER: Velocity < 50 = STUCK
-		if speed2D < 50 then
-			Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
+			-- Critical velocity threshold: < 50 = stuck
+			if speed2D < 50 then
+				G.Navigation.lowVelocityTicks = (G.Navigation.lowVelocityTicks or 0) + 1
 
-			-- Add cost penalties to current connection (node->node, node->door, door->door)
-			StateHandler.addStuckPenalties()
-
-			-- ALWAYS repath when stuck (simplified approach)
-			StateHandler.forceRepath("Velocity too low")
-			return
+				-- If velocity too low for 66 ticks (1 second), check if path is actually unwalkable
+				if G.Navigation.lowVelocityTicks > 66 then
+					-- Only repath if walkability check confirmed path is blocked
+					if G.Navigation.pathUnwalkable then
+						Log:Warn("STUCK: Low velocity + path unwalkable verified, entering STUCK state")
+						G.currentState = G.States.STUCK
+						G.Navigation.lowVelocityTicks = 0
+					else
+						-- Path is walkable but velocity low - might just be slow, don't repath yet
+						Log:Debug("Low velocity but path walkable, waiting...")
+						-- Reset counter if it gets too high without confirmed unwalkability
+						if G.Navigation.lowVelocityTicks > 132 then -- 2 seconds
+							G.Navigation.lowVelocityTicks = 0
+						end
+					end
+				end
+			else
+				G.Navigation.lowVelocityTicks = 0
+			end
 		end
 	end
 
@@ -7762,15 +7804,28 @@ function StateHandler.addStuckPenalties()
 				local connection = Node.GetConnectionEntry(fromNode, toNode)
 				if connection then
 					connection.cost = (connection.cost or 1) + 50
-					Log:Info("Added 50 cost penalty to connection " .. tostring(fromId) .. " -> " .. tostring(toId) .. " (stuck penalty)")
+					Log:Info(
+						"Added 50 cost penalty to connection "
+							.. tostring(fromId)
+							.. " -> "
+							.. tostring(toId)
+							.. " (stuck penalty)"
+					)
 				end
 			end
 		end
 	end
 end
 
--- Force immediate repath (simplified)
+-- Force immediate repath (with cooldown to prevent spam)
 function StateHandler.forceRepath(reason)
+	local WorkManager = require("MedBot.WorkManager")
+
+	-- Prevent repath spam with 33 tick cooldown
+	if not WorkManager.attemptWork(33, "force_repath_cooldown") then
+		return -- Still on cooldown, ignore repath request
+	end
+
 	Log:Warn("Force repath triggered: %s", reason)
 
 	-- Clear stuck state
@@ -7783,7 +7838,6 @@ function StateHandler.forceRepath(reason)
 	G.lastPathfindingTick = 0
 
 	-- Reset work manager to allow immediate repath
-	local WorkManager = require("MedBot.WorkManager")
 	WorkManager.clearWork("Pathfinding")
 end
 
