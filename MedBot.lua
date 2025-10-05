@@ -4658,36 +4658,33 @@ local function createDoorForAreas(areaA, areaB)
 	for _, area in ipairs({ areaA, areaB }) do
 		if area.wallCorners then
 			for _, wallCorner in ipairs(area.wallCorners) do
-				local cornerCoord = wallCorner[axis]
-
-				-- Check if wall corner is near the door on this axis
-				if cornerCoord >= minDoor - WALL_CLEARANCE and cornerCoord <= maxDoor + WALL_CLEARANCE then
-					-- Wall corner is close to door, determine which side
-					if cornerCoord < minDoor then
-						-- Wall is to the left of door, shrink door from left
-						local gap = minDoor - cornerCoord
-						if gap < WALL_CLEARANCE then
-							shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - gap)
-						end
-					elseif cornerCoord > maxDoor then
-						-- Wall is to the right of door, shrink door from right
-						local gap = cornerCoord - maxDoor
-						if gap < WALL_CLEARANCE then
-							shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - gap)
-						end
-					else
-						-- Wall is INSIDE door bounds - need to shrink from both sides or pick closest
-						local distFromMin = cornerCoord - minDoor
-						local distFromMax = maxDoor - cornerCoord
-						if distFromMin < distFromMax then
-							-- Closer to min side, shrink from min
-							shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - distFromMin)
-						else
-							-- Closer to max side, shrink from max
-							shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - distFromMax)
-						end
-					end
+				-- Get coordinates on both axes
+				local cornerVaryingCoord = wallCorner[axis]      -- Door varies on this axis
+				local cornerConstCoord = wallCorner[constAxis]   -- Door is constant on this axis
+				local doorConstCoord = baseEdge0[constAxis]      -- Door's position on constant axis
+				
+				-- FIRST: Check if wall corner is near the door on the CONSTANT axis
+				-- If corner is far away perpendicular to door, ignore it
+				local distOnConstAxis = math.abs(cornerConstCoord - doorConstCoord)
+				if distOnConstAxis > WALL_CLEARANCE then
+					goto continue_corner -- Corner is too far away perpendicular to door
 				end
+				
+				-- SECOND: Check distance to door endpoints on the VARYING axis
+				local distToMin = math.abs(cornerVaryingCoord - minDoor)
+				local distToMax = math.abs(cornerVaryingCoord - maxDoor)
+
+				-- Shrink from min side if wall corner is within 24 units of it
+				if distToMin < WALL_CLEARANCE then
+					shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - distToMin)
+				end
+
+				-- Shrink from max side if wall corner is within 24 units of it
+				if distToMax < WALL_CLEARANCE then
+					shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - distToMax)
+				end
+				
+				::continue_corner::
 			end
 		end
 	end
