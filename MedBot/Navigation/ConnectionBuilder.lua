@@ -223,14 +223,14 @@ local function createDoorForAreas(areaA, areaB)
 
 	local a0, a1, b0, b1 = geometry.a0, geometry.a1, geometry.b0, geometry.b1
 
-	-- Pick higher Z border as base (simple: compare max Z of each edge)
+	-- Pick higher Z border as base (door stays at owner's boundary)
 	local aMaxZ = math.max(a0.z, a1.z)
 	local bMaxZ = math.max(b0.z, b1.z)
 	local baseEdge0, baseEdge1
 	if bMaxZ > aMaxZ + 0.5 then
-		baseEdge0, baseEdge1 = b0, b1 -- Use B's edge
+		baseEdge0, baseEdge1 = b0, b1 -- Use B's edge (B is owner)
 	else
-		baseEdge0, baseEdge1 = a0, a1 -- Use A's edge (or tie)
+		baseEdge0, baseEdge1 = a0, a1 -- Use A's edge (A is owner)
 	end
 
 	-- Determine shared axis: vertical edge (Y varies) or horizontal edge (X varies)
@@ -262,42 +262,46 @@ local function createDoorForAreas(areaA, areaB)
 	local areaBoundsA = { min = aMin, max = aMax }
 	local areaBoundsB = { min = bMin, max = bMax }
 
-	-- Build door points on chosen base edge using 1D overlap
-	local function pointOnBase(axisVal)
+	-- Build door points ON the owner's edge line (stays on edge even if sloped)
+	local function pointOnEdge(axisVal)
+		-- Calculate interpolation factor along varying axis
 		local t = (baseEdge1[axis] - baseEdge0[axis]) ~= 0
 				and ((axisVal - baseEdge0[axis]) / (baseEdge1[axis] - baseEdge0[axis]))
 			or 0.5
 		t = math.max(0, math.min(1, t))
 
-		local pos = Vector3(0, 0, 0)
-		pos[axis] = axisVal
-		pos[constAxis] = baseEdge0[constAxis]
-		pos.z = lerp(baseEdge0.z, baseEdge1.z, t)
+		-- Interpolate ALL components to stay on the edge line
+		local pos = Vector3(
+			lerp(baseEdge0.x, baseEdge1.x, t),
+			lerp(baseEdge0.y, baseEdge1.y, t),
+			lerp(baseEdge0.z, baseEdge1.z, t)
+		)
+		
 		return pos
 	end
 
-	local overlapLeft = pointOnBase(overlapMin)
-	local overlapRight = pointOnBase(overlapMax)
+	local overlapLeft = pointOnEdge(overlapMin)
+	local overlapRight = pointOnEdge(overlapMax)
 
 	-- STEP 1: Apply boundary clamping FIRST (shearing - stay within common area)
 	local commonMin = math.max(areaBoundsA.min, areaBoundsB.min)
 	local commonMax = math.min(areaBoundsA.max, areaBoundsB.max)
 
-	-- Clamp left endpoint to common bounds
+	-- Clamp left endpoint to common bounds and snap back to edge line
 	local leftCoord = overlapLeft[axis]
 	local rightCoord = overlapRight[axis]
 
 	if leftCoord < commonMin then
-		overlapLeft[axis] = commonMin
+		overlapLeft = pointOnEdge(commonMin) -- Recalculate to stay on edge
 	elseif leftCoord > commonMax then
-		overlapLeft[axis] = commonMax
+		overlapLeft = pointOnEdge(commonMax) -- Recalculate to stay on edge
 	end
 
-	-- Clamp right endpoint to common bounds
+	-- Clamp right endpoint to common bounds and snap back to edge line
 	if rightCoord < commonMin then
-		overlapRight[axis] = commonMin
+		overlapRight = pointOnEdge(commonMin) -- Recalculate to stay on edge
 	elseif rightCoord > commonMax then
-		overlapRight[axis] = commonMax
+		overlapRight = pointOnEdge(commonMax) -- Recalculate to stay on edge
 	end
 
 	-- Calculate door width and middle point
@@ -327,14 +331,15 @@ local function createDoorForAreas(areaA, areaB)
 			for _, wallCorner in ipairs(area.wallCorners) do
 				-- Get coordinates on both axes
 				local cornerVaryingCoord = wallCorner[axis]      -- Door varies on this axis
-				local cornerConstCoord = wallCorner[constAxis]   -- Door is constant on this axis
-				local doorConstCoord = baseEdge0[constAxis]      -- Door's position on constant axis
 				
-				-- FIRST: Check if wall corner is near the door on the CONSTANT axis
-				-- If corner is far away perpendicular to door, ignore it
-				local distOnConstAxis = math.abs(cornerConstCoord - doorConstCoord)
-				if distOnConstAxis > WALL_CLEARANCE then
-					goto continue_corner -- Corner is too far away perpendicular to door
+				-- Calculate closest point on door edge line to this corner
+				local edgePoint = pointOnEdge(cornerVaryingCoord)
+				
+				-- FIRST: Check if wall corner is near the door edge line
+				-- Calculate distance from corner to its projection on the edge
+				local distToEdge = (wallCorner - edgePoint):Length2D()
+				if distToEdge > WALL_CLEARANCE then
+					goto continue_corner -- Corner is too far away from door edge
 				end
 				
 				-- SECOND: Check distance to door endpoints on the VARYING axis
@@ -356,21 +361,25 @@ local function createDoorForAreas(areaA, areaB)
 		end
 	end
 
-	-- Apply shrinking to door endpoints
+	-- Apply shrinking to door endpoints and snap back to edge line
 	if shrinkFromMin > 0 then
+		local newCoord
 		if leftCoordFinal < rightCoordFinal then
-			overlapLeft[axis] = leftCoordFinal + shrinkFromMin
+			newCoord = leftCoordFinal + shrinkFromMin
 		else
-			overlapLeft[axis] = leftCoordFinal - shrinkFromMin
+			newCoord = leftCoordFinal - shrinkFromMin
 		end
+		overlapLeft = pointOnEdge(newCoord) -- Snap to edge line after shrinking
 	end
 
 	if shrinkFromMax > 0 then
+		local newCoord
 		if rightCoordFinal > leftCoordFinal then
-			overlapRight[axis] = rightCoordFinal - shrinkFromMax
+			newCoord = rightCoordFinal - shrinkFromMax
 		else
-			overlapRight[axis] = rightCoordFinal + shrinkFromMax
+			newCoord = rightCoordFinal + shrinkFromMax
 		end
+		overlapRight = pointOnEdge(newCoord) -- Snap to edge line after shrinking
 	end
 
 	-- Recalculate width after wall avoidance

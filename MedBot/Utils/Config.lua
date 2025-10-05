@@ -5,7 +5,6 @@ local Common = require("MedBot.Core.Common")
 local json = require("MedBot.Utils.Json")
 local Default_Config = require("MedBot.Utils.DefaultConfig")
 
-
 local Config = {}
 
 local Log = Common.Log
@@ -96,7 +95,6 @@ Config.LoadCFG()
 
 -- Save configuration automatically when the script unloads
 local function ConfigAutoSaveOnUnload()
-
 	print("[CONFIG] Unloading script, saving configuration...")
 
 	-- Save the current configuration state
@@ -105,7 +103,6 @@ local function ConfigAutoSaveOnUnload()
 	else
 		printc(255, 0, 0, 255, "[CONFIG] Warning: Unable to save config, G.Menu is nil")
 	end
-
 end
 
 callbacks.Register("Unload", "ConfigAutoSaveOnUnload", ConfigAutoSaveOnUnload)
