@@ -2210,7 +2210,17 @@ local function OnDraw()
                                         -- Choose color: RED for one-directional, YELLOW for bidirectional
                                         local r, g, b, a = 255, 255, 0, 160 -- Default yellow
                                         if not bidirectional then
-                                            r, g, b, a = 255, 50, 50, 120 -- Red for one-way
+                                            r, g, b, a = 255, 50, 50, 140 -- Red for one-way
+                                        end
+                                        
+                                        -- For one-way connections, draw red line from source area center to door middle
+                                        if not bidirectional then
+                                            draw.Color(r, g, b, a)
+                                            local sa = client.WorldToScreen(areaPos)
+                                            local sm = client.WorldToScreen(middlePos)
+                                            if sa and sm then
+                                                draw.Line(sa[1], sa[2], sm[1], sm[2])
+                                            end
                                         end
                                         
                                         -- Check if door has sides or just middle
