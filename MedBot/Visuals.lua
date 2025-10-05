@@ -334,6 +334,25 @@ local function OnDraw()
         local doorConvergencePoints = {} -- Store convergence points (direction to area center)
         local CONVERGENCE_OFFSET = 12 -- Units in front of middle door point
         
+        -- Helper: Check if connection is bidirectional (area→door AND door→area)
+        local function isBidirectional(areaNode, doorBaseId)
+            local doorMiddle = G.Navigation.nodes[doorBaseId .. "_middle"]
+            if not doorMiddle or not doorMiddle.c then return false end
+            
+            -- Check if door has connection back to area
+            for _, d in pairs(doorMiddle.c) do
+                if d.connections then
+                    for _, c in ipairs(d.connections) do
+                        local aid = (type(c) == "table") and c.node or c
+                        if aid == areaNode.id then
+                            return true
+                        end
+                    end
+                end
+            end
+            return false
+        end
+        
         -- First pass: Draw door triangles (area→door connections) and store convergence
         for id, entry in pairs(filteredNodes) do
             local node = entry.node
@@ -364,20 +383,54 @@ local function OnDraw()
                                     if middleNode and middleNode.pos then
                                         local middlePos = middleNode.pos + UP_VECTOR
                                         
+                                        -- Check if connection is bidirectional
+                                        local bidirectional = isBidirectional(node, doorBaseId)
+                                        
+                                        -- For one-way, find the target area this connection leads to
+                                        local targetAreaPos = nil
+                                        if not bidirectional and doorNode.c then
+                                            for _, d in pairs(doorNode.c) do
+                                                if d.connections then
+                                                    for _, c in ipairs(d.connections) do
+                                                        local aid = (type(c) == "table") and c.node or c
+                                                        if aid ~= node.id then -- Not the source area
+                                                            local targetArea = G.Navigation.nodes[aid]
+                                                            if targetArea and not targetArea.isDoor then
+                                                                targetAreaPos = targetArea.pos + UP_VECTOR
+                                                                break
+                                                            end
+                                                        end
+                                                    end
+                                                end
+                                                if targetAreaPos then break end
+                                            end
+                                        end
+                                        
+                                        -- Choose color: RED for one-directional, YELLOW for bidirectional
+                                        local r, g, b, a = 255, 255, 0, 160 -- Default yellow
+                                        if not bidirectional then
+                                            r, g, b, a = 255, 50, 50, 120 -- Red for one-way
+                                        end
+                                        
                                         -- Check if door has sides or just middle
                                         local hasLeftRight = (leftNode and leftNode.pos) or (rightNode and rightNode.pos)
                                         
                                         if hasLeftRight then
-                                            -- Calculate convergence point in front of middle (direction to area center)
-                                            local dirToArea = Common.Normalize(areaPos - middlePos)
-                                            local convergencePos = middlePos + dirToArea * CONVERGENCE_OFFSET
+                                            -- For one-way: triangle points to TARGET area, for two-way: points to SOURCE area
+                                            local triangleTargetPos = bidirectional and areaPos or (targetAreaPos or areaPos)
                                             
-                                            -- Store convergence point per door-area pair (each door has 2 sides)
-                                            local key = doorBaseId .. "_to_" .. id
-                                            doorConvergencePoints[key] = convergencePos
+                                            -- Calculate convergence point in front of middle (direction to triangle target)
+                                            local dirToTarget = Common.Normalize(triangleTargetPos - middlePos)
+                                            local convergencePos = middlePos + dirToTarget * CONVERGENCE_OFFSET
                                             
-                                            -- Draw triangle: left→convergence, right→convergence
-                                            draw.Color(255, 255, 0, 160) -- Yellow for door triangle
+                                            -- Store convergence point only for bidirectional (D2D needs both ways)
+                                            if bidirectional then
+                                                local key = doorBaseId .. "_to_" .. id
+                                                doorConvergencePoints[key] = convergencePos
+                                            end
+                                            
+                                            -- Draw triangle: left→convergence, right→convergence (color based on direction)
+                                            draw.Color(r, g, b, a)
                                             
                                             if leftNode and leftNode.pos then
                                                 local leftPos = leftNode.pos + UP_VECTOR
@@ -397,22 +450,27 @@ local function OnDraw()
                                                 end
                                             end
                                             
-                                            -- Draw line from convergence point to area center
+                                            -- Draw line from convergence point to triangle target (source for bidirectional, target for one-way)
                                             local sc = client.WorldToScreen(convergencePos)
-                                            local sa = client.WorldToScreen(areaPos)
-                                            if sc and sa then
-                                                draw.Line(sc[1], sc[2], sa[1], sa[2])
+                                            local st = client.WorldToScreen(triangleTargetPos)
+                                            if sc and st then
+                                                draw.Line(sc[1], sc[2], st[1], st[2])
                                             end
                                         else
-                                            -- Narrow door - store middle as convergence per door-area pair
-                                            local key = doorBaseId .. "_to_" .. id
-                                            doorConvergencePoints[key] = middlePos
+                                            -- Narrow door - for one-way use target area, for two-way use source area
+                                            local narrowTargetPos = bidirectional and areaPos or (targetAreaPos or areaPos)
                                             
-                                            draw.Color(255, 255, 0, 160)
+                                            -- Store middle as convergence only for bidirectional
+                                            if bidirectional then
+                                                local key = doorBaseId .. "_to_" .. id
+                                                doorConvergencePoints[key] = middlePos
+                                            end
+                                            
+                                            draw.Color(r, g, b, a)
                                             local sm = client.WorldToScreen(middlePos)
-                                            local sa = client.WorldToScreen(areaPos)
-                                            if sm and sa then
-                                                draw.Line(sm[1], sm[2], sa[1], sa[2])
+                                            local st = client.WorldToScreen(narrowTargetPos)
+                                            if sm and st then
+                                                draw.Line(sm[1], sm[2], st[1], st[2])
                                             end
                                         end
                                     end
