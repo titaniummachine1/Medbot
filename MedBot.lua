@@ -2823,7 +2823,7 @@ local function OnDraw()
         -- Get current memory usage directly for real-time display
         local currentMemKB = collectgarbage("count")
         local memMB = currentMemKB / 1024
-        draw.Text(10, currentY, string.format("Connection Depth: %d", connectionDepth or 0))
+        draw.Text(10, currentY, string.format("Memory: %.2f MB (Depth: %d)", memMB, connectionDepth or 0))
         currentY = currentY + 20
     end
     G.Navigation.currentNodeIndex = G.Navigation.currentNodeIndex or 1 -- Initialize currentNodeIndex if it's nil.
