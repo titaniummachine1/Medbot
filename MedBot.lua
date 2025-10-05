@@ -4110,7 +4110,7 @@ local function createDoorForAreas(areaA, areaB)
 			lerp(baseEdge0.y, baseEdge1.y, t),
 			lerp(baseEdge0.z, baseEdge1.z, t)
 		)
-		
+
 		return pos
 	end
 
@@ -4164,18 +4164,18 @@ local function createDoorForAreas(areaA, areaB)
 		if area.wallCorners then
 			for _, wallCorner in ipairs(area.wallCorners) do
 				-- Get coordinates on both axes
-				local cornerVaryingCoord = wallCorner[axis]      -- Door varies on this axis
-				
+				local cornerVaryingCoord = wallCorner[axis] -- Door varies on this axis
+
 				-- Calculate closest point on door edge line to this corner
 				local edgePoint = pointOnEdge(cornerVaryingCoord)
-				
+
 				-- FIRST: Check if wall corner is near the door edge line
 				-- Calculate distance from corner to its projection on the edge
 				local distToEdge = (wallCorner - edgePoint):Length2D()
 				if distToEdge > WALL_CLEARANCE then
 					goto continue_corner -- Corner is too far away from door edge
 				end
-				
+
 				-- SECOND: Check distance to door endpoints on the VARYING axis
 				local distToMin = math.abs(cornerVaryingCoord - minDoor)
 				local distToMax = math.abs(cornerVaryingCoord - maxDoor)
@@ -4189,7 +4189,7 @@ local function createDoorForAreas(areaA, areaB)
 				if distToMax < WALL_CLEARANCE then
 					shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - distToMax)
 				end
-				
+
 				::continue_corner::
 			end
 		end
