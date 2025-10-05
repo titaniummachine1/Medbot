@@ -191,32 +191,30 @@ local function OnDrawMenu()
 
 		-- Display Section
 		TimMenu.BeginSector("Display Options")
-		-- Areas Visuals Combo - groups area-related visual options together for better organization
-		G.Menu.Visuals.showConnections = TimMenu.Checkbox("Show Nav Connections", G.Menu.Visuals.showConnections)
-		TimMenu.NextLine()
-
+		
 		-- Multi-selection combo for all visual elements
-		local visualElements = { "Areas", "Doors", "Wall Corners", "Nav Connections" }
+		local visualElements = {"Areas", "Doors", "Wall Corners", "Connections", "D2D Connections"}
 		local visualSelections = {
 			G.Menu.Visuals.showAreas or false,
 			G.Menu.Visuals.showDoors or false,
 			G.Menu.Visuals.showCornerConnections or false,
-			G.Menu.Visuals.showConnections or false,
+			G.Menu.Visuals.showConnections == nil and true or G.Menu.Visuals.showConnections, -- Default ON
+			G.Menu.Visuals.showD2D or false,
 		}
 
 		local newSelections = TimMenu.Combo("Visual Elements", visualSelections, visualElements)
 
-		-- Update boolean values based on combo selections
+		-- Update state based on selections
 		G.Menu.Visuals.showAreas = newSelections[1]
 		G.Menu.Visuals.showDoors = newSelections[2]
 		G.Menu.Visuals.showCornerConnections = newSelections[3]
 		G.Menu.Visuals.showConnections = newSelections[4]
+		G.Menu.Visuals.showD2D = newSelections[5]
 		TimMenu.NextLine()
 
 		-- Additional visual options
 		G.Menu.Visuals.showAgentBoxes = G.Menu.Visuals.showAgentBoxes or false
 		G.Menu.Visuals.showAgentBoxes = TimMenu.Checkbox("Show Agent Boxes", G.Menu.Visuals.showAgentBoxes)
-		TimMenu.NextLine()
 
 		G.Menu.Visuals.drawPath = G.Menu.Visuals.drawPath or false
 		G.Menu.Visuals.drawPath = TimMenu.Checkbox("Draw Path", G.Menu.Visuals.drawPath)
@@ -229,13 +227,6 @@ local function OnDrawMenu()
 		G.Menu.Visuals.showNodeIds = G.Menu.Visuals.showNodeIds or false
 		G.Menu.Visuals.showNodeIds = TimMenu.Checkbox("Show Node IDs", G.Menu.Visuals.showNodeIds)
 		TimMenu.Tooltip("Display node ID numbers on the map for debugging")
-		TimMenu.NextLine()
-
-		if G.Menu.Visuals.simplifiedConnections == nil then
-			G.Menu.Visuals.simplifiedConnections = true
-		end
-		G.Menu.Visuals.simplifiedConnections = TimMenu.Checkbox("Simplified Connections", G.Menu.Visuals.simplifiedConnections)
-		TimMenu.Tooltip("Only show area center <-> door connections (hides intra-area and door-to-door)")
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()

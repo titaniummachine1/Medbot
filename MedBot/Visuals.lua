@@ -328,102 +328,193 @@ local function OnDraw()
     -- Agent visualization removed - back to simple node skipping
     -- No complex agent visualization needed for distance-based skipping
 
-    -- Show connections between nav nodes (colored by directionality)
+    -- Show connections between nav nodes with triangle visualization for doors
     if G.Menu.Visuals.showConnections then
+        local drawnDoorTriangles = {} -- Track which door groups we've drawn
+        local doorConvergencePoints = {} -- Store convergence points (direction to area center)
+        local CONVERGENCE_OFFSET = 12 -- Units in front of middle door point
+        
+        -- First pass: Draw door triangles (area→door connections) and store convergence
         for id, entry in pairs(filteredNodes) do
             local node = entry.node
-            for dir = 1, 4 do
-                local cDir = node.c[dir]
-                if cDir and cDir.connections then
-                    for _, conn in ipairs(cDir.connections) do
-                        local nid = (type(conn) == "table") and conn.node or conn
-                        local otherNode = G.Navigation.nodes and G.Navigation.nodes[nid]
-
-                        -- Only draw connections if the other node is also within depth limit
-                        if otherNode and filteredNodes[nid] then
-                            -- Simplified connections: ONLY area ↔ door (draw to middle point)
-                            if G.Menu.Visuals.simplifiedConnections then
-                                -- Skip door-to-door
-                                if node.isDoor and otherNode.isDoor then
-                                    goto continue
-                                end
-                                
-                                -- Skip area-to-area
-                                if not node.isDoor and not otherNode.isDoor then
-                                    goto continue
-                                end
-                            end
+            
+            -- Only process area nodes (not doors)
+            if not node.isDoor then
+                for dir = 1, 4 do
+                    local cDir = node.c[dir]
+                    if cDir and cDir.connections then
+                        for _, conn in ipairs(cDir.connections) do
+                            local nid = (type(conn) == "table") and conn.node or conn
+                            local doorNode = G.Navigation.nodes and G.Navigation.nodes[nid]
                             
-                            local pos1 = node.pos + UP_VECTOR
-                            local pos2 = otherNode.pos + UP_VECTOR
-                            
-                            -- In simplified mode, redirect door positions to middle point
-                            if G.Menu.Visuals.simplifiedConnections then
-                                if node.isDoor then
-                                    -- Get middle point for this door
-                                    local doorBaseId = node.id:match("^(.+)_[^_]+$")
-                                    if doorBaseId then
-                                        local middleNode = G.Navigation.nodes[doorBaseId .. "_middle"]
-                                        if middleNode and middleNode.pos then
-                                            pos1 = middleNode.pos + UP_VECTOR
-                                        else
-                                            -- Fallback: use the actual door point if middle doesn't exist
-                                            pos1 = node.pos + UP_VECTOR
-                                        end
-                                    end
-                                end
-                                if otherNode.isDoor then
-                                    -- Get middle point for this door
-                                    local doorBaseId = otherNode.id:match("^(.+)_[^_]+$")
-                                    if doorBaseId then
-                                        local middleNode = G.Navigation.nodes[doorBaseId .. "_middle"]
-                                        if middleNode and middleNode.pos then
-                                            pos2 = middleNode.pos + UP_VECTOR
-                                        else
-                                            -- Fallback: use the actual door point if middle doesn't exist
-                                            pos2 = otherNode.pos + UP_VECTOR
-                                        end
-                                    end
-                                end
-                            end
-                            local s1 = client.WorldToScreen(pos1)
-                            local s2 = client.WorldToScreen(pos2)
-                            if s1 and s2 then
-                                -- determine if connection is bidirectional
-                                local bidir = false
-
-                                -- If otherNode is a door, check if door connects back to ANY area (not just this one)
-                                if otherNode.isDoor then
-                                    -- Door is bidirectional if it has 2+ direction keys (connects both ways)
-                                    local dirCount = 0
-                                    for _ in pairs(otherNode.c or {}) do
-                                        dirCount = dirCount + 1
-                                    end
-                                    bidir = (dirCount >= 2)
-                                else
-                                    -- For area nodes, check if it connects back to this node
-                                    for d2 = 1, 4 do
-                                        local otherCDir = otherNode.c[d2]
-                                        if otherCDir and otherCDir.connections then
-                                            for _, backConn in ipairs(otherCDir.connections) do
-                                                local backId = (type(backConn) == "table") and backConn.node or backConn
-                                                if backId == id then
-                                                    bidir = true
-                                                    break
+                            -- Only draw if connected to a door and door is visible
+                            if doorNode and doorNode.isDoor and filteredNodes[nid] then
+                                -- Extract door base ID
+                                local doorBaseId = doorNode.id:match("^(.+)_[^_]+$")
+                                if doorBaseId and not drawnDoorTriangles[doorBaseId .. "_to_" .. id] then
+                                    drawnDoorTriangles[doorBaseId .. "_to_" .. id] = true
+                                    
+                                    -- Get all door points
+                                    local leftNode = G.Navigation.nodes[doorBaseId .. "_left"]
+                                    local middleNode = G.Navigation.nodes[doorBaseId .. "_middle"]
+                                    local rightNode = G.Navigation.nodes[doorBaseId .. "_right"]
+                                    
+                                    local areaPos = node.pos + UP_VECTOR
+                                    
+                                    if middleNode and middleNode.pos then
+                                        local middlePos = middleNode.pos + UP_VECTOR
+                                        
+                                        -- Check if door has sides or just middle
+                                        local hasLeftRight = (leftNode and leftNode.pos) or (rightNode and rightNode.pos)
+                                        
+                                        if hasLeftRight then
+                                            -- Calculate convergence point in front of middle (direction to area center)
+                                            local dirToArea = Common.Normalize(areaPos - middlePos)
+                                            local convergencePos = middlePos + dirToArea * CONVERGENCE_OFFSET
+                                            
+                                            -- Store convergence point per door-area pair (each door has 2 sides)
+                                            local key = doorBaseId .. "_to_" .. id
+                                            doorConvergencePoints[key] = convergencePos
+                                            
+                                            -- Draw triangle: left→convergence, right→convergence
+                                            draw.Color(255, 255, 0, 160) -- Yellow for door triangle
+                                            
+                                            if leftNode and leftNode.pos then
+                                                local leftPos = leftNode.pos + UP_VECTOR
+                                                local s1 = client.WorldToScreen(leftPos)
+                                                local s2 = client.WorldToScreen(convergencePos)
+                                                if s1 and s2 then
+                                                    draw.Line(s1[1], s1[2], s2[1], s2[2])
                                                 end
                                             end
-                                            if bidir then
+                                            
+                                            if rightNode and rightNode.pos then
+                                                local rightPos = rightNode.pos + UP_VECTOR
+                                                local s1 = client.WorldToScreen(rightPos)
+                                                local s2 = client.WorldToScreen(convergencePos)
+                                                if s1 and s2 then
+                                                    draw.Line(s1[1], s1[2], s2[1], s2[2])
+                                                end
+                                            end
+                                            
+                                            -- Draw line from convergence point to area center
+                                            local sc = client.WorldToScreen(convergencePos)
+                                            local sa = client.WorldToScreen(areaPos)
+                                            if sc and sa then
+                                                draw.Line(sc[1], sc[2], sa[1], sa[2])
+                                            end
+                                        else
+                                            -- Narrow door - store middle as convergence per door-area pair
+                                            local key = doorBaseId .. "_to_" .. id
+                                            doorConvergencePoints[key] = middlePos
+                                            
+                                            draw.Color(255, 255, 0, 160)
+                                            local sm = client.WorldToScreen(middlePos)
+                                            local sa = client.WorldToScreen(areaPos)
+                                            if sm and sa then
+                                                draw.Line(sm[1], sm[2], sa[1], sa[2])
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Second pass: Draw door-to-door using SAME convergence points (area center direction)
+        if G.Menu.Visuals.showD2D then
+            local drawnDoorPairs = {}
+            
+            for id, entry in pairs(filteredNodes) do
+                local doorNode1 = entry.node
+                
+                if doorNode1.isDoor then
+                    local doorBase1 = doorNode1.id:match("^(.+)_[^_]+$")
+                    
+                    for dir = 1, 4 do
+                        local cDir = doorNode1.c[dir]
+                        if cDir and cDir.connections then
+                            for _, conn in ipairs(cDir.connections) do
+                                local nid = (type(conn) == "table") and conn.node or conn
+                                local doorNode2 = G.Navigation.nodes and G.Navigation.nodes[nid]
+                                
+                                if doorNode2 and doorNode2.isDoor and filteredNodes[nid] then
+                                    local doorBase2 = doorNode2.id:match("^(.+)_[^_]+$")
+                                    
+                                    -- Create unique pair key (sorted to avoid duplicates)
+                                    local pairKey = (doorBase1 < doorBase2) and (doorBase1 .. "_" .. doorBase2) or (doorBase2 .. "_" .. doorBase1)
+                                    
+                                    if not drawnDoorPairs[pairKey] then
+                                        drawnDoorPairs[pairKey] = true
+                                        
+                                        -- Find which areas each door connects to (find shared area)
+                                        -- Door1 connects to areaA and areaB, Door2 connects to areaC and areaD
+                                        -- We want the side of each door facing the SHARED area
+                                        local sharedAreaId = nil
+                                        
+                                        -- Get all area connections for both doors
+                                        local areas1 = {}
+                                        local areas2 = {}
+                                        
+                                        if doorNode1.c then
+                                            for _, d in pairs(doorNode1.c) do
+                                                if d.connections then
+                                                    for _, c in ipairs(d.connections) do
+                                                        local aid = (type(c) == "table") and c.node or c
+                                                        local areaNode = G.Navigation.nodes[aid]
+                                                        if areaNode and not areaNode.isDoor then
+                                                            areas1[aid] = true
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                        end
+                                        
+                                        if doorNode2.c then
+                                            for _, d in pairs(doorNode2.c) do
+                                                if d.connections then
+                                                    for _, c in ipairs(d.connections) do
+                                                        local aid = (type(c) == "table") and c.node or c
+                                                        local areaNode = G.Navigation.nodes[aid]
+                                                        if areaNode and not areaNode.isDoor then
+                                                            areas2[aid] = true
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                        end
+                                        
+                                        -- Find shared area
+                                        for aid, _ in pairs(areas1) do
+                                            if areas2[aid] then
+                                                sharedAreaId = aid
                                                 break
                                             end
                                         end
+                                        
+                                        if sharedAreaId then
+                                            -- Use convergence points facing the shared area
+                                            local key1 = doorBase1 .. "_to_" .. sharedAreaId
+                                            local key2 = doorBase2 .. "_to_" .. sharedAreaId
+                                            local convergence1 = doorConvergencePoints[key1]
+                                            local convergence2 = doorConvergencePoints[key2]
+                                            
+                                            if convergence1 and convergence2 then
+                                                draw.Color(100, 200, 255, 120) -- Light blue for door-to-door
+                                                
+                                                local s1 = client.WorldToScreen(convergence1)
+                                                local s2 = client.WorldToScreen(convergence2)
+                                                if s1 and s2 then
+                                                    draw.Line(s1[1], s1[2], s2[1], s2[2])
+                                                end
+                                            end
+                                        end
                                     end
                                 end
-                                -- yellow for two-way, red for one-way
-                                if bidir then draw.Color(255, 255, 0, 160) else draw.Color(255, 64, 64, 160) end
-                                draw.Line(s1[1], s1[2], s2[1], s2[2])
                             end
-                            
-                            ::continue::
                         end
                     end
                 end
