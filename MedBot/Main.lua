@@ -18,7 +18,6 @@ local StateHandler = require("MedBot.Bot.StateHandler")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
 -- REMOVED: PathOptimizer - all skipping now handled by NodeSkipper
 local MovementDecisions = require("MedBot.Bot.MovementDecisions")
-local CommandHandler = require("MedBot.Bot.CommandHandler")
 local HealthLogic = require("MedBot.Bot.HealthLogic")
 
 --[[ Additional Systems ]]
@@ -26,7 +25,6 @@ local SmartJump = require("MedBot.Bot.SmartJump")
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")
-local DoorSystem = require("MedBot.Navigation.DoorSystem")
 
 --[[ Setup ]]
 local Lib = Common.Lib
@@ -122,7 +120,6 @@ local function onGameEvent(event)
 	if eventName == "game_newmap" then
 		Log:Info("New map detected, reloading nav file...")
 		Navigation.Setup()
-        DoorSystem.Initialize()
 		return
 	end
 
@@ -205,16 +202,12 @@ callbacks.Register("CreateMove", "ZMedBot.CreateMove", onCreateMove) -- Z prefix
 callbacks.Register("DrawModel", "MedBot.DrawModel", onDrawModel)
 callbacks.Register("FireGameEvent", "MedBot.FireGameEvent", onGameEvent)
 
--- Register console commands
-CommandHandler.register()
-
 -- Initialize navigation if a valid map is loaded
 Notify.Alert("MedBot loaded!")
 if entities.GetLocalPlayer() then
 	local mapName = engine.GetMapName()
 	if mapName and mapName ~= "" and mapName ~= "menu" then
 		Navigation.Setup()
-        DoorSystem.Initialize()
 	else
 		Log:Info("Skipping navigation setup - no valid map loaded")
 		G.Navigation.nodes = {}

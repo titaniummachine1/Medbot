@@ -4,7 +4,6 @@
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
-local EdgeCalculator = require("MedBot.Navigation.EdgeCalculator")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 
 local ConnectionBuilder = {}
@@ -16,6 +15,11 @@ local MAX_JUMP = 72
 local CLEARANCE_OFFSET = 34
 
 local Log = Common.Log.new("ConnectionBuilder")
+
+-- Inline helper: Linear interpolation between two Vector3 points
+local function lerpVec(a, b, t)
+	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+end
 
 function ConnectionBuilder.NormalizeConnections()
 	local nodes = G.Navigation.nodes
@@ -302,7 +306,7 @@ local function createDoorForAreas(areaA, areaB)
 		return nil -- Door too narrow after boundary clamping
 	end
 
-	local middle = EdgeCalculator.LerpVec(overlapLeft, overlapRight, 0.5)
+	local middle = lerpVec(overlapLeft, overlapRight, 0.5)
 
 	-- STEP 2: Wall avoidance - shrink door by 24 units from wall corners on door axis
 	local WALL_CLEARANCE = 24

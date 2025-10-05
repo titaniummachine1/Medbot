@@ -7,7 +7,6 @@ local G = require("MedBot.Core.Globals")
 local NavLoader = require("MedBot.Navigation.NavLoader")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 local ConnectionBuilder = require("MedBot.Navigation.ConnectionBuilder")
-local AccessibilityChecker = require("MedBot.Navigation.AccessibilityChecker")
 
 local Log = Common.Log.new("Node")
 Log.Level = 0
@@ -24,7 +23,6 @@ function Node.Setup()
 
 	NavLoader.LoadNavFile()
 	ConnectionBuilder.NormalizeConnections()
-	-- AccessibilityChecker.PruneInvalidConnections(G.Navigation.nodes) -- DISABLED: Uses area centers not edges
 
 	-- CRITICAL: Detect wall corners BEFORE building doors so clamping can work!
 	local WallCornerDetector = require("MedBot.Navigation.WallCornerDetector")
@@ -193,20 +191,7 @@ function Node.GetAdjacentNodesOnly(node, nodes)
 	return adjacent
 end
 
--- Get door target point for pathfinding between two areas
-function Node.GetDoorTarget(nodeA, nodeB)
-	local DoorRegistry = require("MedBot.Navigation.DoorRegistry")
-	return DoorRegistry.GetDoorTarget(nodeA.id, nodeB.id)
-end
-
--- Legacy compatibility
-function Node.CleanupConnections()
-	local nodes = Node.GetNodes()
-	if nodes then
-		AccessibilityChecker.PruneInvalidConnections(nodes)
-		Log:Info("Connections cleaned up")
-	end
-end
+-- CleanupConnections removed - AccessibilityChecker was disabled (used area centers, not edges)
 
 function Node.NormalizeConnections()
 	ConnectionBuilder.NormalizeConnections()
