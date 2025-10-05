@@ -1753,6 +1753,17 @@ local function OnDrawMenu()
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()
+		TimMenu.NextLine()
+
+		-- SmartJump Visualization Section
+		TimMenu.BeginSector("SmartJump Visuals")
+		
+		G.Menu.Visuals.showSmartJump = G.Menu.Visuals.showSmartJump or false
+		G.Menu.Visuals.showSmartJump = TimMenu.Checkbox("Show SmartJump", G.Menu.Visuals.showSmartJump)
+		TimMenu.Tooltip("Display SmartJump simulation path and landing prediction")
+		TimMenu.NextLine()
+
+		TimMenu.EndSector()
 	end
 
 	-- Always end the menu if we began it
@@ -3265,8 +3276,8 @@ local function OnDraw()
         end
     end
 
-    -- Draw SmartJump simulation visualization (like AutoPeek)
-    if G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then
+    -- Draw SmartJump simulation visualization (controlled by menu)
+    if G.Menu.Visuals.showSmartJump and G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then
         -- Draw simulation path lines like AutoPeek's LineDrawList
         local pathCount = #G.SmartJump.SimulationPath
         for i = 1, pathCount - 1 do
@@ -3287,8 +3298,8 @@ local function OnDraw()
             end
         end
 
-        -- Draw jump landing position if available (lines only, no boxes)
-        if G.SmartJump and G.SmartJump.JumpPeekPos and G.SmartJump.PredPos then
+        -- Draw jump landing position if available (controlled by menu)
+        if G.Menu.Visuals.showSmartJump and G.SmartJump and G.SmartJump.JumpPeekPos and G.SmartJump.PredPos then
             local jumpPos = G.SmartJump.JumpPeekPos
             local predPos = G.SmartJump.PredPos
             local jumpScreen = client.WorldToScreen(jumpPos)
@@ -5958,6 +5969,11 @@ end
 local function OnDrawSmartJump()
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not G.Menu.SmartJump or not G.Menu.SmartJump.Enable then
+		return
+	end
+	
+	-- Check if SmartJump visuals are enabled in menu
+	if not (G.Menu.Visuals and G.Menu.Visuals.showSmartJump) then
 		return
 	end
 

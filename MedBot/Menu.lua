@@ -230,6 +230,17 @@ local function OnDrawMenu()
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()
+		TimMenu.NextLine()
+
+		-- SmartJump Visualization Section
+		TimMenu.BeginSector("SmartJump Visuals")
+		
+		G.Menu.Visuals.showSmartJump = G.Menu.Visuals.showSmartJump or false
+		G.Menu.Visuals.showSmartJump = TimMenu.Checkbox("Show SmartJump", G.Menu.Visuals.showSmartJump)
+		TimMenu.Tooltip("Display SmartJump simulation path and landing prediction")
+		TimMenu.NextLine()
+
+		TimMenu.EndSector()
 	end
 
 	-- Always end the menu if we began it

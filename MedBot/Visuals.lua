@@ -774,8 +774,8 @@ local function OnDraw()
         end
     end
 
-    -- Draw SmartJump simulation visualization (like AutoPeek)
-    if G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then
+    -- Draw SmartJump simulation visualization (controlled by menu)
+    if G.Menu.Visuals.showSmartJump and G.SmartJump and G.SmartJump.SimulationPath and type(G.SmartJump.SimulationPath) == "table" and #G.SmartJump.SimulationPath > 1 then
         -- Draw simulation path lines like AutoPeek's LineDrawList
         local pathCount = #G.SmartJump.SimulationPath
         for i = 1, pathCount - 1 do
@@ -796,8 +796,8 @@ local function OnDraw()
             end
         end
 
-        -- Draw jump landing position if available (lines only, no boxes)
-        if G.SmartJump and G.SmartJump.JumpPeekPos and G.SmartJump.PredPos then
+        -- Draw jump landing position if available (controlled by menu)
+        if G.Menu.Visuals.showSmartJump and G.SmartJump and G.SmartJump.JumpPeekPos and G.SmartJump.PredPos then
             local jumpPos = G.SmartJump.JumpPeekPos
             local predPos = G.SmartJump.PredPos
             local jumpScreen = client.WorldToScreen(jumpPos)

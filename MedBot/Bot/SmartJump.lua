@@ -433,6 +433,11 @@ local function OnDrawSmartJump()
 	if not pLocal or not G.Menu.SmartJump or not G.Menu.SmartJump.Enable then
 		return
 	end
+	
+	-- Check if SmartJump visuals are enabled in menu
+	if not (G.Menu.Visuals and G.Menu.Visuals.showSmartJump) then
+		return
+	end
 
 	local vHitbox = GetPlayerHitbox(pLocal)
 	if G.SmartJump.PredPos then
