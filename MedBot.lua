@@ -3635,6 +3635,7 @@ local function getDirectionCorners(area, direction)
 end
 
 -- Calculate distance from point to line segment (2D, ignores Z completely)
+-- Returns distance and proximity score (0.99 if on edge, 1.0 if within tolerance)
 local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 	local dx = lineEnd.x - lineStart.x
 	local dy = lineEnd.y - lineStart.y
@@ -3644,7 +3645,7 @@ local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 		-- Line segment is a point - use Common.Distance2D
 		local point2D = Vector3(point.x, point.y, 0)
 		local start2D = Vector3(lineStart.x, lineStart.y, 0)
-		return Common.Distance2D(point2D, start2D)
+		return Common.Distance2D(point2D, start2D), 0
 	end
 
 	-- Calculate projection parameter
@@ -3660,13 +3661,17 @@ local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 	-- Use Common.Distance2D for final distance calculation (ignore Z)
 	local point2D = Vector3(point.x, point.y, 0)
 	local closest2D = Vector3(closestX, closestY, 0)
-	return Common.Distance2D(point2D, closest2D)
+	local distance = Common.Distance2D(point2D, closest2D)
+	
+	-- Return distance and projection parameter for edge detection
+	return distance, t
 end
 
 -- Check if point lies on neighbor's facing boundary
+-- Returns proximity score: 0.99 if on edge, 1.0 if within tolerance, 0 if outside
 local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
-		return false
+		return 0
 	end
 
 	local maxDistance = 18.0
@@ -3688,12 +3693,23 @@ local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	end
 
 	if not facingBoundary then
-		return false
+		return 0
 	end
 
 	-- Check distance to the facing boundary only
-	local distance = pointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
-	return distance <= maxDistance
+	local distance, t = pointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
+	
+	if distance > maxDistance then
+		return 0
+	end
+	
+	-- If point is at edge (t=0 or t=1), give 0.99 score
+	-- Otherwise give 1.0 score
+	if t <= 0.01 or t >= 0.99 then
+		return 0.99
+	else
+		return 1.0
+	end
 end
 
 -- Count how many neighbor borders a corner lies on
@@ -3750,33 +3766,26 @@ function WallCornerDetector.DetectWallCorners()
 						table.insert(area.allCorners, corner)
 						allCornerCount = allCornerCount + 1
 
-						-- Simplified: wall corner gets 1 point for each neighbor it's close to
+						-- Calculate proximity score: sum of all neighbor border scores
+						-- 0.99 = on edge, 1.0 = within tolerance
 						local proximityScore = 0
 						for _, neighbor in ipairs(neighbors.north) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "north")
 						end
 						for _, neighbor in ipairs(neighbors.south) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "south")
 						end
 						for _, neighbor in ipairs(neighbors.east) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "east")
 						end
 						for _, neighbor in ipairs(neighbors.west) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "west")
 						end
 
 						-- Debug: log proximity scores for first few corners
 						if allCornerCount <= 10 then
 							Log:Debug(
-								"Corner at (%.1f,%.1f,%.1f) in direction %s has %d proximity score",
+								"Corner at (%.1f,%.1f,%.1f) in direction %s has %.2f proximity score",
 								corner.x,
 								corner.y,
 								corner.z,
@@ -3785,9 +3794,11 @@ function WallCornerDetector.DetectWallCorners()
 							)
 						end
 
-						-- Simplified classification: wall corner if exactly 0 neighbor contacts (completely outside)
+						-- Classification: 
+						-- < 1.99 = outer corner (wall corner)
+						-- >= 1.99 = inner corner (fully surrounded)
 						local cornerType = "not_wall"
-						if proximityScore == 0 then
+						if proximityScore < 1.99 then
 							cornerType = "wall"
 							table.insert(area.wallCorners, corner) -- Mark as wall corner
 							wallCornerCount = wallCornerCount + 1
@@ -3881,14 +3892,34 @@ function ConnectionBuilder.NormalizeConnections()
 	Log:Info("Normalized all connections to enriched format")
 end
 
+-- Determine direction with primary and secondary axis options
 local function determineDirection(fromPos, toPos)
 	local dx = toPos.x - fromPos.x
 	local dy = toPos.y - fromPos.y
-	if math.abs(dx) >= math.abs(dy) then
-		return (dx > 0) and 1 or -1, 0
+	local absDx = math.abs(dx)
+	local absDy = math.abs(dy)
+
+	-- Primary direction based on larger axis
+	local primaryDirX, primaryDirY
+	local secondaryDirX, secondaryDirY
+
+	if absDx >= absDy then
+		-- Primary: X axis (East/West)
+		primaryDirX = (dx > 0) and 1 or -1
+		primaryDirY = 0
+		-- Secondary: Y axis (North/South)
+		secondaryDirX = 0
+		secondaryDirY = (dy > 0) and 1 or -1
 	else
-		return 0, (dy > 0) and 1 or -1
+		-- Primary: Y axis (North/South)
+		primaryDirX = 0
+		primaryDirY = (dy > 0) and 1 or -1
+		-- Secondary: X axis (East/West)
+		secondaryDirX = (dx > 0) and 1 or -1
+		secondaryDirY = 0
 	end
+
+	return primaryDirX, primaryDirY, secondaryDirX, secondaryDirY
 end
 
 local function getFacingEdgeCorners(area, dirX, dirY, _)
@@ -4030,6 +4061,341 @@ local function calculateDoorOwner(a0, a1, b0, b1, areaA, areaB)
 	end
 end
 
+-- Get closest corner from neighbor's facing edge to area center
+local function getClosestNeighborCorner(neighbor, dirX, dirY, areaCenter)
+	local b0, b1 = getFacingEdgeCorners(neighbor, -dirX, -dirY, areaCenter)
+	if not (b0 and b1) then
+		return nil
+	end
+
+	-- Return corner closest to area center
+	local dist0 = (b0 - areaCenter):Length2D()
+	local dist1 = (b1 - areaCenter):Length2D()
+	return (dist0 < dist1) and b0 or b1
+end
+
+-- Check if corner lies on area boundary for given direction
+local function cornerLiesOnBoundary(corner, area, dirX, dirY)
+	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, corner)
+	if not (a0 and a1) then
+		return false, 0
+	end
+
+	-- Determine shared axis
+	local axis
+	if dirX ~= 0 then
+		axis = "y" -- East/West → Y varies
+	else
+		axis = "x" -- North/South → X varies
+	end
+
+	-- Check if corner lies within boundary range on shared axis
+	local aMin = math.min(a0[axis], a1[axis])
+	local aMax = math.max(a0[axis], a1[axis])
+	local cornerCoord = corner[axis]
+
+	local tolerance = 1.0
+	if cornerCoord >= aMin - tolerance and cornerCoord <= aMax + tolerance then
+		-- Corner is on boundary, calculate distance from boundary edge
+		local distFromMin = math.abs(cornerCoord - aMin)
+		local distFromMax = math.abs(cornerCoord - aMax)
+		return true, math.min(distFromMin, distFromMax)
+	end
+
+	return false, math.huge
+end
+
+-- Get edge length for an area in a given direction
+local function getEdgeLength(area, dirX, dirY)
+	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, area.pos)
+	if not (a0 and a1) then
+		return math.huge
+	end
+	return (a1 - a0):Length2D()
+end
+
+-- Get area diagonal size (min to max corner distance)
+local function getAreaDiagonal(area)
+	if not (area.nw and area.ne and area.se and area.sw) then
+		return 0
+	end
+
+	local minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+	local maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
+	local minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+	local maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
+
+	local dx = maxX - minX
+	local dy = maxY - minY
+	return math.sqrt(dx * dx + dy * dy)
+end
+
+-- Get 3 closest corners from smaller area to bigger area center, sorted by distance
+local function get3ClosestCorners(area, centerPos)
+	if not (area.nw and area.ne and area.se and area.sw) then
+		return nil, nil, nil
+	end
+
+	local corners = { area.nw, area.ne, area.se, area.sw }
+	local distances = {}
+
+	for i, corner in ipairs(corners) do
+		local dist = (corner - centerPos):Length2D()
+		table.insert(distances, { corner = corner, dist = dist, index = i })
+	end
+
+	-- Sort by distance
+	table.sort(distances, function(a, b)
+		return a.dist < b.dist
+	end)
+
+	return distances[1].corner, distances[2].corner, distances[3].corner
+end
+
+-- Check if point lies within edge bounds on shared axis
+local function pointWithinEdgeBounds(point, area, dirX, dirY)
+	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, point)
+	if not (a0 and a1) then
+		return false
+	end
+
+	local axis = (dirX ~= 0) and "y" or "x"
+	local aMin = math.min(a0[axis], a1[axis])
+	local aMax = math.max(a0[axis], a1[axis])
+	local pointCoord = point[axis]
+
+	local tolerance = 1.0
+	return pointCoord >= aMin - tolerance and pointCoord <= aMax + tolerance
+end
+
+-- Calculate distance from point to edge boundary on shared axis
+local function distanceFromEdgeBoundary(point, area, dirX, dirY)
+	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, point)
+	if not (a0 and a1) then
+		return math.huge
+	end
+
+	local axis = (dirX ~= 0) and "y" or "x"
+	local aMin = math.min(a0[axis], a1[axis])
+	local aMax = math.max(a0[axis], a1[axis])
+	local pointCoord = point[axis]
+
+	-- Return smallest distance to boundary edge
+	if pointCoord < aMin then
+		return math.abs(pointCoord - aMin)
+	elseif pointCoord > aMax then
+		return math.abs(pointCoord - aMax)
+	else
+		return 0 -- Point is within bounds
+	end
+end
+
+-- Test guess direction from perspective of BIGGER edge (checking if smaller edge lies on it)
+local function testGuessDirection(biggerEdgeArea, smallerEdgeArea, dirX, dirY)
+	-- Get 3 closest corners from smaller edge area to bigger edge area center
+	local middleCorner, secondClosest, thirdClosest = get3ClosestCorners(smallerEdgeArea, biggerEdgeArea.pos)
+	if not (middleCorner and secondClosest and thirdClosest) then
+		return false, nil, nil, nil
+	end
+
+	-- Check if middle corner lies on boundary
+	local middleOnBoundary = pointWithinEdgeBounds(middleCorner, biggerEdgeArea, dirX, dirY)
+	if not middleOnBoundary then
+		return false, middleCorner, secondClosest, thirdClosest
+	end
+
+	-- Get shared axis
+	local axis = (dirX ~= 0) and "y" or "x"
+
+	-- Check if 2nd closest is parallel to edge (shares same axis position as middle)
+	local middleCoord = middleCorner[axis]
+	local secondCoord = secondClosest[axis]
+	local secondParallel = math.abs(secondCoord - middleCoord) < 1.0
+
+	if not secondParallel then
+		-- 2nd closest is NOT parallel, check if it lies on boundary
+		if pointWithinEdgeBounds(secondClosest, biggerEdgeArea, dirX, dirY) then
+			return true, nil, nil, nil
+		end
+	end
+
+	-- Also check 3rd closest if 2nd was parallel
+	local thirdCoord = thirdClosest[axis]
+	local thirdParallel = math.abs(thirdCoord - middleCoord) < 1.0
+
+	if not thirdParallel then
+		if pointWithinEdgeBounds(thirdClosest, biggerEdgeArea, dirX, dirY) then
+			return true, nil, nil, nil
+		end
+	end
+
+	return false, middleCorner, secondClosest, thirdClosest
+end
+
+-- Phantom edge test: create phantom edge 1 unit away in edge direction
+local function testPhantomEdge(biggerEdgeArea, middleCorner, secondClosest, thirdClosest, dirX, dirY)
+	if not (middleCorner and secondClosest and thirdClosest) then
+		return false
+	end
+
+	local axis = (dirX ~= 0) and "y" or "x"
+	local perpAxis = (axis == "x") and "y" or "x"
+
+	-- Get edge direction along perpendicular axis
+	local edgeDir = secondClosest[perpAxis] - middleCorner[perpAxis]
+	if math.abs(edgeDir) < 0.1 then
+		edgeDir = thirdClosest[perpAxis] - middleCorner[perpAxis]
+	end
+
+	-- Normalize direction to +1 or -1
+	local dirSign = (edgeDir > 0) and 1 or -1
+
+	-- Create phantom corners 1 unit away
+	local phantomSecond = Vector3(secondClosest.x, secondClosest.y, secondClosest.z)
+	local phantomThird = Vector3(thirdClosest.x, thirdClosest.y, thirdClosest.z)
+
+	phantomSecond[perpAxis] = phantomSecond[perpAxis] + dirSign
+	phantomThird[perpAxis] = phantomThird[perpAxis] + dirSign
+
+	-- Check which phantom lies on boundary
+	if pointWithinEdgeBounds(phantomSecond, biggerEdgeArea, dirX, dirY) then
+		return true
+	end
+	if pointWithinEdgeBounds(phantomThird, biggerEdgeArea, dirX, dirY) then
+		return true
+	end
+
+	return false
+end
+
+-- Calculate edge overlap between two areas along a specific axis
+local function calculateEdgeOverlap(areaA, areaB, dirX, dirY)
+	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
+	local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
+
+	if not (a0 and a1 and b0 and b1) then
+		return 0
+	end
+
+	local axis = (dirX ~= 0) and "y" or "x"
+
+	local aMin = math.min(a0[axis], a1[axis])
+	local aMax = math.max(a0[axis], a1[axis])
+	local bMin = math.min(b0[axis], b1[axis])
+	local bMax = math.max(b0[axis], b1[axis])
+
+	-- Calculate overlap
+	local overlapMin = math.max(aMin, bMin)
+	local overlapMax = math.min(aMax, bMax)
+
+	if overlapMax > overlapMin then
+		return overlapMax - overlapMin
+	end
+
+	return 0
+end
+
+-- Final fallback: compare edge overlaps to determine shared edge
+local function resolveStalemateByOverlap(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
+	-- Calculate overlap for both directions
+	local primaryOverlap = calculateEdgeOverlap(areaA, areaB, primaryDirX, primaryDirY)
+	local secondaryOverlap = calculateEdgeOverlap(areaA, areaB, secondaryDirX, secondaryDirY)
+
+	-- Pick direction with most overlap (favor primary in tie)
+	if secondaryOverlap > primaryOverlap then
+		return secondaryDirX, secondaryDirY
+	end
+	return primaryDirX, primaryDirY
+end
+
+-- Validate shared edge direction from BIGGER edge perspective with fallback logic
+local function validateSharedEdge(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
+	-- Get edge lengths for both directions
+	local edgeLengthA_primary = getEdgeLength(areaA, primaryDirX, primaryDirY)
+	local edgeLengthB_primary = getEdgeLength(areaB, -primaryDirX, -primaryDirY)
+
+	local edgeLengthA_secondary = getEdgeLength(areaA, secondaryDirX, secondaryDirY)
+	local edgeLengthB_secondary = getEdgeLength(areaB, -secondaryDirX, -secondaryDirY)
+
+	-- Only test from BIGGER edge perspective for each direction
+	-- Skip if our edge is smaller (let the bigger edge handle it)
+	local primarySuccess, primaryMiddle, primarySecond, primaryThird = false, nil, nil, nil
+	local secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird = false, nil, nil, nil
+
+	-- Test PRIMARY guess from bigger edge perspective
+	if edgeLengthA_primary >= edgeLengthB_primary then
+		-- areaA has bigger primary edge
+		primarySuccess, primaryMiddle, primarySecond, primaryThird =
+			testGuessDirection(areaA, areaB, primaryDirX, primaryDirY)
+	elseif edgeLengthB_primary > edgeLengthA_primary then
+		-- areaB has bigger primary edge
+		primarySuccess, primaryMiddle, primarySecond, primaryThird =
+			testGuessDirection(areaB, areaA, -primaryDirX, -primaryDirY)
+	end
+
+	if primarySuccess then
+		return primaryDirX, primaryDirY
+	end
+
+	-- Test SECONDARY guess from bigger edge perspective
+	if edgeLengthA_secondary >= edgeLengthB_secondary then
+		-- areaA has bigger secondary edge
+		secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird =
+			testGuessDirection(areaA, areaB, secondaryDirX, secondaryDirY)
+	elseif edgeLengthB_secondary > edgeLengthA_secondary then
+		-- areaB has bigger secondary edge
+		secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird =
+			testGuessDirection(areaB, areaA, -secondaryDirX, -secondaryDirY)
+	end
+
+	if secondarySuccess then
+		return secondaryDirX, secondaryDirY
+	end
+
+	-- FALLBACK 1: Try phantom edge test for primary
+	if primaryMiddle and primarySecond and primaryThird then
+		local biggerAreaPrimary = (edgeLengthA_primary >= edgeLengthB_primary) and areaA or areaB
+		local testPrimaryDirX = (biggerAreaPrimary == areaA) and primaryDirX or -primaryDirX
+		local testPrimaryDirY = (biggerAreaPrimary == areaA) and primaryDirY or -primaryDirY
+
+		if
+			testPhantomEdge(
+				biggerAreaPrimary,
+				primaryMiddle,
+				primarySecond,
+				primaryThird,
+				testPrimaryDirX,
+				testPrimaryDirY
+			)
+		then
+			return primaryDirX, primaryDirY
+		end
+	end
+
+	-- FALLBACK 2: Try phantom edge test for secondary
+	if secondaryMiddle and secondarySecond and secondaryThird then
+		local biggerAreaSecondary = (edgeLengthA_secondary >= edgeLengthB_secondary) and areaA or areaB
+		local testSecondaryDirX = (biggerAreaSecondary == areaA) and secondaryDirX or -secondaryDirX
+		local testSecondaryDirY = (biggerAreaSecondary == areaA) and secondaryDirY or -secondaryDirY
+
+		if
+			testPhantomEdge(
+				biggerAreaSecondary,
+				secondaryMiddle,
+				secondarySecond,
+				secondaryThird,
+				testSecondaryDirX,
+				testSecondaryDirY
+			)
+		then
+			return secondaryDirX, secondaryDirY
+		end
+	end
+
+	-- FALLBACK 3: Compare edge overlaps (most expensive but guaranteed to work)
+	return resolveStalemateByOverlap(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
+end
+
 -- Calculate edge overlap and door geometry
 local function calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
@@ -4055,7 +4421,12 @@ local function createDoorForAreas(areaA, areaB)
 		return nil
 	end
 
-	local dirX, dirY = determineDirection(areaA.pos, areaB.pos)
+	-- Get primary and secondary direction options
+	local primaryDirX, primaryDirY, secondaryDirX, secondaryDirY = determineDirection(areaA.pos, areaB.pos)
+
+	-- Validate and pick correct shared edge direction
+	local dirX, dirY = validateSharedEdge(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
+
 	local geometry = calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	if not geometry then
 		return nil
@@ -5825,21 +6196,16 @@ function MovementDecisions.checkStuckState()
 		end
 	end
 	
-	-- Walkability check for verification (frequency depends on mode)
-	local walkCheckCooldown = G.Menu.Main.EnableWalking and 66 or 33 -- 66 ticks in auto mode, 33 in manual
-	if WorkManager.attemptWork(walkCheckCooldown, "stuck_walkability_check") then
-		local targetPos = MovementDecisions.getCurrentTarget()
-		if targetPos then
-			if not ISWalkable.Path(G.pLocal.Origin, targetPos) then
-				-- Store that path is unwalkable, but don't immediately repath in auto mode
-				G.Navigation.pathUnwalkable = true
-				if not G.Menu.Main.EnableWalking then
-					-- Manual mode: repath immediately
+	-- Simple walkability check for ALL modes (with 33 tick cooldown)
+	-- Only when NOT walking autonomously (walking mode has velocity checks)
+	if not G.Menu.Main.EnableWalking then
+		if WorkManager.attemptWork(33, "stuck_walkability_check") then
+			local targetPos = MovementDecisions.getCurrentTarget()
+			if targetPos then
+				if not ISWalkable.Path(G.pLocal.Origin, targetPos) then
 					Log:Warn("STUCK: Path to current target not walkable, repathing")
 					G.currentState = G.States.STUCK
 				end
-			else
-				G.Navigation.pathUnwalkable = false
 			end
 		end
 	end
@@ -5935,9 +6301,9 @@ local WorkManager = require("MedBot.WorkManager")
 local NodeSkipper = {}
 local Log = Common.Log.new("NodeSkipper")
 
--- Constants for timing
-local CONTINUOUS_SKIP_COOLDOWN = 2
-local AGENT_SKIP_COOLDOWN = 4
+-- Constants for timing (in ticks)
+local CONTINUOUS_SKIP_COOLDOWN = 22 -- ~0.33 seconds at 66 tick/s
+local AGENT_SKIP_COOLDOWN = 33 -- ~0.5 seconds at 66 tick/s
 
 -- ============================================================================
 -- AGENT SYSTEM
@@ -6048,25 +6414,15 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 
 	local maxNodesToSkip = 0
 
-	-- PASSIVE SYSTEM: Simple distance check (runs every tick - very cheap)
+	-- PASSIVE SYSTEM: Distance-based immediate skip (runs every tick)
+	-- If player is closer to next node than current node is, we've passed current node
 	if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-		-- We're geometrically closer to next node - check if path is walkable (throttled)
-		if WorkManager.attemptWork(11, "passive_walkability_check") then
-			if ISWalkable.Path(currentPos, nextNode.pos) then
-				Common.DebugLog(
-					"Debug",
-					"Passive skip: Next node %d closer and walkable - skip 1 node",
-					nextNode.id
-				)
-				maxNodesToSkip = math.max(maxNodesToSkip, 1)
-			else
-				Common.DebugLog(
-					"Debug",
-					"Passive skip: Next node %d closer but NOT walkable - no skip",
-					nextNode.id
-				)
-			end
-		end
+		Common.DebugLog(
+			"Debug",
+			"Passive skip: Player closer to next node %d than current node - skip immediately",
+			nextNode.id
+		)
+		maxNodesToSkip = math.max(maxNodesToSkip, 1)
 	end
 
 	-- ACTIVE SYSTEM: Walkability-based skipping (expensive, runs every 22 ticks)
@@ -7739,37 +8095,29 @@ end
 -- Simplified unstuck logic - guarantee bot never gets stuck
 -- Only checks velocity/timeout when bot is walking autonomously
 function StateHandler.handleStuckState(userCmd)
+	local currentTick = globals.TickCount()
+
 	-- Velocity/timeout checks ONLY when bot is walking autonomously
 	if G.Menu.Main.EnableWalking then
 		-- Check velocity for stuck detection
 		local pLocal = G.pLocal.entity
-		-- Velocity-based stuck detection
-		local velocity = pLocal:EstimateAbsVelocity()
-		if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
-			local speed2D = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+		if pLocal then
+			local velocity = pLocal:EstimateAbsVelocity()
+			local speed2D = 0
+			if velocity and type(velocity.x) == "number" and type(velocity.y) == "number" then
+				speed2D = math.sqrt(velocity.x ^ 2 + velocity.y ^ 2)
+			end
 
-			-- Critical velocity threshold: < 50 = stuck
+			-- MAIN TRIGGER: Velocity < 50 = STUCK
 			if speed2D < 50 then
-				G.Navigation.lowVelocityTicks = (G.Navigation.lowVelocityTicks or 0) + 1
+				Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
 
-				-- If velocity too low for 66 ticks (1 second), check if path is actually unwalkable
-				if G.Navigation.lowVelocityTicks > 66 then
-					-- Only repath if walkability check confirmed path is blocked
-					if G.Navigation.pathUnwalkable then
-						Log:Warn("STUCK: Low velocity + path unwalkable verified, entering STUCK state")
-						G.currentState = G.States.STUCK
-						G.Navigation.lowVelocityTicks = 0
-					else
-						-- Path is walkable but velocity low - might just be slow, don't repath yet
-						Log:Debug("Low velocity but path walkable, waiting...")
-						-- Reset counter if it gets too high without confirmed unwalkability
-						if G.Navigation.lowVelocityTicks > 132 then -- 2 seconds
-							G.Navigation.lowVelocityTicks = 0
-						end
-					end
-				end
-			else
-				G.Navigation.lowVelocityTicks = 0
+				-- Add cost penalties to current connection (node->node, node->door, door->door)
+				StateHandler.addStuckPenalties()
+
+				-- ALWAYS repath when stuck (simplified approach)
+				StateHandler.forceRepath("Velocity too low")
+				return
 			end
 		end
 	end

@@ -76,6 +76,7 @@ local function getDirectionCorners(area, direction)
 end
 
 -- Calculate distance from point to line segment (2D, ignores Z completely)
+-- Returns distance and proximity score (0.99 if on edge, 1.0 if within tolerance)
 local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 	local dx = lineEnd.x - lineStart.x
 	local dy = lineEnd.y - lineStart.y
@@ -85,7 +86,7 @@ local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 		-- Line segment is a point - use Common.Distance2D
 		local point2D = Vector3(point.x, point.y, 0)
 		local start2D = Vector3(lineStart.x, lineStart.y, 0)
-		return Common.Distance2D(point2D, start2D)
+		return Common.Distance2D(point2D, start2D), 0
 	end
 
 	-- Calculate projection parameter
@@ -101,13 +102,17 @@ local function pointToLineSegmentDistance(point, lineStart, lineEnd)
 	-- Use Common.Distance2D for final distance calculation (ignore Z)
 	local point2D = Vector3(point.x, point.y, 0)
 	local closest2D = Vector3(closestX, closestY, 0)
-	return Common.Distance2D(point2D, closest2D)
+	local distance = Common.Distance2D(point2D, closest2D)
+	
+	-- Return distance and projection parameter for edge detection
+	return distance, t
 end
 
 -- Check if point lies on neighbor's facing boundary
+-- Returns proximity score: 0.99 if on edge, 1.0 if within tolerance, 0 if outside
 local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
-		return false
+		return 0
 	end
 
 	local maxDistance = 18.0
@@ -129,12 +134,23 @@ local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	end
 
 	if not facingBoundary then
-		return false
+		return 0
 	end
 
 	-- Check distance to the facing boundary only
-	local distance = pointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
-	return distance <= maxDistance
+	local distance, t = pointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
+	
+	if distance > maxDistance then
+		return 0
+	end
+	
+	-- If point is at edge (t=0 or t=1), give 0.99 score
+	-- Otherwise give 1.0 score
+	if t <= 0.01 or t >= 0.99 then
+		return 0.99
+	else
+		return 1.0
+	end
 end
 
 -- Count how many neighbor borders a corner lies on
@@ -191,33 +207,26 @@ function WallCornerDetector.DetectWallCorners()
 						table.insert(area.allCorners, corner)
 						allCornerCount = allCornerCount + 1
 
-						-- Simplified: wall corner gets 1 point for each neighbor it's close to
+						-- Calculate proximity score: sum of all neighbor border scores
+						-- 0.99 = on edge, 1.0 = within tolerance
 						local proximityScore = 0
 						for _, neighbor in ipairs(neighbors.north) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "north")
 						end
 						for _, neighbor in ipairs(neighbors.south) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "south")
 						end
 						for _, neighbor in ipairs(neighbors.east) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "east")
 						end
 						for _, neighbor in ipairs(neighbors.west) do
-							if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-								proximityScore = proximityScore + 1
-							end
+							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "west")
 						end
 
 						-- Debug: log proximity scores for first few corners
 						if allCornerCount <= 10 then
 							Log:Debug(
-								"Corner at (%.1f,%.1f,%.1f) in direction %s has %d proximity score",
+								"Corner at (%.1f,%.1f,%.1f) in direction %s has %.2f proximity score",
 								corner.x,
 								corner.y,
 								corner.z,
@@ -226,9 +235,11 @@ function WallCornerDetector.DetectWallCorners()
 							)
 						end
 
-						-- Simplified classification: wall corner if exactly 0 neighbor contacts (completely outside)
+						-- Classification: 
+						-- < 1.99 = outer corner (wall corner)
+						-- >= 1.99 = inner corner (fully surrounded)
 						local cornerType = "not_wall"
-						if proximityScore == 0 then
+						if proximityScore < 1.99 then
 							cornerType = "wall"
 							table.insert(area.wallCorners, corner) -- Mark as wall corner
 							wallCornerCount = wallCornerCount + 1

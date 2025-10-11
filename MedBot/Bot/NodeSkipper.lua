@@ -12,9 +12,9 @@ local WorkManager = require("MedBot.WorkManager")
 local NodeSkipper = {}
 local Log = Common.Log.new("NodeSkipper")
 
--- Constants for timing
-local CONTINUOUS_SKIP_COOLDOWN = 2
-local AGENT_SKIP_COOLDOWN = 4
+-- Constants for timing (in ticks)
+local CONTINUOUS_SKIP_COOLDOWN = 22 -- ~0.33 seconds at 66 tick/s
+local AGENT_SKIP_COOLDOWN = 33 -- ~0.5 seconds at 66 tick/s
 
 -- ============================================================================
 -- AGENT SYSTEM
@@ -125,25 +125,15 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 
 	local maxNodesToSkip = 0
 
-	-- PASSIVE SYSTEM: Simple distance check (runs every tick - very cheap)
+	-- PASSIVE SYSTEM: Distance-based immediate skip (runs every tick)
+	-- If player is closer to next node than current node is, we've passed current node
 	if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-		-- We're geometrically closer to next node - check if path is walkable (throttled)
-		if WorkManager.attemptWork(11, "passive_walkability_check") then
-			if ISWalkable.Path(currentPos, nextNode.pos) then
-				Common.DebugLog(
-					"Debug",
-					"Passive skip: Next node %d closer and walkable - skip 1 node",
-					nextNode.id
-				)
-				maxNodesToSkip = math.max(maxNodesToSkip, 1)
-			else
-				Common.DebugLog(
-					"Debug",
-					"Passive skip: Next node %d closer but NOT walkable - no skip",
-					nextNode.id
-				)
-			end
-		end
+		Common.DebugLog(
+			"Debug",
+			"Passive skip: Player closer to next node %d than current node - skip immediately",
+			nextNode.id
+		)
+		maxNodesToSkip = math.max(maxNodesToSkip, 1)
 	end
 
 	-- ACTIVE SYSTEM: Walkability-based skipping (expensive, runs every 22 ticks)
