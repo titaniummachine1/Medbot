@@ -381,42 +381,6 @@ local function testGuessDirection(biggerEdgeArea, smallerEdgeArea, dirX, dirY)
 	return false, middleCorner, secondClosest, thirdClosest
 end
 
--- Phantom edge test: create phantom edge 1 unit away in edge direction
-local function testPhantomEdge(biggerEdgeArea, middleCorner, secondClosest, thirdClosest, dirX, dirY)
-	if not (middleCorner and secondClosest and thirdClosest) then
-		return false
-	end
-
-	local axis = (dirX ~= 0) and "y" or "x"
-	local perpAxis = (axis == "x") and "y" or "x"
-
-	-- Get edge direction along perpendicular axis
-	local edgeDir = secondClosest[perpAxis] - middleCorner[perpAxis]
-	if math.abs(edgeDir) < 0.1 then
-		edgeDir = thirdClosest[perpAxis] - middleCorner[perpAxis]
-	end
-
-	-- Normalize direction to +1 or -1
-	local dirSign = (edgeDir > 0) and 1 or -1
-
-	-- Create phantom corners 1 unit away
-	local phantomSecond = Vector3(secondClosest.x, secondClosest.y, secondClosest.z)
-	local phantomThird = Vector3(thirdClosest.x, thirdClosest.y, thirdClosest.z)
-
-	phantomSecond[perpAxis] = phantomSecond[perpAxis] + dirSign
-	phantomThird[perpAxis] = phantomThird[perpAxis] + dirSign
-
-	-- Check which phantom lies on boundary
-	if pointWithinEdgeBounds(phantomSecond, biggerEdgeArea, dirX, dirY) then
-		return true
-	end
-	if pointWithinEdgeBounds(phantomThird, biggerEdgeArea, dirX, dirY) then
-		return true
-	end
-
-	return false
-end
-
 -- Calculate edge overlap between two areas along a specific axis
 local function calculateEdgeOverlap(areaA, areaB, dirX, dirY)
 	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
@@ -499,46 +463,6 @@ local function validateSharedEdge(areaA, areaB, primaryDirX, primaryDirY, second
 
 	if secondarySuccess then
 		return secondaryDirX, secondaryDirY
-	end
-
-	-- FALLBACK 1: Try phantom edge test for primary
-	if primaryMiddle and primarySecond and primaryThird then
-		local biggerAreaPrimary = (edgeLengthA_primary >= edgeLengthB_primary) and areaA or areaB
-		local testPrimaryDirX = (biggerAreaPrimary == areaA) and primaryDirX or -primaryDirX
-		local testPrimaryDirY = (biggerAreaPrimary == areaA) and primaryDirY or -primaryDirY
-
-		if
-			testPhantomEdge(
-				biggerAreaPrimary,
-				primaryMiddle,
-				primarySecond,
-				primaryThird,
-				testPrimaryDirX,
-				testPrimaryDirY
-			)
-		then
-			return primaryDirX, primaryDirY
-		end
-	end
-
-	-- FALLBACK 2: Try phantom edge test for secondary
-	if secondaryMiddle and secondarySecond and secondaryThird then
-		local biggerAreaSecondary = (edgeLengthA_secondary >= edgeLengthB_secondary) and areaA or areaB
-		local testSecondaryDirX = (biggerAreaSecondary == areaA) and secondaryDirX or -secondaryDirX
-		local testSecondaryDirY = (biggerAreaSecondary == areaA) and secondaryDirY or -secondaryDirY
-
-		if
-			testPhantomEdge(
-				biggerAreaSecondary,
-				secondaryMiddle,
-				secondarySecond,
-				secondaryThird,
-				testSecondaryDirX,
-				testSecondaryDirY
-			)
-		then
-			return secondaryDirX, secondaryDirY
-		end
 	end
 
 	-- FALLBACK 3: Compare edge overlaps (most expensive but guaranteed to work)

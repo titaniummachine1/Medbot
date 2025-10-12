@@ -49,7 +49,7 @@ function NavLoader.LoadFile(navFile)
 		Log:Error("Failed to load nav file: " .. (err or "Unknown error"))
 		return false
 	end
-	
+
 	local navNodes = NavLoader.ProcessNavData(navData)
 	G.Navigation.nodes = navNodes
 	G.Navigation.navMeshUpdated = true
@@ -73,16 +73,16 @@ function NavLoader.ProcessNavData(navData)
 		local cX = (area.north_west.x + area.south_east.x) / 2
 		local cY = (area.north_west.y + area.south_east.y) / 2
 		local cZ = (area.north_west.z + area.south_east.z) / 2
-		
+
 		-- Ensure diagonal z-coordinates have valid values (fallback to adjacent corners)
 		local ne_z = area.north_east_z or area.north_west.z
 		local sw_z = area.south_west_z or area.south_east.z
-		
+
 		local nw = Vector3(area.north_west.x, area.north_west.y, area.north_west.z)
 		local se = Vector3(area.south_east.x, area.south_east.y, area.south_east.z)
 		local ne = Vector3(area.south_east.x, area.north_west.y, ne_z)
 		local sw = Vector3(area.north_west.x, area.south_east.y, sw_z)
-		
+
 		navNodes[area.id] =
 			{ pos = Vector3(cX, cY, cZ), id = area.id, c = area.connections, nw = nw, se = se, ne = ne, sw = sw }
 	end
