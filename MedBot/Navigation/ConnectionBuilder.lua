@@ -556,8 +556,6 @@ function ConnectionBuilder.BuildDoorsForConnections()
 										end
 										doorsBuilt = doorsBuilt + 1
 									end
-								else
-									print(string.format("[BUILD] to create door for %s->%s", nodeId, targetId))
 								end
 							end
 						end
