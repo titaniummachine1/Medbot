@@ -1859,7 +1859,7 @@ __bundle_register("MedBot.Visuals", function(require, _LOADED, __bundle_register
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
-local isWalkable = require("MedBot.Navigation.ISWalkable")
+local PathValidator = require("MedBot.Navigation.PathValidator")
 local MathUtils = require("MedBot.Utils.MathUtils")
 
 local Visuals = {}
@@ -2742,8 +2742,8 @@ local function OnDraw()
         end
     end
 
-    -- Draw ISWalkable debug traces if enabled
-    isWalkable.DrawDebugTraces()
+    -- Draw PathValidator debug traces if enabled
+    PathValidator.DrawDebugTraces()
 end
 
 --[[ Callbacks ]]
@@ -3045,12 +3045,12 @@ end
 return MathUtils
 
 end)
-__bundle_register("MedBot.Navigation.ISWalkable", function(require, _LOADED, __bundle_register, __bundle_modules)
+__bundle_register("MedBot.Navigation.PathValidator", function(require, _LOADED, __bundle_register, __bundle_modules)
 -- Path Validation Module - Uses trace hulls to check if path A→B is walkable
 -- This is NOT movement execution, just validation logic
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
-local isWalkable = {}
+local PathValidator = {}
 local G = require("MedBot.Core.Globals")
 local Common = require("MedBot.Core.Common")
 
@@ -3071,7 +3071,7 @@ local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
 local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
 
 -- Debug visualization function for trace hulls (like A_standstillDummy)
-function isWalkable.DrawDebugTraces()
+function PathValidator.DrawDebugTraces()
 	if not DEBUG_TRACES then
 		return
 	end
@@ -3110,18 +3110,18 @@ function isWalkable.DrawDebugTraces()
 end
 
 -- Toggle debug visualization on/off
-function isWalkable.ToggleDebug()
+function PathValidator.ToggleDebug()
 	DEBUG_TRACES = not DEBUG_TRACES
-	print("ISWalkable debug traces: " .. (DEBUG_TRACES and "ENABLED" or "DISABLED"))
+	print("PathValidator debug traces: " .. (DEBUG_TRACES and "ENABLED" or "DISABLED"))
 end
 
 -- Get current debug state
-function isWalkable.IsDebugEnabled()
+function PathValidator.IsDebugEnabled()
 	return DEBUG_TRACES
 end
 
 -- Clear debug traces (call this before each ISWalkable check)
-function isWalkable.ClearDebugTraces()
+function PathValidator.ClearDebugTraces()
 	hullTraces = {}
 	lineTraces = {}
 end
@@ -3173,7 +3173,7 @@ end
 -- Main function to check walkability
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
-function isWalkable.Path(startPos, goalPos, overrideMode)
+function PathValidator.Path(startPos, goalPos, overrideMode)
 	-- Clear trace tables for debugging (like A_standstillDummy)
 	hullTraces = {}
 	lineTraces = {}
@@ -3269,11 +3269,11 @@ function isWalkable.Path(startPos, goalPos, overrideMode)
 end
 
 -- Simple wrapper function for checking if a position is walkable from another position
-function isWalkable.IsWalkable(fromPos, toPos)
-	return isWalkable.Path(fromPos, toPos)
+function PathValidator.IsWalkable(fromPos, toPos)
+	return PathValidator.Path(fromPos, toPos)
 end
 
-return isWalkable
+return PathValidator
 
 end)
 __bundle_register("MedBot.Navigation.Node", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -3304,8 +3304,8 @@ function Node.Setup()
 	ConnectionBuilder.NormalizeConnections()
 
 	-- CRITICAL: Detect wall corners BEFORE building doors so clamping can work!
-	local WallCornerDetector = require("MedBot.Navigation.WallCornerDetector")
-	WallCornerDetector.DetectWallCorners()
+	local WallCornerGenerator = require("MedBot.Navigation.WallCornerGenerator")
+	WallCornerGenerator.DetectWallCorners()
 	Log:Info("Wall corners detected: " .. (G.Navigation.nodes and #G.Navigation.nodes or 0) .. " nodes processed")
 
 	ConnectionBuilder.BuildDoorsForConnections()
@@ -3483,17 +3483,17 @@ end
 return Node
 
 end)
-__bundle_register("MedBot.Navigation.WallCornerDetector", function(require, _LOADED, __bundle_register, __bundle_modules)
+__bundle_register("MedBot.Navigation.WallCornerGenerator", function(require, _LOADED, __bundle_register, __bundle_modules)
 --##########################################################################
---  WallCornerDetector.lua  ·  Detects wall corners for door clamping
+--  WallCornerGenerator.lua · Detects wall corners for door clamping
 --##########################################################################
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 
-local WallCornerDetector = {}
+local WallCornerGenerator = {}
 
-local Log = Common.Log.new("WallCornerDetector")
+local Log = Common.Log.new("WallCornerGenerator")
 
 -- Group neighbors by 4 directions for an area using existing dirId from connections
 -- Source Engine nav format: connectionData[4] in NESW order (North, East, South, West)
@@ -3607,7 +3607,7 @@ local function getDiagonalDirection(dir1, dir2)
 	return nil, nil
 end
 
-function WallCornerDetector.DetectWallCorners()
+function WallCornerGenerator.DetectWallCorners()
 	local nodes = G.Navigation.nodes
 	if not nodes then
 		Log:Warn("No nodes available for wall corner detection")
@@ -3773,7 +3773,7 @@ function WallCornerDetector.DetectWallCorners()
 	)
 
 	-- Console output for immediate visibility
-	print("WallCornerDetector: " .. wallCornerCount .. " wall corners found")
+	print("WallCornerGenerator: " .. wallCornerCount .. " wall corners found")
 
 	-- Debug: log first few nodes with wall corners
 	local debugCount = 0
@@ -3790,52 +3790,50 @@ function WallCornerDetector.DetectWallCorners()
 	end
 end
 
-return WallCornerDetector
+return WallCornerGenerator
 
 end)
 __bundle_register("MedBot.Navigation.ConnectionBuilder", function(require, _LOADED, __bundle_register, __bundle_modules)
 --##########################################################################
---  ConnectionBuilder.lua  ·  Connection and door building
+--  ConnectionBuilder.lua  ·  Facade for door system (delegates to Doors/)
+--##########################################################################
+--  This module now delegates to the modular door system in Doors/ subfolder.
+--  Kept for backward compatibility with existing code.
+--##########################################################################
+
+local DoorBuilder = require("MedBot.Navigation.Doors.DoorBuilder")
+
+local ConnectionBuilder = {}
+
+-- Delegate all functions to DoorBuilder module
+ConnectionBuilder.NormalizeConnections = DoorBuilder.NormalizeConnections
+ConnectionBuilder.BuildDoorsForConnections = DoorBuilder.BuildDoorsForConnections
+ConnectionBuilder.BuildDoorToDoorConnections = DoorBuilder.BuildDoorToDoorConnections
+ConnectionBuilder.GetConnectionEntry = DoorBuilder.GetConnectionEntry
+ConnectionBuilder.GetDoorTargetPoint = DoorBuilder.GetDoorTargetPoint
+
+return ConnectionBuilder
+
+end)
+__bundle_register("MedBot.Navigation.Doors.DoorBuilder", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  DoorBuilder.lua  ·  Door system orchestration and connection management
 --##########################################################################
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
+local DoorGeometry = require("MedBot.Navigation.Doors.DoorGeometry")
 
-local ConnectionBuilder = {}
+local DoorBuilder = {}
 
--- Constants
-local HITBOX_WIDTH = 24
-local STEP_HEIGHT = 18
-local MAX_JUMP = 72
-local CLEARANCE_OFFSET = 34
+local Log = Common.Log.new("DoorBuilder")
 
-local Log = Common.Log.new("ConnectionBuilder")
+-- ========================================================================
+-- CONNECTION NORMALIZATION
+-- ========================================================================
 
--- Inline helper: Linear interpolation between two Vector3 points
-local function lerpVec(a, b, t)
-	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
-end
-
--- Convert dirId (nav mesh NESW index) to direction vector
--- Source Engine format: connectionData[4] in NESW order
-local function dirIdToVector(dirId)
-	if dirId == 1 then
-		return 0, -1
-	end -- North
-	if dirId == 2 then
-		return 1, 0
-	end -- East
-	if dirId == 3 then
-		return 0, 1
-	end -- South
-	if dirId == 4 then
-		return -1, 0
-	end -- West
-	return 0, 0 -- Invalid
-end
-
-function ConnectionBuilder.NormalizeConnections()
+function DoorBuilder.NormalizeConnections()
 	local nodes = G.Navigation.nodes
 	if not nodes then
 		return
@@ -3855,95 +3853,145 @@ function ConnectionBuilder.NormalizeConnections()
 	Log:Info("Normalized all connections to enriched format")
 end
 
-local function getFacingEdgeCorners(area, dirX, dirY, _)
-	if not (area and area.nw and area.ne and area.se and area.sw) then
-		return nil, nil
+-- ========================================================================
+-- DOOR BUILDING
+-- ========================================================================
+
+function DoorBuilder.BuildDoorsForConnections()
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return
 	end
 
-	if dirX == 1 then
-		return area.ne, area.se
-	end -- East
-	if dirX == -1 then
-		return area.sw, area.nw
-	end -- West
-	if dirY == 1 then
-		return area.se, area.sw
-	end -- South
-	if dirY == -1 then
-		return area.nw, area.ne
-	end -- North
+	local doorsBuilt = 0
+	local processedPairs = {} -- Track processed area pairs to avoid duplicates
+	local doorNodes = {} -- Store created door nodes
 
-	return nil, nil
-end
-
--- Compute scalar overlap on an axis and return segment [a1,a2] overlapped with [b1,b2]
-local function overlap1D(a1, a2, b1, b2)
-	if a1 > a2 then
-		a1, a2 = a2, a1
+	-- Find all unique area-to-area connections
+	-- Count total connections first for debugging
+	local totalConnections = 0
+	for nodeId, node in pairs(nodes) do
+		if node.c and not node.isDoor then
+			for dirId, dir in pairs(node.c) do
+				if dir.connections then
+					totalConnections = totalConnections + #dir.connections
+				end
+			end
+		end
 	end
-	if b1 > b2 then
-		b1, b2 = b2, b1
-	end
-	local left = math.max(a1, b1)
-	local right = math.min(a2, b2)
-	if right <= left then
-		return nil
-	end
-	return left, right
-end
+	Log:Info("Total area connections found: %d", totalConnections)
 
-local function lerp(a, b, t)
-	return a + (b - a) * t
-end
+	for nodeId, node in pairs(nodes) do
+		if node.c and not node.isDoor then -- Only process actual areas
+			for dirId, dir in pairs(node.c) do
+				if dir.connections then
+					for _, connection in ipairs(dir.connections) do
+						local targetId = ConnectionUtils.GetNodeId(connection)
+						local targetNode = nodes[targetId]
 
--- Clamp door endpoints away from wall corners using axis-based distance
-local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB, varyingAxis)
-	local WALL_CLEARANCE = 24
+						if targetNode and not targetNode.isDoor then
+							-- Create unique pair key (sorted to avoid duplicates)
+							local pairKey = nodeId < targetId and (nodeId .. "_" .. targetId)
+								or (targetId .. "_" .. nodeId)
 
-	-- Determine which axis the door varies along (door direction)
-	local doorVector = overlapRight - overlapLeft
-	local doorAxis = varyingAxis or (math.abs(doorVector.x) > math.abs(doorVector.y) and "x" or "y")
+							if not processedPairs[pairKey] then
+								processedPairs[pairKey] = true
 
-	-- Get min/max on door axis
-	local leftCoord = overlapLeft[doorAxis]
-	local rightCoord = overlapRight[doorAxis]
-	local minCoord = math.min(leftCoord, rightCoord)
-	local maxCoord = math.max(leftCoord, rightCoord)
+								-- Find reverse direction (if exists) in ORIGINAL area graph
+								local revDir = nil
+								local hasReverse = false
+								if targetNode.c then
+									for tDirId, tDir in pairs(targetNode.c) do
+										if tDir.connections then
+											for _, tConn in ipairs(tDir.connections) do
+												if ConnectionUtils.GetNodeId(tConn) == nodeId then
+													hasReverse = true
+													revDir = tDirId
+													Log:Debug(
+														"Connection %s->%s: Found reverse (bidirectional)",
+														nodeId,
+														targetId
+													)
+													break
+												end
+											end
+											if hasReverse then
+												break
+											end
+										end
+									end
+								end
 
-	-- Track clamping adjustments
-	local clampFromLeft = 0 -- How much to shrink from left
-	local clampFromRight = 0 -- How much to shrink from right
+								if not hasReverse then
+									Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
+								end
 
-	-- Check wall corners from both areas
-	for _, area in ipairs({ areaA, areaB }) do
-		if area.wallCorners then
-			for _, wallCorner in ipairs(area.wallCorners) do
-				local cornerCoord = wallCorner[doorAxis]
+								-- Create SHARED doors (use canonical ordering for IDs)
+								local door = DoorGeometry.CreateDoorForAreas(node, targetNode, dirId)
+								if door then
+									local fwdDir = dirId
 
-				-- Check if wall corner is within door range on the varying axis
-				if cornerCoord >= minCoord - WALL_CLEARANCE and cornerCoord <= maxCoord + WALL_CLEARANCE then
-					-- Wall corner is near the door, check which side
-					if cornerCoord < minCoord then
-						-- Wall corner is to the left, need to clamp left endpoint right
-						local requiredShift = (minCoord - cornerCoord)
-						if requiredShift < WALL_CLEARANCE then
-							clampFromLeft = math.max(clampFromLeft, WALL_CLEARANCE - requiredShift)
-						end
-					elseif cornerCoord > maxCoord then
-						-- Wall corner is to the right, need to clamp right endpoint left
-						local requiredShift = (cornerCoord - maxCoord)
-						if requiredShift < WALL_CLEARANCE then
-							clampFromRight = math.max(clampFromRight, WALL_CLEARANCE - requiredShift)
-						end
-					else
-						-- Wall corner is INSIDE door range - clamp away from it
-						local distFromLeft = cornerCoord - minCoord
-						local distFromRight = maxCoord - cornerCoord
-						if distFromLeft < WALL_CLEARANCE then
-							clampFromLeft = math.max(clampFromLeft, WALL_CLEARANCE - distFromLeft + 1)
-						end
-						if distFromRight < WALL_CLEARANCE then
-							clampFromRight = math.max(clampFromRight, WALL_CLEARANCE - distFromRight + 1)
+									-- Use smaller nodeId first for canonical door IDs
+									local doorPrefix = (nodeId < targetId) and (nodeId .. "_" .. targetId)
+										or (targetId .. "_" .. nodeId)
+
+									-- Create door nodes with bidirectional connections (if applicable)
+									if door.left then
+										local doorId = doorPrefix .. "_left"
+										doorNodes[doorId] = {
+											id = doorId,
+											pos = door.left,
+											isDoor = true,
+											areaId = nodeId,
+											targetAreaId = targetId,
+											c = {
+												[fwdDir] = { connections = { targetId }, count = 1 },
+											},
+										}
+										-- Add reverse connection if bidirectional
+										if hasReverse and revDir then
+											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
+										end
+										doorsBuilt = doorsBuilt + 1
+									end
+
+									if door.middle then
+										local doorId = doorPrefix .. "_middle"
+										doorNodes[doorId] = {
+											id = doorId,
+											pos = door.middle,
+											isDoor = true,
+											areaId = nodeId,
+											targetAreaId = targetId,
+											c = {
+												[fwdDir] = { connections = { targetId }, count = 1 },
+											},
+										}
+										if hasReverse and revDir then
+											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
+										end
+										doorsBuilt = doorsBuilt + 1
+									end
+
+									if door.right then
+										local doorId = doorPrefix .. "_right"
+										doorNodes[doorId] = {
+											id = doorId,
+											pos = door.right,
+											isDoor = true,
+											areaId = nodeId,
+											targetAreaId = targetId,
+											c = {
+												[fwdDir] = { connections = { targetId }, count = 1 },
+											},
+										}
+										if hasReverse and revDir then
+											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
+										end
+										doorsBuilt = doorsBuilt + 1
+									end
+								end
+							end
 						end
 					end
 				end
@@ -3951,33 +3999,336 @@ local function clampDoorAwayFromWalls(overlapLeft, overlapRight, areaA, areaB, v
 		end
 	end
 
-	-- Apply clamping by adjusting coordinates
-	local clampedLeft = Vector3(overlapLeft.x, overlapLeft.y, overlapLeft.z)
-	local clampedRight = Vector3(overlapRight.x, overlapRight.y, overlapRight.z)
+	-- Add door nodes to graph
+	for doorId, doorNode in pairs(doorNodes) do
+		nodes[doorId] = doorNode
+	end
 
-	if clampFromLeft > 0 then
-		if leftCoord < rightCoord then
-			clampedLeft[doorAxis] = leftCoord + clampFromLeft
-		else
-			clampedLeft[doorAxis] = leftCoord - clampFromLeft
+	-- Build door-to-door connections FIRST (while area graph is intact)
+	DoorBuilder.BuildDoorToDoorConnections()
+
+	-- THEN replace area-to-area connections with area-to-door connections
+	for nodeId, node in pairs(nodes) do
+		if node.c and not node.isDoor then
+			for dirId, dir in pairs(node.c) do
+				if dir.connections then
+					local newConnections = {}
+
+					for _, connection in ipairs(dir.connections) do
+						local targetId = ConnectionUtils.GetNodeId(connection)
+						local targetNode = nodes[targetId]
+
+						if targetNode and not targetNode.isDoor then
+							-- Find door nodes - try both orderings (canonical pair key)
+							local doorPrefix1 = nodeId .. "_" .. targetId
+							local doorPrefix2 = targetId .. "_" .. nodeId
+							local foundDoors = false
+
+							-- Try both possible door ID patterns
+							for _, prefix in ipairs({ doorPrefix1, doorPrefix2 }) do
+								for suffix in pairs({ _left = true, _middle = true, _right = true }) do
+									local doorId = prefix .. suffix
+									if nodes[doorId] then
+										table.insert(newConnections, doorId)
+										foundDoors = true
+									end
+								end
+								if foundDoors then
+									break
+								end -- Found doors with this prefix
+							end
+
+							-- If no doors found, keep original connection
+							if not foundDoors then
+								table.insert(newConnections, connection)
+							end
+						else
+							-- Keep non-area connections
+							table.insert(newConnections, connection)
+						end
+					end
+
+					dir.connections = newConnections
+					dir.count = #newConnections
+				end
+			end
 		end
 	end
 
-	if clampFromRight > 0 then
-		if rightCoord > leftCoord then
-			clampedRight[doorAxis] = rightCoord - clampFromRight
-		else
-			clampedRight[doorAxis] = rightCoord + clampFromRight
+	Log:Info("Built " .. doorsBuilt .. " door nodes for connections")
+end
+
+-- ========================================================================
+-- DOOR-TO-DOOR CONNECTIONS
+-- ========================================================================
+
+-- Determine spatial direction between two positions using NESW indices
+-- Returns dirId (1=North, 2=East, 3=South, 4=West) compatible with nav mesh format
+local function calculateSpatialDirection(fromPos, toPos)
+	local dx = toPos.x - fromPos.x
+	local dy = toPos.y - fromPos.y
+
+	if math.abs(dx) >= math.abs(dy) then
+		return (dx > 0) and 2 or 4 -- East=2, West=4
+	else
+		return (dy > 0) and 3 or 1 -- South=3, North=1
+	end
+end
+
+-- Create optimized door-to-door connections
+function DoorBuilder.BuildDoorToDoorConnections()
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return
+	end
+
+	local connectionsAdded = 0
+	local doorsByArea = {}
+
+	-- Group doors by area for efficient lookup
+	-- Only add door to an area if it connects BACK to that area (not one-way exit)
+	for doorId, doorNode in pairs(nodes) do
+		if doorNode.isDoor and doorNode.c then
+			-- Check which areas this door connects TO
+			for _, dir in pairs(doorNode.c) do
+				if dir.connections then
+					for _, conn in ipairs(dir.connections) do
+						local connectedAreaId = ConnectionUtils.GetNodeId(conn)
+						-- Add door to the area it connects to
+						if not doorsByArea[connectedAreaId] then
+							doorsByArea[connectedAreaId] = {}
+						end
+						table.insert(doorsByArea[connectedAreaId], doorNode)
+					end
+				end
+			end
 		end
 	end
 
-	-- Ensure door doesn't become too small
-	local finalWidth = (clampedRight - clampedLeft):Length2D()
-	if finalWidth < HITBOX_WIDTH then
-		return overlapLeft, overlapRight -- Revert if too small
+	-- Helper to calculate which side a door is on relative to an area
+	local function getDoorSideForArea(doorPos, areaId)
+		local area = nodes[areaId]
+		if not area or not area.pos then
+			return nil
+		end
+
+		local dx = doorPos.x - area.pos.x
+		local dy = doorPos.y - area.pos.y
+
+		if math.abs(dx) > math.abs(dy) then
+			return (dx > 0) and 4 or 8 -- East=4, West=8
+		else
+			return (dy > 0) and 2 or 1 -- South=2, North=1
+		end
 	end
 
-	return clampedLeft, clampedRight
+	-- Connect doors within each area (respecting one-way connections)
+	for areaId, doors in pairs(doorsByArea) do
+		for i = 1, #doors do
+			local doorA = doors[i]
+
+			for j = 1, #doors do
+				if i ~= j then
+					local doorB = doors[j]
+
+					-- Calculate which side each door is on RELATIVE TO THIS AREA
+					local sideA = getDoorSideForArea(doorA.pos, areaId)
+					local sideB = getDoorSideForArea(doorB.pos, areaId)
+
+					-- ONLY connect doors on DIFFERENT sides to avoid wall collisions
+					if sideA and sideB and sideA ~= sideB then
+						-- Check if BOTH doors are bidirectional (not one-way drops)
+						-- One-way doors (dirCount == 1) should not participate in door-to-door
+						local doorAIsBidirectional = false
+						local doorBIsBidirectional = false
+
+						if doorA.c then
+							local dirCount = 0
+							for _ in pairs(doorA.c) do
+								dirCount = dirCount + 1
+							end
+							doorAIsBidirectional = (dirCount >= 2)
+						end
+
+						if doorB.c then
+							local dirCount = 0
+							for _ in pairs(doorB.c) do
+								dirCount = dirCount + 1
+							end
+							doorBIsBidirectional = (dirCount >= 2)
+						end
+
+						-- Only create door-to-door if BOTH doors are bidirectional
+						if doorAIsBidirectional and doorBIsBidirectional then
+							local spatialDirAtoB = calculateSpatialDirection(doorA.pos, doorB.pos)
+
+							if not doorA.c[spatialDirAtoB] then
+								doorA.c[spatialDirAtoB] = { connections = {}, count = 0 }
+							end
+
+							-- Add A→B connection
+							local alreadyConnected = false
+							for _, conn in ipairs(doorA.c[spatialDirAtoB].connections) do
+								if ConnectionUtils.GetNodeId(conn) == doorB.id then
+									alreadyConnected = true
+									break
+								end
+							end
+
+							if not alreadyConnected then
+								table.insert(doorA.c[spatialDirAtoB].connections, doorB.id)
+								doorA.c[spatialDirAtoB].count = #doorA.c[spatialDirAtoB].connections
+								connectionsAdded = connectionsAdded + 1
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	Log:Info("Added " .. connectionsAdded .. " door-to-door connections for path optimization")
+end
+
+-- ========================================================================
+-- UTILITY FUNCTIONS
+-- ========================================================================
+
+function DoorBuilder.GetConnectionEntry(nodeA, nodeB)
+	if not nodeA or not nodeB then
+		return nil
+	end
+
+	for dirId, dir in pairs(nodeA.c or {}) do
+		if dir.connections then
+			for _, connection in ipairs(dir.connections) do
+				local targetId = ConnectionUtils.GetNodeId(connection)
+				if targetId == nodeB.id then
+					-- Return connection info if it's a table, otherwise just the ID
+					if type(connection) == "table" then
+						return connection
+					else
+						-- For door connections (strings), return basic info
+						return {
+							nodeId = connection,
+							isDoorConnection = true,
+						}
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+function DoorBuilder.GetDoorTargetPoint(areaA, areaB)
+	if not (areaA and areaB) then
+		return nil
+	end
+
+	-- Find door nodes that connect areaA to areaB
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return areaB.pos
+	end
+
+	-- Look for door nodes that have areaA as source and areaB as target
+	local doorBaseId = areaA.id .. "_" .. areaB.id
+	local doorPositions = {}
+
+	-- Check all three door positions (left, middle, right)
+	for _, suffix in ipairs({ "_left", "_middle", "_right" }) do
+		local doorId = doorBaseId .. suffix
+		local doorNode = nodes[doorId]
+		if doorNode and doorNode.pos then
+			table.insert(doorPositions, doorNode.pos)
+		end
+	end
+
+	if #doorPositions > 0 then
+		-- Find closest door position to destination
+		local bestPos = doorPositions[1]
+		local bestDist = (doorPositions[1] - areaB.pos):Length()
+
+		for i = 2, #doorPositions do
+			local dist = (doorPositions[i] - areaB.pos):Length()
+			if dist < bestDist then
+				bestPos = doorPositions[i]
+				bestDist = dist
+			end
+		end
+
+		return bestPos
+	end
+
+	return areaB.pos
+end
+
+return DoorBuilder
+
+end)
+__bundle_register("MedBot.Navigation.Doors.DoorGeometry", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  DoorGeometry.lua  ·  Door geometry generation from nav area edges
+--##########################################################################
+
+local Common = require("MedBot.Core.Common")
+
+local DoorGeometry = {}
+
+-- Constants
+local HITBOX_WIDTH = 24
+local STEP_HEIGHT = 18
+local MAX_JUMP = 72
+
+local Log = Common.Log.new("DoorGeometry")
+
+-- ========================================================================
+-- GEOMETRY HELPERS
+-- ========================================================================
+
+-- Linear interpolation between two Vector3 points
+local function lerpVec(a, b, t)
+	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+end
+
+-- Scalar lerp
+local function lerp(a, b, t)
+	return a + (b - a) * t
+end
+
+-- Convert dirId (nav mesh NESW index) to direction vector
+-- Source Engine format: connectionData[4] in NESW order
+local function dirIdToVector(dirId)
+	if dirId == 1 then return 0, -1 end -- North
+	if dirId == 2 then return 1, 0 end  -- East
+	if dirId == 3 then return 0, 1 end  -- South
+	if dirId == 4 then return -1, 0 end -- West
+	return 0, 0 -- Invalid
+end
+
+-- Get the two corners of an area that face the given direction
+local function getFacingEdgeCorners(area, dirX, dirY)
+	if not (area and area.nw and area.ne and area.se and area.sw) then
+		return nil, nil
+	end
+
+	if dirX == 1 then return area.ne, area.se end -- East
+	if dirX == -1 then return area.sw, area.nw end -- West
+	if dirY == 1 then return area.se, area.sw end  -- South
+	if dirY == -1 then return area.nw, area.ne end -- North
+
+	return nil, nil
+end
+
+-- Compute scalar overlap on an axis and return segment [a1,a2] overlapped with [b1,b2]
+local function overlap1D(a1, a2, b1, b2)
+	if a1 > a2 then a1, a2 = a2, a1 end
+	if b1 > b2 then b1, b2 = b2, b1 end
+	local left = math.max(a1, b1)
+	local right = math.min(a2, b2)
+	if right <= left then return nil end
+	return left, right
 end
 
 -- Determine which area owns the door based on edge heights
@@ -3994,10 +4345,14 @@ local function calculateDoorOwner(a0, a1, b0, b1, areaA, areaB)
 	end
 end
 
+-- ========================================================================
+-- DOOR GEOMETRY CALCULATION
+-- ========================================================================
+
 -- Calculate edge overlap and door geometry
 local function calculateDoorGeometry(areaA, areaB, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
-	local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
+	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY)
+	local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY)
 	if not (a0 and a1 and b0 and b1) then
 		return nil
 	end
@@ -4014,7 +4369,8 @@ local function calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	}
 end
 
-local function createDoorForAreas(areaA, areaB, dirId)
+-- Create door geometry for connection between two areas
+function DoorGeometry.CreateDoorForAreas(areaA, areaB, dirId)
 	if not (areaA and areaB and areaA.pos and areaB.pos) then
 		return nil
 	end
@@ -4219,406 +4575,7 @@ local function createDoorForAreas(areaA, areaB, dirId)
 	}
 end
 
-function ConnectionBuilder.BuildDoorsForConnections()
-	local nodes = G.Navigation.nodes
-	if not nodes then
-		return
-	end
-
-	local doorsBuilt = 0
-	local processedPairs = {} -- Track processed area pairs to avoid duplicates
-	local doorNodes = {} -- Store created door nodes
-
-	-- Find all unique area-to-area connections
-	-- Count total connections first for debugging
-	local totalConnections = 0
-	for nodeId, node in pairs(nodes) do
-		if node.c and not node.isDoor then
-			for dirId, dir in pairs(node.c) do
-				if dir.connections then
-					totalConnections = totalConnections + #dir.connections
-				end
-			end
-		end
-	end
-	Log:Info("Total area connections found: %d", totalConnections)
-
-	for nodeId, node in pairs(nodes) do
-		if node.c and not node.isDoor then -- Only process actual areas
-			for dirId, dir in pairs(node.c) do
-				if dir.connections then
-					for _, connection in ipairs(dir.connections) do
-						local targetId = ConnectionUtils.GetNodeId(connection)
-						local targetNode = nodes[targetId]
-
-						if targetNode and not targetNode.isDoor then
-							-- Create unique pair key (sorted to avoid duplicates)
-							local pairKey = nodeId < targetId and (nodeId .. "_" .. targetId)
-								or (targetId .. "_" .. nodeId)
-
-							if not processedPairs[pairKey] then
-								processedPairs[pairKey] = true
-
-								-- Find reverse direction (if exists) in ORIGINAL area graph
-								local revDir = nil
-								local hasReverse = false
-								if targetNode.c then
-									for tDirId, tDir in pairs(targetNode.c) do
-										if tDir.connections then
-											for _, tConn in ipairs(tDir.connections) do
-												if ConnectionUtils.GetNodeId(tConn) == nodeId then
-													hasReverse = true
-													revDir = tDirId
-													Log:Debug(
-														"Connection %s->%s: Found reverse (bidirectional)",
-														nodeId,
-														targetId
-													)
-													break
-												end
-											end
-											if hasReverse then
-												break
-											end
-										end
-									end
-								end
-
-								if not hasReverse then
-									Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
-								end
-
-								-- Create SHARED doors (use canonical ordering for IDs)
-								local door = createDoorForAreas(node, targetNode, dirId)
-								if door then
-									local fwdDir = dirId
-
-									-- Use smaller nodeId first for canonical door IDs
-									local doorPrefix = (nodeId < targetId) and (nodeId .. "_" .. targetId)
-										or (targetId .. "_" .. nodeId)
-
-									-- Create door nodes with bidirectional connections (if applicable)
-									if door.left then
-										local doorId = doorPrefix .. "_left"
-										doorNodes[doorId] = {
-											id = doorId,
-											pos = door.left,
-											isDoor = true,
-											areaId = nodeId,
-											targetAreaId = targetId,
-											c = {
-												[fwdDir] = { connections = { targetId }, count = 1 },
-											},
-										}
-										-- Add reverse connection if bidirectional
-										if hasReverse and revDir then
-											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
-										end
-										doorsBuilt = doorsBuilt + 1
-									end
-
-									if door.middle then
-										local doorId = doorPrefix .. "_middle"
-										doorNodes[doorId] = {
-											id = doorId,
-											pos = door.middle,
-											isDoor = true,
-											areaId = nodeId,
-											targetAreaId = targetId,
-											c = {
-												[fwdDir] = { connections = { targetId }, count = 1 },
-											},
-										}
-										if hasReverse and revDir then
-											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
-										end
-										doorsBuilt = doorsBuilt + 1
-									end
-
-									if door.right then
-										local doorId = doorPrefix .. "_right"
-										doorNodes[doorId] = {
-											id = doorId,
-											pos = door.right,
-											isDoor = true,
-											areaId = nodeId,
-											targetAreaId = targetId,
-											c = {
-												[fwdDir] = { connections = { targetId }, count = 1 },
-											},
-										}
-										if hasReverse and revDir then
-											doorNodes[doorId].c[revDir] = { connections = { nodeId }, count = 1 }
-										end
-										doorsBuilt = doorsBuilt + 1
-									end
-								end
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	-- Add door nodes to graph
-	for doorId, doorNode in pairs(doorNodes) do
-		nodes[doorId] = doorNode
-	end
-
-	-- Build door-to-door connections FIRST (while area graph is intact)
-	ConnectionBuilder.BuildDoorToDoorConnections()
-
-	-- THEN replace area-to-area connections with area-to-door connections
-	for nodeId, node in pairs(nodes) do
-		if node.c and not node.isDoor then
-			for dirId, dir in pairs(node.c) do
-				if dir.connections then
-					local newConnections = {}
-
-					for _, connection in ipairs(dir.connections) do
-						local targetId = ConnectionUtils.GetNodeId(connection)
-						local targetNode = nodes[targetId]
-
-						if targetNode and not targetNode.isDoor then
-							-- Find door nodes - try both orderings (canonical pair key)
-							local doorPrefix1 = nodeId .. "_" .. targetId
-							local doorPrefix2 = targetId .. "_" .. nodeId
-							local foundDoors = false
-
-							-- Try both possible door ID patterns
-							for _, prefix in ipairs({ doorPrefix1, doorPrefix2 }) do
-								for suffix in pairs({ _left = true, _middle = true, _right = true }) do
-									local doorId = prefix .. suffix
-									if nodes[doorId] then
-										table.insert(newConnections, doorId)
-										foundDoors = true
-									end
-								end
-								if foundDoors then
-									break
-								end -- Found doors with this prefix
-							end
-
-							-- If no doors found, keep original connection
-							if not foundDoors then
-								table.insert(newConnections, connection)
-							end
-						else
-							-- Keep non-area connections
-							table.insert(newConnections, connection)
-						end
-					end
-
-					dir.connections = newConnections
-					dir.count = #newConnections
-				end
-			end
-		end
-	end
-
-	Log:Info("Built " .. doorsBuilt .. " door nodes for connections")
-end
-
--- Determine spatial direction between two positions using NESW indices
--- Returns dirId (1=North, 2=East, 3=South, 4=West) compatible with nav mesh format
-local function calculateSpatialDirection(fromPos, toPos)
-	local dx = toPos.x - fromPos.x
-	local dy = toPos.y - fromPos.y
-
-	if math.abs(dx) >= math.abs(dy) then
-		return (dx > 0) and 2 or 4 -- East=2, West=4
-	else
-		return (dy > 0) and 3 or 1 -- South=3, North=1
-	end
-end
-
--- Create optimized door-to-door connections
-function ConnectionBuilder.BuildDoorToDoorConnections()
-	local nodes = G.Navigation.nodes
-	if not nodes then
-		return
-	end
-
-	local connectionsAdded = 0
-	local doorsByArea = {}
-
-	-- Group doors by area for efficient lookup
-	-- Only add door to an area if it connects BACK to that area (not one-way exit)
-	for doorId, doorNode in pairs(nodes) do
-		if doorNode.isDoor and doorNode.c then
-			-- Check which areas this door connects TO
-			for _, dir in pairs(doorNode.c) do
-				if dir.connections then
-					for _, conn in ipairs(dir.connections) do
-						local connectedAreaId = ConnectionUtils.GetNodeId(conn)
-						-- Add door to the area it connects to
-						if not doorsByArea[connectedAreaId] then
-							doorsByArea[connectedAreaId] = {}
-						end
-						table.insert(doorsByArea[connectedAreaId], doorNode)
-					end
-				end
-			end
-		end
-	end
-
-	-- Helper to calculate which side a door is on relative to an area
-	local function getDoorSideForArea(doorPos, areaId)
-		local area = nodes[areaId]
-		if not area or not area.pos then
-			return nil
-		end
-
-		local dx = doorPos.x - area.pos.x
-		local dy = doorPos.y - area.pos.y
-
-		if math.abs(dx) > math.abs(dy) then
-			return (dx > 0) and 4 or 8 -- East=4, West=8
-		else
-			return (dy > 0) and 2 or 1 -- South=2, North=1
-		end
-	end
-
-	-- Connect doors within each area (respecting one-way connections)
-	for areaId, doors in pairs(doorsByArea) do
-		for i = 1, #doors do
-			local doorA = doors[i]
-
-			for j = 1, #doors do
-				if i ~= j then
-					local doorB = doors[j]
-
-					-- Calculate which side each door is on RELATIVE TO THIS AREA
-					local sideA = getDoorSideForArea(doorA.pos, areaId)
-					local sideB = getDoorSideForArea(doorB.pos, areaId)
-
-					-- ONLY connect doors on DIFFERENT sides to avoid wall collisions
-					if sideA and sideB and sideA ~= sideB then
-						-- Check if BOTH doors are bidirectional (not one-way drops)
-						-- One-way doors (dirCount == 1) should not participate in door-to-door
-						local doorAIsBidirectional = false
-						local doorBIsBidirectional = false
-
-						if doorA.c then
-							local dirCount = 0
-							for _ in pairs(doorA.c) do
-								dirCount = dirCount + 1
-							end
-							doorAIsBidirectional = (dirCount >= 2)
-						end
-
-						if doorB.c then
-							local dirCount = 0
-							for _ in pairs(doorB.c) do
-								dirCount = dirCount + 1
-							end
-							doorBIsBidirectional = (dirCount >= 2)
-						end
-
-						-- Only create door-to-door if BOTH doors are bidirectional
-						if doorAIsBidirectional and doorBIsBidirectional then
-							local spatialDirAtoB = calculateSpatialDirection(doorA.pos, doorB.pos)
-
-							if not doorA.c[spatialDirAtoB] then
-								doorA.c[spatialDirAtoB] = { connections = {}, count = 0 }
-							end
-
-							-- Add A→B connection
-							local alreadyConnected = false
-							for _, conn in ipairs(doorA.c[spatialDirAtoB].connections) do
-								if ConnectionUtils.GetNodeId(conn) == doorB.id then
-									alreadyConnected = true
-									break
-								end
-							end
-
-							if not alreadyConnected then
-								table.insert(doorA.c[spatialDirAtoB].connections, doorB.id)
-								doorA.c[spatialDirAtoB].count = #doorA.c[spatialDirAtoB].connections
-								connectionsAdded = connectionsAdded + 1
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	Log:Info("Added " .. connectionsAdded .. " door-to-door connections for path optimization")
-end
-
-function ConnectionBuilder.GetConnectionEntry(nodeA, nodeB)
-	if not nodeA or not nodeB then
-		return nil
-	end
-
-	for dirId, dir in pairs(nodeA.c or {}) do
-		if dir.connections then
-			for _, connection in ipairs(dir.connections) do
-				local targetId = ConnectionUtils.GetNodeId(connection)
-				if targetId == nodeB.id then
-					-- Return connection info if it's a table, otherwise just the ID
-					if type(connection) == "table" then
-						return connection
-					else
-						-- For door connections (strings), return basic info
-						return {
-							nodeId = connection,
-							isDoorConnection = true,
-						}
-					end
-				end
-			end
-		end
-	end
-	return nil
-end
-
-function ConnectionBuilder.GetDoorTargetPoint(areaA, areaB)
-	if not (areaA and areaB) then
-		return nil
-	end
-
-	-- Find door nodes that connect areaA to areaB
-	local nodes = G.Navigation.nodes
-	if not nodes then
-		return areaB.pos
-	end
-
-	-- Look for door nodes that have areaA as source and areaB as target
-	local doorBaseId = areaA.id .. "_" .. areaB.id
-	local doorPositions = {}
-
-	-- Check all three door positions (left, middle, right)
-	for _, suffix in ipairs({ "_left", "_middle", "_right" }) do
-		local doorId = doorBaseId .. suffix
-		local doorNode = nodes[doorId]
-		if doorNode and doorNode.pos then
-			table.insert(doorPositions, doorNode.pos)
-		end
-	end
-
-	if #doorPositions > 0 then
-		-- Find closest door position to destination
-		local bestPos = doorPositions[1]
-		local bestDist = (doorPositions[1] - areaB.pos):Length()
-
-		for i = 2, #doorPositions do
-			local dist = (doorPositions[i] - areaB.pos):Length()
-			if dist < bestDist then
-				bestPos = doorPositions[i]
-				bestDist = dist
-			end
-		end
-
-		return bestPos
-	end
-
-	return areaB.pos
-end
-
-return ConnectionBuilder
+return DoorGeometry
 
 end)
 __bundle_register("MedBot.Navigation.ConnectionUtils", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -5587,7 +5544,7 @@ local Navigation = require("MedBot.Navigation")
 local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
-local ISWalkable = require("MedBot.Navigation.ISWalkable")
+local PathValidator = require("MedBot.Navigation.PathValidator")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -5797,7 +5754,7 @@ function MovementDecisions.checkStuckState()
 		if WorkManager.attemptWork(33, "stuck_walkability_check") then
 			local targetPos = MovementDecisions.getCurrentTarget()
 			if targetPos then
-				if not ISWalkable.Path(G.pLocal.Origin, targetPos) then
+				if not PathValidator.Path(G.pLocal.Origin, targetPos) then
 					Log:Warn("STUCK: Path to current target not walkable, repathing")
 					G.currentState = G.States.STUCK
 				end
@@ -6441,9 +6398,9 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 		return false
 	end
 
-	-- Use the existing walkability check from the Node module or ISWalkable
-	local ISWalkable = require("MedBot.Navigation.ISWalkable")
-	local isWalkable = ISWalkable.IsWalkable(currentPos, nextNode.pos)
+	-- Use the existing walkability check from the Node module or PathValidator
+	local PathValidator = require("MedBot.Navigation.PathValidator")
+	local isWalkable = PathValidator.IsWalkable(currentPos, nextNode.pos)
 
 	if isWalkable then
 		Log:Debug("Next node %d is walkable from current position", nextNode.id)
@@ -7337,7 +7294,7 @@ local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local ISWalkable = require("MedBot.Navigation.ISWalkable")
+local PathValidator = require("MedBot.Navigation.PathValidator")
 local SmartJump = require("MedBot.Bot.SmartJump")
 
 local StateHandler = {}
@@ -7385,7 +7342,7 @@ function StateHandler.handleIdleState()
 		local mapName = engine.GetMapName():lower()
 		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
 		if allowDirectWalk then
-			if ISWalkable.Path(G.pLocal.Origin, goalPos) then
+			if PathValidator.Path(G.pLocal.Origin, goalPos) then
 				Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.Navigation.goalPos = goalPos
@@ -7444,7 +7401,7 @@ function StateHandler.handleIdleState()
 	-- Avoid pathfinding if we're already at the goal
 	if startNode.id == goalNode.id then
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if goalPos and ISWalkable.Path(G.pLocal.Origin, goalPos) then
+		if goalPos and PathValidator.Path(G.pLocal.Origin, goalPos) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick

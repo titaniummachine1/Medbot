@@ -1,13 +1,13 @@
 --##########################################################################
---  WallCornerDetector.lua  ·  Detects wall corners for door clamping
+--  WallCornerGenerator.lua · Detects wall corners for door clamping
 --##########################################################################
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 
-local WallCornerDetector = {}
+local WallCornerGenerator = {}
 
-local Log = Common.Log.new("WallCornerDetector")
+local Log = Common.Log.new("WallCornerGenerator")
 
 -- Group neighbors by 4 directions for an area using existing dirId from connections
 -- Source Engine nav format: connectionData[4] in NESW order (North, East, South, West)
@@ -121,7 +121,7 @@ local function getDiagonalDirection(dir1, dir2)
 	return nil, nil
 end
 
-function WallCornerDetector.DetectWallCorners()
+function WallCornerGenerator.DetectWallCorners()
 	local nodes = G.Navigation.nodes
 	if not nodes then
 		Log:Warn("No nodes available for wall corner detection")
@@ -287,7 +287,7 @@ function WallCornerDetector.DetectWallCorners()
 	)
 
 	-- Console output for immediate visibility
-	print("WallCornerDetector: " .. wallCornerCount .. " wall corners found")
+	print("WallCornerGenerator: " .. wallCornerCount .. " wall corners found")
 
 	-- Debug: log first few nodes with wall corners
 	local debugCount = 0
@@ -304,4 +304,4 @@ function WallCornerDetector.DetectWallCorners()
 	end
 end
 
-return WallCornerDetector
+return WallCornerGenerator

@@ -9,7 +9,7 @@ local Navigation = require("MedBot.Navigation")
 local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
-local ISWalkable = require("MedBot.Navigation.ISWalkable")
+local PathValidator = require("MedBot.Navigation.PathValidator")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -219,7 +219,7 @@ function MovementDecisions.checkStuckState()
 		if WorkManager.attemptWork(33, "stuck_walkability_check") then
 			local targetPos = MovementDecisions.getCurrentTarget()
 			if targetPos then
-				if not ISWalkable.Path(G.pLocal.Origin, targetPos) then
+				if not PathValidator.Path(G.pLocal.Origin, targetPos) then
 					Log:Warn("STUCK: Path to current target not walkable, repathing")
 					G.currentState = G.States.STUCK
 				end

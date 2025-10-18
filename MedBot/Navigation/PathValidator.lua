@@ -2,7 +2,7 @@
 -- This is NOT movement execution, just validation logic
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
-local isWalkable = {}
+local PathValidator = {}
 local G = require("MedBot.Core.Globals")
 local Common = require("MedBot.Core.Common")
 
@@ -23,7 +23,7 @@ local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
 local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
 
 -- Debug visualization function for trace hulls (like A_standstillDummy)
-function isWalkable.DrawDebugTraces()
+function PathValidator.DrawDebugTraces()
 	if not DEBUG_TRACES then
 		return
 	end
@@ -62,18 +62,18 @@ function isWalkable.DrawDebugTraces()
 end
 
 -- Toggle debug visualization on/off
-function isWalkable.ToggleDebug()
+function PathValidator.ToggleDebug()
 	DEBUG_TRACES = not DEBUG_TRACES
-	print("ISWalkable debug traces: " .. (DEBUG_TRACES and "ENABLED" or "DISABLED"))
+	print("PathValidator debug traces: " .. (DEBUG_TRACES and "ENABLED" or "DISABLED"))
 end
 
 -- Get current debug state
-function isWalkable.IsDebugEnabled()
+function PathValidator.IsDebugEnabled()
 	return DEBUG_TRACES
 end
 
 -- Clear debug traces (call this before each ISWalkable check)
-function isWalkable.ClearDebugTraces()
+function PathValidator.ClearDebugTraces()
 	hullTraces = {}
 	lineTraces = {}
 end
@@ -125,7 +125,7 @@ end
 -- Main function to check walkability
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
-function isWalkable.Path(startPos, goalPos, overrideMode)
+function PathValidator.Path(startPos, goalPos, overrideMode)
 	-- Clear trace tables for debugging (like A_standstillDummy)
 	hullTraces = {}
 	lineTraces = {}
@@ -221,8 +221,8 @@ function isWalkable.Path(startPos, goalPos, overrideMode)
 end
 
 -- Simple wrapper function for checking if a position is walkable from another position
-function isWalkable.IsWalkable(fromPos, toPos)
-	return isWalkable.Path(fromPos, toPos)
+function PathValidator.IsWalkable(fromPos, toPos)
+	return PathValidator.Path(fromPos, toPos)
 end
 
-return isWalkable
+return PathValidator

@@ -2,7 +2,7 @@
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
-local isWalkable = require("MedBot.Navigation.ISWalkable")
+local PathValidator = require("MedBot.Navigation.PathValidator")
 local MathUtils = require("MedBot.Utils.MathUtils")
 
 local Visuals = {}
@@ -885,8 +885,8 @@ local function OnDraw()
         end
     end
 
-    -- Draw ISWalkable debug traces if enabled
-    isWalkable.DrawDebugTraces()
+    -- Draw PathValidator debug traces if enabled
+    PathValidator.DrawDebugTraces()
 end
 
 --[[ Callbacks ]]

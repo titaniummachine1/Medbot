@@ -9,7 +9,7 @@ local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local ISWalkable = require("MedBot.Navigation.ISWalkable")
+local PathValidator = require("MedBot.Navigation.PathValidator")
 local SmartJump = require("MedBot.Bot.SmartJump")
 
 local StateHandler = {}
@@ -57,7 +57,7 @@ function StateHandler.handleIdleState()
 		local mapName = engine.GetMapName():lower()
 		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
 		if allowDirectWalk then
-			if ISWalkable.Path(G.pLocal.Origin, goalPos) then
+			if PathValidator.Path(G.pLocal.Origin, goalPos) then
 				Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.Navigation.goalPos = goalPos
@@ -116,7 +116,7 @@ function StateHandler.handleIdleState()
 	-- Avoid pathfinding if we're already at the goal
 	if startNode.id == goalNode.id then
 		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if goalPos and ISWalkable.Path(G.pLocal.Origin, goalPos) then
+		if goalPos and PathValidator.Path(G.pLocal.Origin, goalPos) then
 			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 			G.currentState = G.States.MOVING
 			G.lastPathfindingTick = currentTick
