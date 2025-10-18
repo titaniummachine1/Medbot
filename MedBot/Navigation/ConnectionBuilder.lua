@@ -21,6 +21,16 @@ local function lerpVec(a, b, t)
 	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
 end
 
+-- Convert dirId (nav mesh NESW index) to direction vector
+-- Source Engine format: connectionData[4] in NESW order
+local function dirIdToVector(dirId)
+	if dirId == 1 then return 0, -1 end  -- North
+	if dirId == 2 then return 1, 0 end   -- East
+	if dirId == 3 then return 0, 1 end   -- South
+	if dirId == 4 then return -1, 0 end  -- West
+	return 0, 0  -- Invalid
+end
+
 function ConnectionBuilder.NormalizeConnections()
 	local nodes = G.Navigation.nodes
 	if not nodes then
@@ -489,16 +499,13 @@ local function calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	}
 end
 
-local function createDoorForAreas(areaA, areaB)
+local function createDoorForAreas(areaA, areaB, dirId)
 	if not (areaA and areaB and areaA.pos and areaB.pos) then
 		return nil
 	end
 
-	-- Get primary and secondary direction options
-	local primaryDirX, primaryDirY, secondaryDirX, secondaryDirY = determineDirection(areaA.pos, areaB.pos)
-
-	-- Validate and pick correct shared edge direction
-	local dirX, dirY = validateSharedEdge(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
+	-- Convert dirId from connection to direction vector
+	local dirX, dirY = dirIdToVector(dirId)
 
 	local geometry = calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	if not geometry then
@@ -769,7 +776,7 @@ function ConnectionBuilder.BuildDoorsForConnections()
 								end
 
 								-- Create SHARED doors (use canonical ordering for IDs)
-								local door = createDoorForAreas(node, targetNode)
+								local door = createDoorForAreas(node, targetNode, dirId)
 								if door then
 									local fwdDir = dirId
 

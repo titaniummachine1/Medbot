@@ -3568,41 +3568,36 @@ local WallCornerDetector = {}
 
 local Log = Common.Log.new("WallCornerDetector")
 
--- Group neighbors by 4 directions for an area
+-- Group neighbors by 4 directions for an area using existing dirId from connections
+-- Source Engine nav format: connectionData[4] in NESW order (North, East, South, West)
 local function groupNeighborsByDirection(area, nodes)
 	local neighbors = {
-		north = {}, -- dirY = -1
-		south = {}, -- dirY = 1
-		east = {}, -- dirX = 1
-		west = {}, -- dirX = -1
+		north = {}, -- dirId = 1 (index 0 in C++)
+		east = {},  -- dirId = 2 (index 1 in C++)
+		south = {}, -- dirId = 3 (index 2 in C++)
+		west = {},  -- dirId = 4 (index 3 in C++)
 	}
 
 	if not area.c then
 		return neighbors
 	end
 
+	-- dirId IS the direction - use it directly from NESW array
 	for dirId, dir in pairs(area.c) do
 		if dir.connections then
 			for _, connection in ipairs(dir.connections) do
 				local targetId = (type(connection) == "table") and connection.node or connection
 				local neighbor = nodes[targetId]
 				if neighbor then
-					-- Determine direction from area to neighbor
-					local dx = neighbor.pos.x - area.pos.x
-					local dy = neighbor.pos.y - area.pos.y
-
-					if math.abs(dx) >= math.abs(dy) then
-						if dx > 0 then
-							table.insert(neighbors.east, neighbor)
-						else
-							table.insert(neighbors.west, neighbor)
-						end
-					else
-						if dy > 0 then
-							table.insert(neighbors.south, neighbor)
-						else
-							table.insert(neighbors.north, neighbor)
-						end
+					-- Map dirId to direction name (NESW order)
+					if dirId == 1 then
+						table.insert(neighbors.north, neighbor)
+					elseif dirId == 2 then
+						table.insert(neighbors.east, neighbor)
+					elseif dirId == 3 then
+						table.insert(neighbors.south, neighbor)
+					elseif dirId == 4 then
+						table.insert(neighbors.west, neighbor)
 					end
 				end
 			end
@@ -3634,93 +3629,56 @@ local function getDirectionCorners(area, direction)
 	return nil, nil
 end
 
--- Calculate distance from point to line segment (2D, ignores Z completely)
--- Returns distance and proximity score (0.99 if on edge, 1.0 if within tolerance)
-local function pointToLineSegmentDistance(point, lineStart, lineEnd)
-	local dx = lineEnd.x - lineStart.x
-	local dy = lineEnd.y - lineStart.y
-	local length = Vector3(dx, dy, 0):Length2D()
-
-	if length == 0 then
-		-- Line segment is a point - use Common.Distance2D
-		local point2D = Vector3(point.x, point.y, 0)
-		local start2D = Vector3(lineStart.x, lineStart.y, 0)
-		return Common.Distance2D(point2D, start2D), 0
-	end
-
-	-- Calculate projection parameter
-	local t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (length * length)
-
-	-- Clamp t to [0, 1] to stay within segment bounds
-	t = math.max(0, math.min(1, t))
-
-	-- Calculate closest point on line segment
-	local closestX = lineStart.x + t * dx
-	local closestY = lineStart.y + t * dy
-
-	-- Use Common.Distance2D for final distance calculation (ignore Z)
-	local point2D = Vector3(point.x, point.y, 0)
-	local closest2D = Vector3(closestX, closestY, 0)
-	local distance = Common.Distance2D(point2D, closest2D)
-	
-	-- Return distance and projection parameter for edge detection
-	return distance, t
-end
-
--- Check if point lies on neighbor's facing boundary
+-- Check if point lies on neighbor's facing boundary using shared axis
 -- Returns proximity score: 0.99 if on edge, 1.0 if within tolerance, 0 if outside
 local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
 		return 0
 	end
 
-	local maxDistance = 18.0
+	local tolerance = 1.0
 
-	-- Only check the boundary that's facing our area
-	local facingBoundary = nil
+	-- Determine shared axis and get neighbor's edge bounds on that axis
+	local axis, corner1, corner2
 	if direction == "north" then
-		-- We're facing north, so neighbor must be facing south
-		facingBoundary = { neighbor.sw, neighbor.se } -- South boundary of neighbor
+		-- North/South share X axis, neighbor's south boundary
+		axis = "x"
+		corner1, corner2 = neighbor.sw, neighbor.se
 	elseif direction == "south" then
-		-- We're facing south, so neighbor must be facing north
-		facingBoundary = { neighbor.nw, neighbor.ne } -- North boundary of neighbor
+		-- North/South share X axis, neighbor's north boundary
+		axis = "x"
+		corner1, corner2 = neighbor.nw, neighbor.ne
 	elseif direction == "east" then
-		-- We're facing east, so neighbor must be facing west
-		facingBoundary = { neighbor.sw, neighbor.nw } -- West boundary of neighbor
+		-- East/West share Y axis, neighbor's west boundary
+		axis = "y"
+		corner1, corner2 = neighbor.sw, neighbor.nw
 	elseif direction == "west" then
-		-- We're facing west, so neighbor must be facing east
-		facingBoundary = { neighbor.se, neighbor.ne } -- East boundary of neighbor
-	end
-
-	if not facingBoundary then
-		return 0
-	end
-
-	-- Check distance to the facing boundary only
-	local distance, t = pointToLineSegmentDistance(point, facingBoundary[1], facingBoundary[2])
-	
-	if distance > maxDistance then
-		return 0
-	end
-	
-	-- If point is at edge (t=0 or t=1), give 0.99 score
-	-- Otherwise give 1.0 score
-	if t <= 0.01 or t >= 0.99 then
-		return 0.99
+		-- East/West share Y axis, neighbor's east boundary
+		axis = "y"
+		corner1, corner2 = neighbor.se, neighbor.ne
 	else
-		return 1.0
+		return 0
 	end
-end
 
--- Count how many neighbor borders a corner lies on
-local function countNeighborBorders(corner, neighbors, direction)
-	local count = 0
-	for _, neighbor in ipairs(neighbors) do
-		if pointLiesOnNeighborBorder(corner, neighbor, direction) then
-			count = count + 1
-		end
+	-- Get bounds on shared axis
+	local minCoord = math.min(corner1[axis], corner2[axis])
+	local maxCoord = math.max(corner1[axis], corner2[axis])
+	local pointCoord = point[axis]
+
+	-- Check if point lies within bounds on shared axis
+	if pointCoord < minCoord - tolerance or pointCoord > maxCoord + tolerance then
+		return 0 -- Outside bounds
 	end
-	return count
+
+	-- Check if point is at edge (near min or max)
+	local distFromMin = math.abs(pointCoord - minCoord)
+	local distFromMax = math.abs(pointCoord - maxCoord)
+
+	if distFromMin < tolerance or distFromMax < tolerance then
+		return 0.99 -- On edge
+	else
+		return 1.0 -- Within bounds
+	end
 end
 
 function WallCornerDetector.DetectWallCorners()
@@ -3794,7 +3752,7 @@ function WallCornerDetector.DetectWallCorners()
 							)
 						end
 
-						-- Classification: 
+						-- Classification:
 						-- < 1.99 = outer corner (wall corner)
 						-- >= 1.99 = inner corner (fully surrounded)
 						local cornerType = "not_wall"
@@ -3870,6 +3828,16 @@ local Log = Common.Log.new("ConnectionBuilder")
 -- Inline helper: Linear interpolation between two Vector3 points
 local function lerpVec(a, b, t)
 	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+end
+
+-- Convert dirId (nav mesh NESW index) to direction vector
+-- Source Engine format: connectionData[4] in NESW order
+local function dirIdToVector(dirId)
+	if dirId == 1 then return 0, -1 end  -- North
+	if dirId == 2 then return 1, 0 end   -- East
+	if dirId == 3 then return 0, 1 end   -- South
+	if dirId == 4 then return -1, 0 end  -- West
+	return 0, 0  -- Invalid
 end
 
 function ConnectionBuilder.NormalizeConnections()
@@ -4340,16 +4308,13 @@ local function calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	}
 end
 
-local function createDoorForAreas(areaA, areaB)
+local function createDoorForAreas(areaA, areaB, dirId)
 	if not (areaA and areaB and areaA.pos and areaB.pos) then
 		return nil
 	end
 
-	-- Get primary and secondary direction options
-	local primaryDirX, primaryDirY, secondaryDirX, secondaryDirY = determineDirection(areaA.pos, areaB.pos)
-
-	-- Validate and pick correct shared edge direction
-	local dirX, dirY = validateSharedEdge(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
+	-- Convert dirId from connection to direction vector
+	local dirX, dirY = dirIdToVector(dirId)
 
 	local geometry = calculateDoorGeometry(areaA, areaB, dirX, dirY)
 	if not geometry then
@@ -4620,7 +4585,7 @@ function ConnectionBuilder.BuildDoorsForConnections()
 								end
 
 								-- Create SHARED doors (use canonical ordering for IDs)
-								local door = createDoorForAreas(node, targetNode)
+								local door = createDoorForAreas(node, targetNode, dirId)
 								if door then
 									local fwdDir = dirId
 
