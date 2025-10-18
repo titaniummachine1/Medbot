@@ -2147,7 +2147,7 @@ local function OnDraw()
     if G.Menu.Visuals.showConnections then
         local drawnDoorTriangles = {} -- Track which door groups we've drawn
         local doorConvergencePoints = {} -- Store convergence points (direction to area center)
-        local CONVERGENCE_OFFSET = 12 -- Units in front of middle door point
+        local CONVERGENCE_OFFSET = 7 -- Units in front of middle door point
         
         -- Helper: Check if connection is bidirectional (area→door AND door→area)
         local function isBidirectional(areaNode, doorBaseId)
