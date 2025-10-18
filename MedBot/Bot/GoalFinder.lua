@@ -19,11 +19,33 @@ local function findPayloadGoal()
 	end
 
 	local pLocal = G.pLocal.entity
+	local myTeam = pLocal:GetTeamNumber()
+	local ownCart = nil
+	local enemyCart = nil
+	
+	-- First pass: find own cart and enemy cart
 	for _, entity in pairs(G.World.payloads or {}) do
-		if entity:IsValid() and entity:GetTeamNumber() == pLocal:GetTeamNumber() then
-			local pos = entity:GetAbsOrigin()
-			return Navigation.GetAreaAtPosition(pos), pos
+		if entity:IsValid() then
+			local cartTeam = entity:GetTeamNumber()
+			if cartTeam == myTeam then
+				ownCart = entity
+			else
+				enemyCart = entity
+			end
 		end
+	end
+	
+	-- If we found our own cart, use it
+	if ownCart then
+		local pos = ownCart:GetAbsOrigin()
+		return Navigation.GetAreaAtPosition(pos), pos
+	end
+	
+	-- If we're on defense (no own cart found) and enemy cart exists, defend enemy cart
+	if enemyCart then
+		local pos = enemyCart:GetAbsOrigin()
+		Log:Info("Own cart not found, defending enemy cart at position")
+		return Navigation.GetAreaAtPosition(pos), pos
 	end
 end
 

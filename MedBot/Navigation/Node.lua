@@ -81,9 +81,9 @@ local function isWithinAreaBounds(pos, node)
 		return false
 	end
 
-	-- Height limit: position cannot be more than 72 units above area center
-	local heightAboveArea = pos.z - node.pos.z
-	if heightAboveArea > 72 then
+	-- Height limit: ±72 units to prevent finding areas through doors/floors
+	local heightDiff = math.abs(pos.z - node.pos.z)
+	if heightDiff > 72 then
 		return false
 	end
 

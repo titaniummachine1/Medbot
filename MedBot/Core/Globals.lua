@@ -130,6 +130,7 @@ G.States = {
 	PATHFINDING = "PATHFINDING",
 	MOVING = "MOVING",
 	STUCK = "STUCK",
+	FOLLOWING = "FOLLOWING", -- Direct following of dynamic target on same node
 }
 
 G.currentState = nil

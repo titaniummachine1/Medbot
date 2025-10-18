@@ -137,6 +137,8 @@ local function onCreateMove(userCmd)
 		StateHandler.handlePathfindingState()
 	elseif G.currentState == G.States.MOVING then
 		MovementDecisions.handleMovingState(userCmd)
+	elseif G.currentState == G.States.FOLLOWING then
+		StateHandler.handleFollowingState(userCmd)
 	elseif G.currentState == G.States.STUCK then
 		-- Only run stuck logic if walking is enabled (manual override mode = no stuck logic)
 		if G.Menu.Main.EnableWalking then
@@ -745,6 +747,7 @@ G.States = {
 	PATHFINDING = "PATHFINDING",
 	MOVING = "MOVING",
 	STUCK = "STUCK",
+	FOLLOWING = "FOLLOWING", -- Direct following of dynamic target on same node
 }
 
 G.currentState = nil
@@ -3449,9 +3452,9 @@ local function isWithinAreaBounds(pos, node)
 		return false
 	end
 
-	-- Height limit: position cannot be more than 72 units above area center
-	local heightAboveArea = pos.z - node.pos.z
-	if heightAboveArea > 72 then
+	-- Height limit: ±72 units to prevent finding areas through doors/floors
+	local heightDiff = math.abs(pos.z - node.pos.z)
+	if heightDiff > 72 then
 		return false
 	end
 
@@ -7752,16 +7755,28 @@ function StateHandler.handleIdleState()
 	G.Navigation.goalPos = goalPos
 	G.Navigation.goalNodeId = goalNode and goalNode.id or nil
 
-	-- Avoid pathfinding if we're already at the goal
+	-- Avoid pathfinding if we're already at the goal node
 	if startNode.id == goalNode.id then
-		local walkMode = G.Menu.Main.WalkableMode or "Smooth"
-		if goalPos and PathValidator.Path(G.pLocal.Origin, goalPos) then
-			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-			G.currentState = G.States.MOVING
-			G.lastPathfindingTick = currentTick
-			Log:Info("Moving directly to goal from goal node %d", startNode.id)
+		if goalPos then
+			-- Check distance to see if we're close enough (stop radius = 80 units)
+			local dist = (G.pLocal.Origin - goalPos):Length()
+			local stopRadius = 80
+			
+			if dist <= stopRadius then
+				-- Within stop radius - enter FOLLOWING state and just track position
+				-- DON'T set lastPathfindingTick - this isn't pathfinding, just direct movement
+				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+				G.currentState = G.States.FOLLOWING
+				G.Navigation.followingDistance = dist
+				Log:Debug("Within stop radius (%.0f/%.0f) - entering FOLLOWING state", dist, stopRadius)
+			else
+				-- Too far - move closer (still direct movement, not pathfinding)
+				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+				G.currentState = G.States.MOVING
+				Log:Info("Moving to goal position (%.0f, %.0f, %.0f) from node %d (dist=%.0f)", goalPos.x, goalPos.y, goalPos.z, startNode.id, dist)
+			end
 		else
-			Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+			Log:Debug("No goal position available, staying in IDLE")
 			G.lastPathfindingTick = currentTick
 		end
 		return
@@ -7912,6 +7927,73 @@ function StateHandler.forceRepath(reason)
 	WorkManager.clearWork("Pathfinding")
 end
 
+-- Handle FOLLOWING state - direct following of dynamic targets on same node
+function StateHandler.handleFollowingState(userCmd)
+	local currentTick = globals.TickCount()
+	
+	-- Throttle updates to every 5 ticks (~83ms) for responsive tracking
+	if not G.Navigation.lastFollowUpdateTick then
+		G.Navigation.lastFollowUpdateTick = 0
+	end
+	
+	if currentTick - G.Navigation.lastFollowUpdateTick < 5 then
+		-- Use MovementDecisions to continue moving to current target
+		local MovementDecisions = require("MedBot.Bot.MovementDecisions")
+		if G.Navigation.path and #G.Navigation.path > 0 then
+			MovementDecisions.handleMovingState(userCmd)
+		end
+		return
+	end
+	
+	G.Navigation.lastFollowUpdateTick = currentTick
+	
+	-- Re-check goal position (payload/player may have moved)
+	local goalNode, goalPos = GoalFinder.findGoal("Objective")
+	
+	if not goalNode or not goalPos then
+		-- Lost target - return to IDLE (clear pathfinding throttle for immediate repath)
+		Log:Debug("Lost target in FOLLOWING state, returning to IDLE")
+		G.currentState = G.States.IDLE
+		G.lastPathfindingTick = 0
+		return
+	end
+	
+	-- Check if still on same node
+	local startNode = Navigation.GetClosestNode(G.pLocal.Origin)
+	if not startNode or startNode.id ~= goalNode.id then
+		-- No longer on same node - return to IDLE to trigger pathfinding (clear throttle)
+		Log:Debug("Left target node in FOLLOWING state, returning to IDLE")
+		G.currentState = G.States.IDLE
+		G.lastPathfindingTick = 0
+		return
+	end
+	
+	-- Check distance change
+	local currentDist = (G.pLocal.Origin - goalPos):Length()
+	local stopRadius = 80
+	local distChange = math.abs(currentDist - (G.Navigation.followingDistance or currentDist))
+	
+	-- Only update if distance changed significantly (>30 units)
+	if distChange > 30 then
+		G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+		G.Navigation.followingDistance = currentDist
+		G.Navigation.goalPos = goalPos
+		Log:Debug("Target moved %.0f units, updating position (dist=%.0f)", distChange, currentDist)
+		
+		-- If moved outside stop radius, switch to MOVING
+		if currentDist > stopRadius then
+			Log:Debug("Target moved outside stop radius, switching to MOVING")
+			G.currentState = G.States.MOVING
+		end
+	end
+	
+	-- Continue moving to target
+	local MovementDecisions = require("MedBot.Bot.MovementDecisions")
+	if G.Navigation.path and #G.Navigation.path > 0 then
+		MovementDecisions.handleMovingState(userCmd)
+	end
+end
+
 return StateHandler
 
 end)
@@ -7937,11 +8019,33 @@ local function findPayloadGoal()
 	end
 
 	local pLocal = G.pLocal.entity
+	local myTeam = pLocal:GetTeamNumber()
+	local ownCart = nil
+	local enemyCart = nil
+	
+	-- First pass: find own cart and enemy cart
 	for _, entity in pairs(G.World.payloads or {}) do
-		if entity:IsValid() and entity:GetTeamNumber() == pLocal:GetTeamNumber() then
-			local pos = entity:GetAbsOrigin()
-			return Navigation.GetAreaAtPosition(pos), pos
+		if entity:IsValid() then
+			local cartTeam = entity:GetTeamNumber()
+			if cartTeam == myTeam then
+				ownCart = entity
+			else
+				enemyCart = entity
+			end
 		end
+	end
+	
+	-- If we found our own cart, use it
+	if ownCart then
+		local pos = ownCart:GetAbsOrigin()
+		return Navigation.GetAreaAtPosition(pos), pos
+	end
+	
+	-- If we're on defense (no own cart found) and enemy cart exists, defend enemy cart
+	if enemyCart then
+		local pos = enemyCart:GetAbsOrigin()
+		Log:Info("Own cart not found, defending enemy cart at position")
+		return Navigation.GetAreaAtPosition(pos), pos
 	end
 end
 

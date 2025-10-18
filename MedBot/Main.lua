@@ -94,6 +94,8 @@ local function onCreateMove(userCmd)
 		StateHandler.handlePathfindingState()
 	elseif G.currentState == G.States.MOVING then
 		MovementDecisions.handleMovingState(userCmd)
+	elseif G.currentState == G.States.FOLLOWING then
+		StateHandler.handleFollowingState(userCmd)
 	elseif G.currentState == G.States.STUCK then
 		-- Only run stuck logic if walking is enabled (manual override mode = no stuck logic)
 		if G.Menu.Main.EnableWalking then
