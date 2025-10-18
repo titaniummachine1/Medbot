@@ -3348,14 +3348,29 @@ function Node.GetNodeByID(id)
 	return G.Navigation.nodes and G.Navigation.nodes[id] or nil
 end
 
+-- Check if position is within area's horizontal bounds (X/Y only)
+local function isWithinAreaBounds(pos, node)
+	if not node.nw or not node.se then
+		return false
+	end
+	
+	-- Get horizontal bounds from corners
+	local minX = math.min(node.nw.x, node.ne.x, node.sw.x, node.se.x)
+	local maxX = math.max(node.nw.x, node.ne.x, node.sw.x, node.se.x)
+	local minY = math.min(node.nw.y, node.ne.y, node.sw.y, node.se.y)
+	local maxY = math.max(node.nw.y, node.ne.y, node.sw.y, node.se.y)
+	
+	return pos.x >= minX and pos.x <= maxX and pos.y >= minY and pos.y <= maxY
+end
+
 function Node.GetClosestNode(pos)
 	if not G.Navigation.nodes then
 		return nil
 	end
 
+	-- Step 1: Find closest area by center distance (3D)
 	local closestNode, closestDist = nil, math.huge
 	for _, node in pairs(G.Navigation.nodes) do
-		-- Skip door nodes - only return actual area nodes
 		if not node.isDoor then
 			local dist = (node.pos - pos):Length()
 			if dist < closestDist then
@@ -3363,7 +3378,59 @@ function Node.GetClosestNode(pos)
 			end
 		end
 	end
-	return closestNode
+	
+	if not closestNode then
+		return nil
+	end
+	
+	-- Step 2: Flood fill from closest node to depth 4
+	local candidates = {} -- List of candidate nodes
+	local visited = {} -- Track visited nodes
+	local queue = {{ node = closestNode, depth = 0 }}
+	visited[closestNode.id] = true
+	candidates[1] = closestNode
+	local candidateCount = 1
+	
+	local queueStart = 1
+	while queueStart <= #queue do
+		local current = queue[queueStart]
+		queueStart = queueStart + 1
+		
+		if current.depth < 4 then
+			-- Get adjacent nodes
+			local adjacent = Node.GetAdjacentNodesOnly(current.node, G.Navigation.nodes)
+			for _, adjNode in ipairs(adjacent) do
+				if not adjNode.isDoor and not visited[adjNode.id] then
+					visited[adjNode.id] = true
+					table.insert(queue, { node = adjNode, depth = current.depth + 1 })
+					-- Add to candidates list (pre-sorted by BFS order)
+					candidateCount = candidateCount + 1
+					candidates[candidateCount] = adjNode
+				end
+			end
+		end
+	end
+	
+	-- Step 3: Check which candidate contains the target (horizontal bounds check)
+	for i = 1, candidateCount do
+		if isWithinAreaBounds(pos, candidates[i]) then
+			Log:Debug("Found containing area: %s", candidates[i].id)
+			return candidates[i]
+		end
+	end
+	
+	-- Step 4: No area contains target - sort by distance and pick closest
+	-- List is already roughly sorted by BFS order, final sort is faster
+	for i = 1, candidateCount do
+		candidates[i]._dist = (candidates[i].pos - pos):Length()
+	end
+	
+	table.sort(candidates, function(a, b)
+		return a._dist < b._dist
+	end)
+	
+	Log:Debug("No containing area found, using closest from %d candidates", candidateCount)
+	return candidates[1]
 end
 
 -- Connection utilities
@@ -4313,10 +4380,18 @@ end
 -- Convert dirId (nav mesh NESW index) to direction vector
 -- Source Engine format: connectionData[4] in NESW order
 local function dirIdToVector(dirId)
-	if dirId == 1 then return 0, -1 end -- North
-	if dirId == 2 then return 1, 0 end  -- East
-	if dirId == 3 then return 0, 1 end  -- South
-	if dirId == 4 then return -1, 0 end -- West
+	if dirId == 1 then
+		return 0, -1
+	end -- North
+	if dirId == 2 then
+		return 1, 0
+	end -- East
+	if dirId == 3 then
+		return 0, 1
+	end -- South
+	if dirId == 4 then
+		return -1, 0
+	end -- West
 	return 0, 0 -- Invalid
 end
 
@@ -4326,21 +4401,35 @@ local function getFacingEdgeCorners(area, dirX, dirY)
 		return nil, nil
 	end
 
-	if dirX == 1 then return area.ne, area.se end -- East
-	if dirX == -1 then return area.sw, area.nw end -- West
-	if dirY == 1 then return area.se, area.sw end  -- South
-	if dirY == -1 then return area.nw, area.ne end -- North
+	if dirX == 1 then
+		return area.ne, area.se
+	end -- East
+	if dirX == -1 then
+		return area.sw, area.nw
+	end -- West
+	if dirY == 1 then
+		return area.se, area.sw
+	end -- South
+	if dirY == -1 then
+		return area.nw, area.ne
+	end -- North
 
 	return nil, nil
 end
 
 -- Compute scalar overlap on an axis and return segment [a1,a2] overlapped with [b1,b2]
 local function overlap1D(a1, a2, b1, b2)
-	if a1 > a2 then a1, a2 = a2, a1 end
-	if b1 > b2 then b1, b2 = b2, b1 end
+	if a1 > a2 then
+		a1, a2 = a2, a1
+	end
+	if b1 > b2 then
+		b1, b2 = b2, b1
+	end
 	local left = math.max(a1, b1)
 	local right = math.min(a2, b2)
-	if right <= left then return nil end
+	if right <= left then
+		return nil
+	end
 	return left, right
 end
 
@@ -4429,9 +4518,20 @@ function DoorGeometry.CreateDoorForAreas(areaA, areaB, dirId)
 	local overlapMin = math.max(aMin, bMin)
 	local overlapMax = math.min(aMax, bMax)
 
-	-- If overlap too small, create center-only door at midpoint between areas
+	-- If overlap too small, create center-only door at center of smaller area's edge
 	if overlapMax - overlapMin < HITBOX_WIDTH then
-		local centerPoint = lerpVec(a0, a1, 0.5)
+		-- Determine which area has smaller edge
+		local aEdgeLen = aMax - aMin
+		local bEdgeLen = bMax - bMin
+
+		-- Use center of smaller edge for better door placement
+		local centerPoint
+		if aEdgeLen <= bEdgeLen then
+			centerPoint = lerpVec(a0, a1, 0.5) -- A has smaller edge
+		else
+			centerPoint = lerpVec(b0, b1, 0.5) -- B has smaller edge
+		end
+
 		return {
 			left = nil,
 			middle = centerPoint,
@@ -4490,8 +4590,17 @@ function DoorGeometry.CreateDoorForAreas(areaA, areaB, dirId)
 	-- Calculate door width and middle point
 	local finalWidth = (overlapRight - overlapLeft):Length2D()
 	if finalWidth < HITBOX_WIDTH then
-		-- Too narrow after clamping, use center-only door
-		local centerPoint = lerpVec(overlapLeft, overlapRight, 0.5)
+		-- Too narrow after clamping, use center of smaller area's edge
+		local aEdgeLen = aMax - aMin
+		local bEdgeLen = bMax - bMin
+
+		local centerPoint
+		if aEdgeLen <= bEdgeLen then
+			centerPoint = lerpVec(a0, a1, 0.5) -- A has smaller edge
+		else
+			centerPoint = lerpVec(b0, b1, 0.5) -- B has smaller edge
+		end
+
 		return {
 			left = nil,
 			middle = centerPoint,
@@ -4541,7 +4650,7 @@ function DoorGeometry.CreateDoorForAreas(areaA, areaB, dirId)
 				if distToMin < WALL_CLEARANCE then
 					shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - distToMin)
 				end
-				
+
 				-- Shrink from max side if wall corner is within 24 units of it
 				if distToMax < WALL_CLEARANCE then
 					shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - distToMax)

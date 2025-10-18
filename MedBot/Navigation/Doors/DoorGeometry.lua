@@ -30,10 +30,18 @@ end
 -- Convert dirId (nav mesh NESW index) to direction vector
 -- Source Engine format: connectionData[4] in NESW order
 local function dirIdToVector(dirId)
-	if dirId == 1 then return 0, -1 end -- North
-	if dirId == 2 then return 1, 0 end  -- East
-	if dirId == 3 then return 0, 1 end  -- South
-	if dirId == 4 then return -1, 0 end -- West
+	if dirId == 1 then
+		return 0, -1
+	end -- North
+	if dirId == 2 then
+		return 1, 0
+	end -- East
+	if dirId == 3 then
+		return 0, 1
+	end -- South
+	if dirId == 4 then
+		return -1, 0
+	end -- West
 	return 0, 0 -- Invalid
 end
 
@@ -43,21 +51,35 @@ local function getFacingEdgeCorners(area, dirX, dirY)
 		return nil, nil
 	end
 
-	if dirX == 1 then return area.ne, area.se end -- East
-	if dirX == -1 then return area.sw, area.nw end -- West
-	if dirY == 1 then return area.se, area.sw end  -- South
-	if dirY == -1 then return area.nw, area.ne end -- North
+	if dirX == 1 then
+		return area.ne, area.se
+	end -- East
+	if dirX == -1 then
+		return area.sw, area.nw
+	end -- West
+	if dirY == 1 then
+		return area.se, area.sw
+	end -- South
+	if dirY == -1 then
+		return area.nw, area.ne
+	end -- North
 
 	return nil, nil
 end
 
 -- Compute scalar overlap on an axis and return segment [a1,a2] overlapped with [b1,b2]
 local function overlap1D(a1, a2, b1, b2)
-	if a1 > a2 then a1, a2 = a2, a1 end
-	if b1 > b2 then b1, b2 = b2, b1 end
+	if a1 > a2 then
+		a1, a2 = a2, a1
+	end
+	if b1 > b2 then
+		b1, b2 = b2, b1
+	end
 	local left = math.max(a1, b1)
 	local right = math.min(a2, b2)
-	if right <= left then return nil end
+	if right <= left then
+		return nil
+	end
 	return left, right
 end
 
@@ -146,9 +168,20 @@ function DoorGeometry.CreateDoorForAreas(areaA, areaB, dirId)
 	local overlapMin = math.max(aMin, bMin)
 	local overlapMax = math.min(aMax, bMax)
 
-	-- If overlap too small, create center-only door at midpoint between areas
+	-- If overlap too small, create center-only door at center of smaller area's edge
 	if overlapMax - overlapMin < HITBOX_WIDTH then
-		local centerPoint = lerpVec(a0, a1, 0.5)
+		-- Determine which area has smaller edge
+		local aEdgeLen = aMax - aMin
+		local bEdgeLen = bMax - bMin
+
+		-- Use center of smaller edge for better door placement
+		local centerPoint
+		if aEdgeLen <= bEdgeLen then
+			centerPoint = lerpVec(a0, a1, 0.5) -- A has smaller edge
+		else
+			centerPoint = lerpVec(b0, b1, 0.5) -- B has smaller edge
+		end
+
 		return {
 			left = nil,
 			middle = centerPoint,
@@ -207,8 +240,17 @@ function DoorGeometry.CreateDoorForAreas(areaA, areaB, dirId)
 	-- Calculate door width and middle point
 	local finalWidth = (overlapRight - overlapLeft):Length2D()
 	if finalWidth < HITBOX_WIDTH then
-		-- Too narrow after clamping, use center-only door
-		local centerPoint = lerpVec(overlapLeft, overlapRight, 0.5)
+		-- Too narrow after clamping, use center of smaller area's edge
+		local aEdgeLen = aMax - aMin
+		local bEdgeLen = bMax - bMin
+
+		local centerPoint
+		if aEdgeLen <= bEdgeLen then
+			centerPoint = lerpVec(a0, a1, 0.5) -- A has smaller edge
+		else
+			centerPoint = lerpVec(b0, b1, 0.5) -- B has smaller edge
+		end
+
 		return {
 			left = nil,
 			middle = centerPoint,
@@ -258,7 +300,7 @@ function DoorGeometry.CreateDoorForAreas(areaA, areaB, dirId)
 				if distToMin < WALL_CLEARANCE then
 					shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - distToMin)
 				end
-				
+
 				-- Shrink from max side if wall corner is within 24 units of it
 				if distToMax < WALL_CLEARANCE then
 					shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - distToMax)

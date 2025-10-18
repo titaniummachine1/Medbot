@@ -63,14 +63,29 @@ function Node.GetNodeByID(id)
 	return G.Navigation.nodes and G.Navigation.nodes[id] or nil
 end
 
+-- Check if position is within area's horizontal bounds (X/Y only)
+local function isWithinAreaBounds(pos, node)
+	if not node.nw or not node.se then
+		return false
+	end
+	
+	-- Get horizontal bounds from corners
+	local minX = math.min(node.nw.x, node.ne.x, node.sw.x, node.se.x)
+	local maxX = math.max(node.nw.x, node.ne.x, node.sw.x, node.se.x)
+	local minY = math.min(node.nw.y, node.ne.y, node.sw.y, node.se.y)
+	local maxY = math.max(node.nw.y, node.ne.y, node.sw.y, node.se.y)
+	
+	return pos.x >= minX and pos.x <= maxX and pos.y >= minY and pos.y <= maxY
+end
+
 function Node.GetClosestNode(pos)
 	if not G.Navigation.nodes then
 		return nil
 	end
 
+	-- Step 1: Find closest area by center distance (3D)
 	local closestNode, closestDist = nil, math.huge
 	for _, node in pairs(G.Navigation.nodes) do
-		-- Skip door nodes - only return actual area nodes
 		if not node.isDoor then
 			local dist = (node.pos - pos):Length()
 			if dist < closestDist then
@@ -78,7 +93,59 @@ function Node.GetClosestNode(pos)
 			end
 		end
 	end
-	return closestNode
+	
+	if not closestNode then
+		return nil
+	end
+	
+	-- Step 2: Flood fill from closest node to depth 4
+	local candidates = {} -- List of candidate nodes
+	local visited = {} -- Track visited nodes
+	local queue = {{ node = closestNode, depth = 0 }}
+	visited[closestNode.id] = true
+	candidates[1] = closestNode
+	local candidateCount = 1
+	
+	local queueStart = 1
+	while queueStart <= #queue do
+		local current = queue[queueStart]
+		queueStart = queueStart + 1
+		
+		if current.depth < 4 then
+			-- Get adjacent nodes
+			local adjacent = Node.GetAdjacentNodesOnly(current.node, G.Navigation.nodes)
+			for _, adjNode in ipairs(adjacent) do
+				if not adjNode.isDoor and not visited[adjNode.id] then
+					visited[adjNode.id] = true
+					table.insert(queue, { node = adjNode, depth = current.depth + 1 })
+					-- Add to candidates list (pre-sorted by BFS order)
+					candidateCount = candidateCount + 1
+					candidates[candidateCount] = adjNode
+				end
+			end
+		end
+	end
+	
+	-- Step 3: Check which candidate contains the target (horizontal bounds check)
+	for i = 1, candidateCount do
+		if isWithinAreaBounds(pos, candidates[i]) then
+			Log:Debug("Found containing area: %s", candidates[i].id)
+			return candidates[i]
+		end
+	end
+	
+	-- Step 4: No area contains target - sort by distance and pick closest
+	-- List is already roughly sorted by BFS order, final sort is faster
+	for i = 1, candidateCount do
+		candidates[i]._dist = (candidates[i].pos - pos):Length()
+	end
+	
+	table.sort(candidates, function(a, b)
+		return a._dist < b._dist
+	end)
+	
+	Log:Debug("No containing area found, using closest from %d candidates", candidateCount)
+	return candidates[1]
 end
 
 -- Connection utilities
