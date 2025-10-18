@@ -63,9 +63,9 @@ function Node.GetNodeByID(id)
 	return G.Navigation.nodes and G.Navigation.nodes[id] or nil
 end
 
--- Check if position is within area's horizontal bounds (X/Y only)
+-- Check if position is within area's horizontal bounds (X/Y) with height limit
 local function isWithinAreaBounds(pos, node)
-	if not node.nw or not node.se then
+	if not node.nw or not node.se or not node.pos then
 		return false
 	end
 
@@ -75,7 +75,19 @@ local function isWithinAreaBounds(pos, node)
 	local minY = math.min(node.nw.y, node.ne.y, node.sw.y, node.se.y)
 	local maxY = math.max(node.nw.y, node.ne.y, node.sw.y, node.se.y)
 
-	return pos.x >= minX and pos.x <= maxX and pos.y >= minY and pos.y <= maxY
+	-- Check horizontal bounds
+	local inHorizontalBounds = pos.x >= minX and pos.x <= maxX and pos.y >= minY and pos.y <= maxY
+	if not inHorizontalBounds then
+		return false
+	end
+
+	-- Height limit: position cannot be more than 72 units above area center
+	local heightAboveArea = pos.z - node.pos.z
+	if heightAboveArea > 72 then
+		return false
+	end
+
+	return true
 end
 
 function Node.GetClosestNode(pos)
@@ -243,18 +255,10 @@ function Node.GetAreaAtPosition(pos)
 		return a._minDist < b._minDist
 	end)
 
-	-- DEBUG: Log top 10 candidates and total count
-	Log:Info("GetAreaAtPosition: Found %d total candidates, showing top 10:", candidateCount)
-	for i = 1, math.min(10, candidateCount) do
-		local c = candidates[i]
-		local contains = isWithinAreaBounds(pos, c)
-		Log:Info("  [%d] Area %s: minDist=%.1f, contains=%s", i, c.id, c._minDist, tostring(contains))
-	end
-
 	-- Step 5: Check sorted list for first area that contains position horizontally
 	for i = 1, candidateCount do
 		if isWithinAreaBounds(pos, candidates[i]) then
-			Log:Info(
+			Log:Debug(
 				"GetAreaAtPosition: Picked area %s at position %d (minDist=%.1f)",
 				candidates[i].id,
 				i,

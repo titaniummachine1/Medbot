@@ -161,6 +161,17 @@ local function onDrawModel(ctx)
 	end
 end
 
+-- Helper: Invalidate current path on game events
+-- Forces immediate transition to IDLE for smooth repathing
+local function invalidatePath(reason)
+	if G.Navigation.path and #G.Navigation.path > 0 then
+		Log:Info("Path invalidated: %s", reason)
+		Navigation.ClearPath()
+		G.currentState = G.States.IDLE
+		-- Note: Next frame, IDLE state will generate new path immediately
+	end
+end
+
 ---@param event GameEvent
 local function onGameEvent(event)
 	local eventName = event:GetName()
@@ -169,73 +180,145 @@ local function onGameEvent(event)
 	if eventName == "game_newmap" then
 		Log:Info("New map detected, reloading nav file...")
 		Navigation.Setup()
+		invalidatePath("map changed")
 		return
 	end
 
-	-- CTF Flag captured - repath since objectives changed
+	-- Local player respawned
+	if eventName == "localplayer_respawn" then
+		invalidatePath("local player respawned")
+		return
+	end
+
+	-- Player spawned (check if it's us)
+	if eventName == "player_spawn" then
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal then
+			local userid = event:GetInt("userid")
+			local localUserId = pLocal:GetPropInt("m_iUserID")
+			if userid == localUserId then
+				invalidatePath("player spawned")
+			end
+		end
+		return
+	end
+
+	-- Player death - invalidate path to reconsider targets
+	if eventName == "player_death" then
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal then
+			local victim = event:GetInt("userid")
+			local localUserId = pLocal:GetPropInt("m_iUserID")
+
+			if victim == localUserId then
+				invalidatePath("bot died")
+			else
+				-- Someone else died - might be heal target
+				invalidatePath("player died")
+			end
+		end
+		return
+	end
+
+	-- Round events that affect objectives and spawns
+	if eventName == "teamplay_round_start" then
+		invalidatePath("round started")
+		return
+	end
+
+	if eventName == "teamplay_round_active" then
+		invalidatePath("round active")
+		return
+	end
+
+	if eventName == "teamplay_round_restart_seconds" then
+		invalidatePath("round restarting")
+		return
+	end
+
+	if eventName == "teamplay_restart_round" then
+		invalidatePath("round restart")
+		return
+	end
+
+	if eventName == "teamplay_setup_finished" then
+		invalidatePath("setup finished")
+		return
+	end
+
+	if eventName == "teamplay_waiting_ends" then
+		invalidatePath("waiting ended")
+		return
+	end
+
+	-- CTF objective events
 	if eventName == "ctf_flag_captured" then
 		local cappingTeam = event:GetInt("capping_team")
 		local cappingTeamScore = event:GetInt("capping_team_score")
-		Log:Info(
-			"CTF Flag captured by team %d (score: %d) - repathing due to objective change",
-			cappingTeam,
-			cappingTeamScore
-		)
-
-		-- Force bot to repath and reconsider target
-		if G.currentState == G.States.MOVING or G.currentState == G.States.IDLE then
-			G.currentState = G.States.IDLE
-			G.lastPathfindingTick = 0
-			if G.Navigation.path then
-				G.Navigation.path = {} -- Clear current path to force recalculation
-			end
-		end
+		invalidatePath(string.format("flag captured by team %d (score: %d)", cappingTeam, cappingTeamScore))
 		return
 	end
 
-	-- Teamplay flag events (general flag state changes)
 	if eventName == "teamplay_flag_event" then
 		local eventType = event:GetInt("eventtype")
-		Log:Info("Flag event type %d - repathing due to objective change", eventType)
-
-		-- Force bot to repath for any flag event
-		if G.currentState == G.States.MOVING or G.currentState == G.States.IDLE then
-			G.currentState = G.States.IDLE
-			G.lastPathfindingTick = 0
-			if G.Navigation.path then
-				G.Navigation.path = {}
-			end
-		end
+		invalidatePath(string.format("flag event type %d", eventType))
 		return
 	end
 
-	-- Player death - might need to repath if target is dead
-	if eventName == "player_death" then
-		local victim = event:GetInt("userid")
-		local attacker = event:GetInt("attacker")
-		local pLocal = entities.GetLocalPlayer()
-		if pLocal then
-			local localUserId = pLocal:GetPropInt("m_iUserID")
-			if victim == localUserId then
-				Log:Info("Bot died - clearing path and resetting state")
-				G.currentState = G.States.IDLE
-				G.lastPathfindingTick = 0
-				if G.Navigation.path then
-					G.Navigation.path = {}
-				end
-			end
-		end
+	-- Control point events
+	if eventName == "teamplay_point_captured" then
+		local cp = event:GetInt("cp")
+		local team = event:GetInt("team")
+		invalidatePath(string.format("control point %d captured by team %d", cp, team))
 		return
 	end
 
-	-- Round restart - objectives reset
-	if eventName == "teamplay_round_restart_seconds" then
-		Log:Info("Round restarting - clearing path and resetting state")
-		G.currentState = G.States.IDLE
-		G.lastPathfindingTick = 0
-		if G.Navigation.path then
-			G.Navigation.path = {}
-		end
+	if eventName == "teamplay_point_unlocked" then
+		invalidatePath("control point unlocked")
+		return
+	end
+
+	if eventName == "teamplay_point_locked" then
+		invalidatePath("control point locked")
+		return
+	end
+
+	-- Payload events
+	if eventName == "escort_progress" then
+		invalidatePath("payload moved")
+		return
+	end
+
+	-- Team changes
+	if eventName == "localplayer_changeteam" then
+		invalidatePath("team changed")
+		return
+	end
+
+	if eventName == "teams_changed" then
+		invalidatePath("teams changed")
+		return
+	end
+
+	-- Arena events
+	if eventName == "arena_round_start" then
+		invalidatePath("arena round started")
+		return
+	end
+
+	-- MvM events
+	if eventName == "mvm_begin_wave" then
+		invalidatePath("MvM wave started")
+		return
+	end
+
+	if eventName == "mvm_wave_complete" then
+		invalidatePath("MvM wave complete")
+		return
+	end
+
+	if eventName == "mvm_wave_failed" then
+		invalidatePath("MvM wave failed")
 		return
 	end
 end
@@ -3348,9 +3431,9 @@ function Node.GetNodeByID(id)
 	return G.Navigation.nodes and G.Navigation.nodes[id] or nil
 end
 
--- Check if position is within area's horizontal bounds (X/Y only)
+-- Check if position is within area's horizontal bounds (X/Y) with height limit
 local function isWithinAreaBounds(pos, node)
-	if not node.nw or not node.se then
+	if not node.nw or not node.se or not node.pos then
 		return false
 	end
 
@@ -3360,7 +3443,19 @@ local function isWithinAreaBounds(pos, node)
 	local minY = math.min(node.nw.y, node.ne.y, node.sw.y, node.se.y)
 	local maxY = math.max(node.nw.y, node.ne.y, node.sw.y, node.se.y)
 
-	return pos.x >= minX and pos.x <= maxX and pos.y >= minY and pos.y <= maxY
+	-- Check horizontal bounds
+	local inHorizontalBounds = pos.x >= minX and pos.x <= maxX and pos.y >= minY and pos.y <= maxY
+	if not inHorizontalBounds then
+		return false
+	end
+
+	-- Height limit: position cannot be more than 72 units above area center
+	local heightAboveArea = pos.z - node.pos.z
+	if heightAboveArea > 72 then
+		return false
+	end
+
+	return true
 end
 
 function Node.GetClosestNode(pos)
@@ -3528,18 +3623,10 @@ function Node.GetAreaAtPosition(pos)
 		return a._minDist < b._minDist
 	end)
 
-	-- DEBUG: Log top 10 candidates and total count
-	Log:Info("GetAreaAtPosition: Found %d total candidates, showing top 10:", candidateCount)
-	for i = 1, math.min(10, candidateCount) do
-		local c = candidates[i]
-		local contains = isWithinAreaBounds(pos, c)
-		Log:Info("  [%d] Area %s: minDist=%.1f, contains=%s", i, c.id, c._minDist, tostring(contains))
-	end
-
 	-- Step 5: Check sorted list for first area that contains position horizontally
 	for i = 1, candidateCount do
 		if isWithinAreaBounds(pos, candidates[i]) then
-			Log:Info(
+			Log:Debug(
 				"GetAreaAtPosition: Picked area %s at position %d (minDist=%.1f)",
 				candidates[i].id,
 				i,
