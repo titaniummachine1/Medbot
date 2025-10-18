@@ -3305,8 +3305,10 @@ function Node.Setup()
 
 	-- CRITICAL: Detect wall corners BEFORE building doors so clamping can work!
 	local WallCornerGenerator = require("MedBot.Navigation.WallCornerGenerator")
+	assert(WallCornerGenerator, "Node.Setup: WallCornerGenerator module failed to load")
 	WallCornerGenerator.DetectWallCorners()
-	Log:Info("Wall corners detected: " .. (G.Navigation.nodes and #G.Navigation.nodes or 0) .. " nodes processed")
+	local nodeCount = G.Navigation.nodes and #G.Navigation.nodes or 0
+	Log:Info("Wall corners detected: " .. nodeCount .. " nodes processed")
 
 	ConnectionBuilder.BuildDoorsForConnections()
 	Log:Info("Doors built with wall corner clamping applied")
