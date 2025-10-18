@@ -33,7 +33,7 @@ local function OnDrawMenu()
 		return
 	end
 	-- Tab control
-	G.Menu.Tab = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, G.Menu.Tab)
+	G.Menu.Tab = TimMenu.TabControl("MedBotTabs", { "Main", "Navigation", "Visuals" }, G.Menu.Tab)
 	TimMenu.NextLine()
 
 	if G.Menu.Tab == "Main" then
@@ -70,13 +70,23 @@ local function OnDrawMenu()
 
 		TimMenu.NextLine()
 
+		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)
+		G.Menu.Main.Debug = TimMenu.Checkbox("Enable Debug Output", G.Menu.Main.Debug or false)
+		TimMenu.Tooltip("Enable debug prints from Smart Jump and Node Skipper (useful for debugging but spammy)")
+		TimMenu.NextLine()
+
+		-- Smart Jump (works independently of MedBot enable state)
+		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
+		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
+		TimMenu.EndSector()
+	elseif G.Menu.Tab == "Navigation" then
 		-- Movement & Pathfinding Section
-		TimMenu.BeginSector("Movement & Pathfinding")
+		TimMenu.BeginSector("Pathfinding Settings")
 		-- Store previous value to detect changes
-		local prevSkipNodes = G.Menu.Main.Skip_Nodes
-		G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
+		local prevSkipNodes = G.Menu.Navigation.Skip_Nodes
+		G.Menu.Navigation.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Navigation.Skip_Nodes)
 		-- Only update if value changed to avoid flickering
-		if G.Menu.Main.Skip_Nodes ~= prevSkipNodes then
+		if G.Menu.Navigation.Skip_Nodes ~= prevSkipNodes then
 			-- Clear path to force recalculation with new setting
 			if G.Navigation then
 				G.Navigation.path = {}
@@ -91,48 +101,41 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Maximum distance to skip nodes in units (default: 500)")
 		TimMenu.NextLine()
 
-		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)
-		G.Menu.Main.Debug = TimMenu.Checkbox("Enable Debug Output", G.Menu.Main.Debug or false)
-		TimMenu.Tooltip("Enable debug prints from Smart Jump and Node Skipper (useful for debugging but spammy)")
+		-- Stop Distance slider for FOLLOWING state
+		G.Menu.Navigation.StopDistance = G.Menu.Navigation.StopDistance or 50
+		G.Menu.Navigation.StopDistance = TimMenu.Slider("Stop Distance", G.Menu.Navigation.StopDistance, 20, 200, 5)
+		TimMenu.Tooltip("Distance to stop from dynamic targets like payload (FOLLOWING state)")
 		TimMenu.NextLine()
 
-		-- Smart Jump (works independently of MedBot enable state)
-		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
-		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
-		TimMenu.NextLine()
-		G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
+		G.Menu.Navigation.WalkableMode = G.Menu.Navigation.WalkableMode or "Smooth"
 		local walkableModes = { "Smooth", "Aggressive" }
 		-- Get current mode as index number
-		local currentModeIndex = (G.Menu.Main.WalkableMode == "Aggressive") and 2 or 1
-		local previousMode = G.Menu.Main.WalkableMode
+		local currentModeIndex = (G.Menu.Navigation.WalkableMode == "Aggressive") and 2 or 1
 
 		-- TimMenu.Selector expects a number, not a table
 		local selectedIndex = TimMenu.Selector("Walkable Mode", currentModeIndex, walkableModes)
 
 		-- Update the mode based on selection
 		if selectedIndex == 1 then
-			G.Menu.Main.WalkableMode = "Smooth"
+			G.Menu.Navigation.WalkableMode = "Smooth"
 		elseif selectedIndex == 2 then
-			G.Menu.Main.WalkableMode = "Aggressive"
+			G.Menu.Navigation.WalkableMode = "Aggressive"
 		end
 
-		TimMenu.Tooltip("Applies to path following only. Aggressive also enables direct skipping when path is walkable")
+		TimMenu.Tooltip("Smooth uses 18-unit steps, Aggressive allows 72-unit jumps")
 		TimMenu.EndSector()
 
 		TimMenu.NextLine()
 
-		-- Advanced Settings Section
+		-- Advanced Navigation Settings
 		TimMenu.BeginSector("Advanced Settings")
-		G.Menu.Main.CleanupConnections =
-			TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections or false)
+		G.Menu.Navigation.CleanupConnections =
+			TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Navigation.CleanupConnections or false)
 		TimMenu.Tooltip("Clean up navigation connections on map load (DISABLE if causing performance issues)")
 		TimMenu.NextLine()
 
-		-- Hierarchical pathfinding removed: single-layer areas only
-
 		-- Connection processing status display
-		if G.Menu.Main.CleanupConnections then
-			-- local status = Node.GetConnectionProcessingStatus() -- Temporarily disabled
+		if G.Menu.Navigation.CleanupConnections then
 			local status = { isProcessing = false }
 			if status.isProcessing then
 				local phaseNames = {

@@ -393,7 +393,7 @@ local function OnDrawMenu()
 		return
 	end
 	-- Tab control
-	G.Menu.Tab = TimMenu.TabControl("MedBotTabs", { "Main", "Visuals" }, G.Menu.Tab)
+	G.Menu.Tab = TimMenu.TabControl("MedBotTabs", { "Main", "Navigation", "Visuals" }, G.Menu.Tab)
 	TimMenu.NextLine()
 
 	if G.Menu.Tab == "Main" then
@@ -430,13 +430,23 @@ local function OnDrawMenu()
 
 		TimMenu.NextLine()
 
+		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)
+		G.Menu.Main.Debug = TimMenu.Checkbox("Enable Debug Output", G.Menu.Main.Debug or false)
+		TimMenu.Tooltip("Enable debug prints from Smart Jump and Node Skipper (useful for debugging but spammy)")
+		TimMenu.NextLine()
+
+		-- Smart Jump (works independently of MedBot enable state)
+		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
+		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
+		TimMenu.EndSector()
+	elseif G.Menu.Tab == "Navigation" then
 		-- Movement & Pathfinding Section
-		TimMenu.BeginSector("Movement & Pathfinding")
+		TimMenu.BeginSector("Pathfinding Settings")
 		-- Store previous value to detect changes
-		local prevSkipNodes = G.Menu.Main.Skip_Nodes
-		G.Menu.Main.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Main.Skip_Nodes)
+		local prevSkipNodes = G.Menu.Navigation.Skip_Nodes
+		G.Menu.Navigation.Skip_Nodes = TimMenu.Checkbox("Skip Nodes", G.Menu.Navigation.Skip_Nodes)
 		-- Only update if value changed to avoid flickering
-		if G.Menu.Main.Skip_Nodes ~= prevSkipNodes then
+		if G.Menu.Navigation.Skip_Nodes ~= prevSkipNodes then
 			-- Clear path to force recalculation with new setting
 			if G.Navigation then
 				G.Navigation.path = {}
@@ -451,48 +461,41 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Maximum distance to skip nodes in units (default: 500)")
 		TimMenu.NextLine()
 
-		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)
-		G.Menu.Main.Debug = TimMenu.Checkbox("Enable Debug Output", G.Menu.Main.Debug or false)
-		TimMenu.Tooltip("Enable debug prints from Smart Jump and Node Skipper (useful for debugging but spammy)")
+		-- Stop Distance slider for FOLLOWING state
+		G.Menu.Navigation.StopDistance = G.Menu.Navigation.StopDistance or 50
+		G.Menu.Navigation.StopDistance = TimMenu.Slider("Stop Distance", G.Menu.Navigation.StopDistance, 20, 200, 5)
+		TimMenu.Tooltip("Distance to stop from dynamic targets like payload (FOLLOWING state)")
 		TimMenu.NextLine()
 
-		-- Smart Jump (works independently of MedBot enable state)
-		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
-		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
-		TimMenu.NextLine()
-		G.Menu.Main.WalkableMode = G.Menu.Main.WalkableMode or "Smooth"
+		G.Menu.Navigation.WalkableMode = G.Menu.Navigation.WalkableMode or "Smooth"
 		local walkableModes = { "Smooth", "Aggressive" }
 		-- Get current mode as index number
-		local currentModeIndex = (G.Menu.Main.WalkableMode == "Aggressive") and 2 or 1
-		local previousMode = G.Menu.Main.WalkableMode
+		local currentModeIndex = (G.Menu.Navigation.WalkableMode == "Aggressive") and 2 or 1
 
 		-- TimMenu.Selector expects a number, not a table
 		local selectedIndex = TimMenu.Selector("Walkable Mode", currentModeIndex, walkableModes)
 
 		-- Update the mode based on selection
 		if selectedIndex == 1 then
-			G.Menu.Main.WalkableMode = "Smooth"
+			G.Menu.Navigation.WalkableMode = "Smooth"
 		elseif selectedIndex == 2 then
-			G.Menu.Main.WalkableMode = "Aggressive"
+			G.Menu.Navigation.WalkableMode = "Aggressive"
 		end
 
-		TimMenu.Tooltip("Applies to path following only. Aggressive also enables direct skipping when path is walkable")
+		TimMenu.Tooltip("Smooth uses 18-unit steps, Aggressive allows 72-unit jumps")
 		TimMenu.EndSector()
 
 		TimMenu.NextLine()
 
-		-- Advanced Settings Section
+		-- Advanced Navigation Settings
 		TimMenu.BeginSector("Advanced Settings")
-		G.Menu.Main.CleanupConnections =
-			TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Main.CleanupConnections or false)
+		G.Menu.Navigation.CleanupConnections =
+			TimMenu.Checkbox("Cleanup Invalid Connections", G.Menu.Navigation.CleanupConnections or false)
 		TimMenu.Tooltip("Clean up navigation connections on map load (DISABLE if causing performance issues)")
 		TimMenu.NextLine()
 
-		-- Hierarchical pathfinding removed: single-layer areas only
-
 		-- Connection processing status display
-		if G.Menu.Main.CleanupConnections then
-			-- local status = Node.GetConnectionProcessingStatus() -- Temporarily disabled
+		if G.Menu.Navigation.CleanupConnections then
 			local status = { isProcessing = false }
 			if status.isProcessing then
 				local phaseNames = {
@@ -763,6 +766,7 @@ defaultconfig = {
 	Tab = "Main",
 	Tabs = {
 		Main = true,
+		Navigation = false,
 		Settings = false,
 		Visuals = false,
 		Movement = false,
@@ -770,16 +774,19 @@ defaultconfig = {
 
 	Main = {
 		Enable = true,
-		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
 		shouldfindhealth = true, -- Path to health
 		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
 		smoothFactor = 0.05,
 		LookingAhead = true, -- Enable automatic camera rotation towards target node
+		Duck_Grab = true,
+		Debug = false, -- Enable debug logging across all modules
+	},
+	Navigation = {
+		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
+		StopDistance = 50, -- Distance to stop from target when following (FOLLOWING state)
 		WalkableMode = "Smooth", -- "Smooth" uses 18-unit steps, "Aggressive" allows 72-unit jumps
 		CleanupConnections = true, -- Cleanup invalid connections during map load (disable to prevent crashes)
 		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
-		Duck_Grab = true,
-		Debug = false, -- Enable debug logging across all modules
 	},
 	Visuals = {
 		EnableVisuals = true,
@@ -7755,25 +7762,50 @@ function StateHandler.handleIdleState()
 	G.Navigation.goalPos = goalPos
 	G.Navigation.goalNodeId = goalNode and goalNode.id or nil
 
-	-- Avoid pathfinding if we're already at the goal node
-	if startNode.id == goalNode.id then
+	-- Check if we're on same node OR neighbor node for smooth following
+	local isNeighbor = false
+	if startNode.id ~= goalNode.id and startNode.c then
+		-- Check if goal node is a direct neighbor (connected)
+		for _, dir in pairs(startNode.c) do
+			if dir.connections then
+				for _, conn in ipairs(dir.connections) do
+					if conn.targetId == goalNode.id then
+						isNeighbor = true
+						break
+					end
+				end
+			end
+			if isNeighbor then break end
+		end
+	end
+
+	-- Avoid pathfinding if we're at goal node or neighboring area
+	if startNode.id == goalNode.id or isNeighbor then
 		if goalPos then
-			-- Check distance to see if we're close enough (stop radius = 80 units)
+			-- Check distance to see if we're close enough
 			local dist = (G.pLocal.Origin - goalPos):Length()
-			local stopRadius = 80
-			
+			local stopRadius = G.Menu.Navigation.StopDistance or 50
+
 			if dist <= stopRadius then
 				-- Within stop radius - enter FOLLOWING state and just track position
 				-- DON'T set lastPathfindingTick - this isn't pathfinding, just direct movement
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.currentState = G.States.FOLLOWING
 				G.Navigation.followingDistance = dist
-				Log:Debug("Within stop radius (%.0f/%.0f) - entering FOLLOWING state", dist, stopRadius)
+				Log:Debug("Within stop radius (%.0f/%.0f) - entering FOLLOWING state %s", dist, stopRadius, isNeighbor and "(neighbor)" or "(same node)")
 			else
 				-- Too far - move closer (still direct movement, not pathfinding)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.currentState = G.States.MOVING
-				Log:Info("Moving to goal position (%.0f, %.0f, %.0f) from node %d (dist=%.0f)", goalPos.x, goalPos.y, goalPos.z, startNode.id, dist)
+				Log:Info(
+					"Moving to goal position (%.0f, %.0f, %.0f) from node %d (dist=%.0f) %s",
+					goalPos.x,
+					goalPos.y,
+					goalPos.z,
+					startNode.id,
+					dist,
+					isNeighbor and "[neighbor]" or ""
+				)
 			end
 		else
 			Log:Debug("No goal position available, staying in IDLE")
@@ -7930,12 +7962,12 @@ end
 -- Handle FOLLOWING state - direct following of dynamic targets on same node
 function StateHandler.handleFollowingState(userCmd)
 	local currentTick = globals.TickCount()
-	
+
 	-- Throttle updates to every 5 ticks (~83ms) for responsive tracking
 	if not G.Navigation.lastFollowUpdateTick then
 		G.Navigation.lastFollowUpdateTick = 0
 	end
-	
+
 	if currentTick - G.Navigation.lastFollowUpdateTick < 5 then
 		-- Use MovementDecisions to continue moving to current target
 		local MovementDecisions = require("MedBot.Bot.MovementDecisions")
@@ -7944,12 +7976,12 @@ function StateHandler.handleFollowingState(userCmd)
 		end
 		return
 	end
-	
+
 	G.Navigation.lastFollowUpdateTick = currentTick
-	
+
 	-- Re-check goal position (payload/player may have moved)
 	local goalNode, goalPos = GoalFinder.findGoal("Objective")
-	
+
 	if not goalNode or not goalPos then
 		-- Lost target - return to IDLE (clear pathfinding throttle for immediate repath)
 		Log:Debug("Lost target in FOLLOWING state, returning to IDLE")
@@ -7957,7 +7989,7 @@ function StateHandler.handleFollowingState(userCmd)
 		G.lastPathfindingTick = 0
 		return
 	end
-	
+
 	-- Check if still on same node
 	local startNode = Navigation.GetClosestNode(G.pLocal.Origin)
 	if not startNode or startNode.id ~= goalNode.id then
@@ -7967,26 +7999,26 @@ function StateHandler.handleFollowingState(userCmd)
 		G.lastPathfindingTick = 0
 		return
 	end
-	
+
 	-- Check distance change
 	local currentDist = (G.pLocal.Origin - goalPos):Length()
-	local stopRadius = 80
+	local stopRadius = G.Menu.Navigation.StopDistance or 50
 	local distChange = math.abs(currentDist - (G.Navigation.followingDistance or currentDist))
-	
+
 	-- Only update if distance changed significantly (>30 units)
-	if distChange > 30 then
+	if distChange > 10 then
 		G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 		G.Navigation.followingDistance = currentDist
 		G.Navigation.goalPos = goalPos
 		Log:Debug("Target moved %.0f units, updating position (dist=%.0f)", distChange, currentDist)
-		
+
 		-- If moved outside stop radius, switch to MOVING
 		if currentDist > stopRadius then
 			Log:Debug("Target moved outside stop radius, switching to MOVING")
 			G.currentState = G.States.MOVING
 		end
 	end
-	
+
 	-- Continue moving to target
 	local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 	if G.Navigation.path and #G.Navigation.path > 0 then
@@ -8022,7 +8054,7 @@ local function findPayloadGoal()
 	local myTeam = pLocal:GetTeamNumber()
 	local ownCart = nil
 	local enemyCart = nil
-	
+
 	-- First pass: find own cart and enemy cart
 	for _, entity in pairs(G.World.payloads or {}) do
 		if entity:IsValid() then
@@ -8034,16 +8066,20 @@ local function findPayloadGoal()
 			end
 		end
 	end
-	
+
 	-- If we found our own cart, use it
 	if ownCart then
 		local pos = ownCart:GetAbsOrigin()
+		-- Offset down by 80 units to get ground-level position
+		pos = Vector3(pos.x, pos.y, pos.z - 80)
 		return Navigation.GetAreaAtPosition(pos), pos
 	end
-	
+
 	-- If we're on defense (no own cart found) and enemy cart exists, defend enemy cart
 	if enemyCart then
 		local pos = enemyCart:GetAbsOrigin()
+		-- Offset down by 80 units to get ground-level position
+		pos = Vector3(pos.x, pos.y, pos.z - 80)
 		Log:Info("Own cart not found, defending enemy cart at position")
 		return Navigation.GetAreaAtPosition(pos), pos
 	end

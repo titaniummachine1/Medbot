@@ -115,25 +115,50 @@ function StateHandler.handleIdleState()
 	G.Navigation.goalPos = goalPos
 	G.Navigation.goalNodeId = goalNode and goalNode.id or nil
 
-	-- Avoid pathfinding if we're already at the goal node
-	if startNode.id == goalNode.id then
+	-- Check if we're on same node OR neighbor node for smooth following
+	local isNeighbor = false
+	if startNode.id ~= goalNode.id and startNode.c then
+		-- Check if goal node is a direct neighbor (connected)
+		for _, dir in pairs(startNode.c) do
+			if dir.connections then
+				for _, conn in ipairs(dir.connections) do
+					if conn.targetId == goalNode.id then
+						isNeighbor = true
+						break
+					end
+				end
+			end
+			if isNeighbor then break end
+		end
+	end
+
+	-- Avoid pathfinding if we're at goal node or neighboring area
+	if startNode.id == goalNode.id or isNeighbor then
 		if goalPos then
-			-- Check distance to see if we're close enough (stop radius = 80 units)
+			-- Check distance to see if we're close enough
 			local dist = (G.pLocal.Origin - goalPos):Length()
-			local stopRadius = 80
-			
+			local stopRadius = G.Menu.Navigation.StopDistance or 50
+
 			if dist <= stopRadius then
 				-- Within stop radius - enter FOLLOWING state and just track position
 				-- DON'T set lastPathfindingTick - this isn't pathfinding, just direct movement
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.currentState = G.States.FOLLOWING
 				G.Navigation.followingDistance = dist
-				Log:Debug("Within stop radius (%.0f/%.0f) - entering FOLLOWING state", dist, stopRadius)
+				Log:Debug("Within stop radius (%.0f/%.0f) - entering FOLLOWING state %s", dist, stopRadius, isNeighbor and "(neighbor)" or "(same node)")
 			else
 				-- Too far - move closer (still direct movement, not pathfinding)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.currentState = G.States.MOVING
-				Log:Info("Moving to goal position (%.0f, %.0f, %.0f) from node %d (dist=%.0f)", goalPos.x, goalPos.y, goalPos.z, startNode.id, dist)
+				Log:Info(
+					"Moving to goal position (%.0f, %.0f, %.0f) from node %d (dist=%.0f) %s",
+					goalPos.x,
+					goalPos.y,
+					goalPos.z,
+					startNode.id,
+					dist,
+					isNeighbor and "[neighbor]" or ""
+				)
 			end
 		else
 			Log:Debug("No goal position available, staying in IDLE")
@@ -290,12 +315,12 @@ end
 -- Handle FOLLOWING state - direct following of dynamic targets on same node
 function StateHandler.handleFollowingState(userCmd)
 	local currentTick = globals.TickCount()
-	
+
 	-- Throttle updates to every 5 ticks (~83ms) for responsive tracking
 	if not G.Navigation.lastFollowUpdateTick then
 		G.Navigation.lastFollowUpdateTick = 0
 	end
-	
+
 	if currentTick - G.Navigation.lastFollowUpdateTick < 5 then
 		-- Use MovementDecisions to continue moving to current target
 		local MovementDecisions = require("MedBot.Bot.MovementDecisions")
@@ -304,12 +329,12 @@ function StateHandler.handleFollowingState(userCmd)
 		end
 		return
 	end
-	
+
 	G.Navigation.lastFollowUpdateTick = currentTick
-	
+
 	-- Re-check goal position (payload/player may have moved)
 	local goalNode, goalPos = GoalFinder.findGoal("Objective")
-	
+
 	if not goalNode or not goalPos then
 		-- Lost target - return to IDLE (clear pathfinding throttle for immediate repath)
 		Log:Debug("Lost target in FOLLOWING state, returning to IDLE")
@@ -317,7 +342,7 @@ function StateHandler.handleFollowingState(userCmd)
 		G.lastPathfindingTick = 0
 		return
 	end
-	
+
 	-- Check if still on same node
 	local startNode = Navigation.GetClosestNode(G.pLocal.Origin)
 	if not startNode or startNode.id ~= goalNode.id then
@@ -327,26 +352,26 @@ function StateHandler.handleFollowingState(userCmd)
 		G.lastPathfindingTick = 0
 		return
 	end
-	
+
 	-- Check distance change
 	local currentDist = (G.pLocal.Origin - goalPos):Length()
-	local stopRadius = 80
+	local stopRadius = G.Menu.Navigation.StopDistance or 50
 	local distChange = math.abs(currentDist - (G.Navigation.followingDistance or currentDist))
-	
+
 	-- Only update if distance changed significantly (>30 units)
-	if distChange > 30 then
+	if distChange > 10 then
 		G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 		G.Navigation.followingDistance = currentDist
 		G.Navigation.goalPos = goalPos
 		Log:Debug("Target moved %.0f units, updating position (dist=%.0f)", distChange, currentDist)
-		
+
 		-- If moved outside stop radius, switch to MOVING
 		if currentDist > stopRadius then
 			Log:Debug("Target moved outside stop radius, switching to MOVING")
 			G.currentState = G.States.MOVING
 		end
 	end
-	
+
 	-- Continue moving to target
 	local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 	if G.Navigation.path and #G.Navigation.path > 0 then

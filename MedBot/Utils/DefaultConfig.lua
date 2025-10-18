@@ -3,6 +3,7 @@ defaultconfig = {
 	Tab = "Main",
 	Tabs = {
 		Main = true,
+		Navigation = false,
 		Settings = false,
 		Visuals = false,
 		Movement = false,
@@ -10,16 +11,19 @@ defaultconfig = {
 
 	Main = {
 		Enable = true,
-		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
 		shouldfindhealth = true, -- Path to health
 		SelfHealTreshold = 45, -- Health percentage to start looking for healthPacks
 		smoothFactor = 0.05,
 		LookingAhead = true, -- Enable automatic camera rotation towards target node
+		Duck_Grab = true,
+		Debug = false, -- Enable debug logging across all modules
+	},
+	Navigation = {
+		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
+		StopDistance = 50, -- Distance to stop from target when following (FOLLOWING state)
 		WalkableMode = "Smooth", -- "Smooth" uses 18-unit steps, "Aggressive" allows 72-unit jumps
 		CleanupConnections = true, -- Cleanup invalid connections during map load (disable to prevent crashes)
 		AllowExpensiveChecks = true, -- Allow expensive walkability checks for proper stair/ramp connections
-		Duck_Grab = true,
-		Debug = false, -- Enable debug logging across all modules
 	},
 	Visuals = {
 		EnableVisuals = true,
