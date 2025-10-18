@@ -15,6 +15,12 @@ local SmartJump = require("MedBot.Bot.SmartJump")
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
 
+local function DebugLog(...)
+	if G.Menu.Main.Debug then
+		Log:Debug(...)
+	end
+end
+
 function StateHandler.handleUserInput(userCmd)
 	if userCmd:GetForwardMove() ~= 0 or userCmd:GetSideMove() ~= 0 then
 		G.Navigation.currentNodeTicks = 0
@@ -39,7 +45,7 @@ function StateHandler.handleIdleState()
 
 	-- Ensure navigation is ready before any goal work
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
-		Log:Debug("No navigation nodes available, staying in IDLE state")
+		DebugLog("No navigation nodes available, staying in IDLE state")
 		return
 	end
 
@@ -122,7 +128,7 @@ function StateHandler.handleIdleState()
 			G.lastPathfindingTick = currentTick
 			Log:Info("Moving directly to goal from goal node %d", startNode.id)
 		else
-			Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+			DebugLog("Already at goal node %d, staying in IDLE", startNode.id)
 			G.lastPathfindingTick = currentTick
 		end
 		return
@@ -160,16 +166,22 @@ function StateHandler.handlePathfindingState()
 					end
 
 					if currentTick - G.lastRepathTick > 30 then
-						Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
+						if G.Menu.Main.Debug then
+							Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
+						end
 						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 						G.lastRepathTick = currentTick
 					end
 				else
-					Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
+					if G.Menu.Main.Debug then
+						Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
+					end
 					G.currentState = G.States.IDLE
 				end
 			else
-				Log:Debug("No existing goal for repath, returning to IDLE")
+				if G.Menu.Main.Debug then
+					Log:Debug("No existing goal for repath, returning to IDLE")
+				end
 				G.currentState = G.States.IDLE
 			end
 		end

@@ -14,6 +14,12 @@ local PathValidator = require("MedBot.Navigation.PathValidator")
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
 
+local function DebugLog(...)
+	if G.Menu.Main.Debug then
+		Log:Debug(...)
+	end
+end
+
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
@@ -64,7 +70,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 				
 				if distPlayerToNext < distCurrentToNext then
-					Log:Debug("Overshot node - skipping to next")
+					DebugLog("Overshot node - skipping to next")
 					Navigation.RemoveCurrentNode()
 					reachedTarget = false -- Don't double-advance
 					previousDistance = nil -- Reset tracking
@@ -77,7 +83,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	previousDistance = currentDistance
 	
 	if reachedTarget then
-		Log:Debug("Reached target - advancing waypoint/node")
+		DebugLog("Reached target - advancing waypoint/node")
 
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
@@ -133,13 +139,13 @@ end
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
-	Log:Debug(
+	DebugLog(
 		tostring(G.Menu.Main.Skip_Nodes),
 		#G.Navigation.path
 	)
 
 	if G.Menu.Main.Skip_Nodes then
-		Log:Debug("Removing current node (Skip Nodes enabled)")
+		DebugLog("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 		-- Reset node skipping timer when manually advancing
@@ -153,7 +159,7 @@ function MovementDecisions.advanceNode()
 			return false -- Don't continue
 		end
 	else
-		Log:Debug("Skip Nodes disabled - not removing node")
+		DebugLog("Skip Nodes disabled - not removing node")
 		if #G.Navigation.path <= 1 then
 			Navigation.ClearPath()
 			Log:Info("Reached final node (Skip Nodes disabled)")
@@ -238,7 +244,7 @@ function MovementDecisions.handleDebugLogging()
 		local targetPos = MovementDecisions.getCurrentTarget()
 		if targetPos then
 			local pathLen = G.Navigation.path and #G.Navigation.path or 0
-			Log:Debug("MOVING: pathLen=%d", pathLen)
+			DebugLog("MOVING: pathLen=%d", pathLen)
 		end
 		G.__lastMoveDebugTick = now
 	end

@@ -5551,6 +5551,12 @@ local PathValidator = require("MedBot.Navigation.PathValidator")
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
 
+local function DebugLog(...)
+	if G.Menu.Main.Debug then
+		Log:Debug(...)
+	end
+end
+
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
@@ -5601,7 +5607,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 				
 				if distPlayerToNext < distCurrentToNext then
-					Log:Debug("Overshot node - skipping to next")
+					DebugLog("Overshot node - skipping to next")
 					Navigation.RemoveCurrentNode()
 					reachedTarget = false -- Don't double-advance
 					previousDistance = nil -- Reset tracking
@@ -5614,7 +5620,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	previousDistance = currentDistance
 	
 	if reachedTarget then
-		Log:Debug("Reached target - advancing waypoint/node")
+		DebugLog("Reached target - advancing waypoint/node")
 
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
@@ -5670,13 +5676,13 @@ end
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
-	Log:Debug(
+	DebugLog(
 		tostring(G.Menu.Main.Skip_Nodes),
 		#G.Navigation.path
 	)
 
 	if G.Menu.Main.Skip_Nodes then
-		Log:Debug("Removing current node (Skip Nodes enabled)")
+		DebugLog("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 		-- Reset node skipping timer when manually advancing
@@ -5690,7 +5696,7 @@ function MovementDecisions.advanceNode()
 			return false -- Don't continue
 		end
 	else
-		Log:Debug("Skip Nodes disabled - not removing node")
+		DebugLog("Skip Nodes disabled - not removing node")
 		if #G.Navigation.path <= 1 then
 			Navigation.ClearPath()
 			Log:Info("Reached final node (Skip Nodes disabled)")
@@ -5775,7 +5781,7 @@ function MovementDecisions.handleDebugLogging()
 		local targetPos = MovementDecisions.getCurrentTarget()
 		if targetPos then
 			local pathLen = G.Navigation.path and #G.Navigation.path or 0
-			Log:Debug("MOVING: pathLen=%d", pathLen)
+			DebugLog("MOVING: pathLen=%d", pathLen)
 		end
 		G.__lastMoveDebugTick = now
 	end
@@ -7302,6 +7308,12 @@ local SmartJump = require("MedBot.Bot.SmartJump")
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
 
+local function DebugLog(...)
+	if G.Menu.Main.Debug then
+		Log:Debug(...)
+	end
+end
+
 function StateHandler.handleUserInput(userCmd)
 	if userCmd:GetForwardMove() ~= 0 or userCmd:GetSideMove() ~= 0 then
 		G.Navigation.currentNodeTicks = 0
@@ -7326,7 +7338,7 @@ function StateHandler.handleIdleState()
 
 	-- Ensure navigation is ready before any goal work
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
-		Log:Debug("No navigation nodes available, staying in IDLE state")
+		DebugLog("No navigation nodes available, staying in IDLE state")
 		return
 	end
 
@@ -7409,7 +7421,7 @@ function StateHandler.handleIdleState()
 			G.lastPathfindingTick = currentTick
 			Log:Info("Moving directly to goal from goal node %d", startNode.id)
 		else
-			Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
+			DebugLog("Already at goal node %d, staying in IDLE", startNode.id)
 			G.lastPathfindingTick = currentTick
 		end
 		return
@@ -7447,16 +7459,22 @@ function StateHandler.handlePathfindingState()
 					end
 
 					if currentTick - G.lastRepathTick > 30 then
-						Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
+						if G.Menu.Main.Debug then
+							Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
+						end
 						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 						G.lastRepathTick = currentTick
 					end
 				else
-					Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
+					if G.Menu.Main.Debug then
+						Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
+					end
 					G.currentState = G.States.IDLE
 				end
 			else
-				Log:Debug("No existing goal for repath, returning to IDLE")
+				if G.Menu.Main.Debug then
+					Log:Debug("No existing goal for repath, returning to IDLE")
+				end
 				G.currentState = G.States.IDLE
 			end
 		end
