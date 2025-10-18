@@ -44,19 +44,21 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 	
-	-- Simple node skipping: if closer to next node than current node is, skip
-	if G.Navigation.path and #G.Navigation.path >= 2 then
-		local currentNode = G.Navigation.path[1]
-		local nextNode = G.Navigation.path[2]
-		
-		if currentNode and nextNode and currentNode.pos and nextNode.pos then
-			local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
-			local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+	-- Simple node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
+	if WorkManager.attemptWork(1, "node_skipping") then
+		if G.Navigation.path and #G.Navigation.path >= 2 then
+			local currentNode = G.Navigation.path[1]
+			local nextNode = G.Navigation.path[2]
 			
-			if distPlayerToNext < distCurrentToNext then
-				Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
-				Navigation.RemoveCurrentNode()
-				reachedTarget = false -- Don't double-advance
+			if currentNode and nextNode and currentNode.pos and nextNode.pos then
+				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
+				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+				
+				if distPlayerToNext < distCurrentToNext then
+					Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
+					Navigation.RemoveCurrentNode()
+					reachedTarget = false -- Don't double-advance
+				end
 			end
 		end
 	end

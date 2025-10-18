@@ -235,6 +235,10 @@ function StateHandler.handleStuckState(userCmd)
 			if speed2D < 50 then
 				Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
 
+				-- Disable node skipping for 132 ticks (2 seconds) by setting work cooldown
+				WorkManager.setWorkCooldown("node_skipping", 132)
+				Log:Debug("Node skipping disabled for 132 ticks due to stuck")
+
 				-- Add cost penalties to current connection (node->node, node->door, door->door)
 				StateHandler.addStuckPenalties()
 
@@ -248,6 +252,9 @@ function StateHandler.handleStuckState(userCmd)
 	-- Reset stuck detection if moving normally
 	G.Navigation.unwalkableCount = 0
 	G.Navigation.stuckStartTick = nil
+	
+	-- Reset node skipping cooldown to 1 tick when unstuck
+	WorkManager.setWorkCooldown("node_skipping", 1)
 end
 
 -- Add cost penalties to connections when stuck

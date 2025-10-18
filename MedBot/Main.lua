@@ -242,11 +242,11 @@ local function onGameEvent(event)
 		return
 	end
 
-	-- Payload events
-	if eventName == "escort_progress" then
+	-- Payload events but it jsut makes things worse i belive
+	--[[if eventName == "escort_progress" then
 		invalidatePath("payload moved")
 		return
-	end
+	end]]
 
 	-- Team changes
 	if eventName == "localplayer_changeteam" then

@@ -285,11 +285,11 @@ local function onGameEvent(event)
 		return
 	end
 
-	-- Payload events
-	if eventName == "escort_progress" then
+	-- Payload events but it jsut makes things worse i belive
+	--[[if eventName == "escort_progress" then
 		invalidatePath("payload moved")
 		return
-	end
+	end]]
 
 	-- Team changes
 	if eventName == "localplayer_changeteam" then
@@ -5958,19 +5958,21 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 	
-	-- Simple node skipping: if closer to next node than current node is, skip
-	if G.Navigation.path and #G.Navigation.path >= 2 then
-		local currentNode = G.Navigation.path[1]
-		local nextNode = G.Navigation.path[2]
-		
-		if currentNode and nextNode and currentNode.pos and nextNode.pos then
-			local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
-			local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+	-- Simple node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
+	if WorkManager.attemptWork(1, "node_skipping") then
+		if G.Navigation.path and #G.Navigation.path >= 2 then
+			local currentNode = G.Navigation.path[1]
+			local nextNode = G.Navigation.path[2]
 			
-			if distPlayerToNext < distCurrentToNext then
-				Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
-				Navigation.RemoveCurrentNode()
-				reachedTarget = false -- Don't double-advance
+			if currentNode and nextNode and currentNode.pos and nextNode.pos then
+				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
+				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+				
+				if distPlayerToNext < distCurrentToNext then
+					Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
+					Navigation.RemoveCurrentNode()
+					reachedTarget = false -- Don't double-advance
+				end
 			end
 		end
 	end
@@ -6320,6 +6322,26 @@ function WorkManager.resetCooldown(identifier)
 		}
 	else
 		WorkManager.works[identifier].lastExecuted = currentTime - 1000 -- Set far in past to guarantee immediate execution
+	end
+
+	return true
+end
+
+--- Sets the cooldown delay for a work identifier
+--- @param identifier string A unique identifier for the work
+--- @param newDelay number The new delay in ticks to set
+--- @return boolean Always returns true to indicate the cooldown was set
+function WorkManager.setWorkCooldown(identifier, newDelay)
+	local currentTime = getCurrentTick()
+
+	-- Create or update work entry with new delay
+	if not WorkManager.works[identifier] then
+		WorkManager.works[identifier] = {
+			lastExecuted = currentTime,
+			delay = newDelay,
+		}
+	else
+		WorkManager.works[identifier].delay = newDelay
 	end
 
 	return true
@@ -7901,6 +7923,10 @@ function StateHandler.handleStuckState(userCmd)
 			if speed2D < 50 then
 				Log:Warn("STUCK DETECTED: velocity " .. tostring(speed2D) .. " < 50 - adding penalties and repathing")
 
+				-- Disable node skipping for 132 ticks (2 seconds) by setting work cooldown
+				WorkManager.setWorkCooldown("node_skipping", 132)
+				Log:Debug("Node skipping disabled for 132 ticks due to stuck")
+
 				-- Add cost penalties to current connection (node->node, node->door, door->door)
 				StateHandler.addStuckPenalties()
 
@@ -7914,6 +7940,9 @@ function StateHandler.handleStuckState(userCmd)
 	-- Reset stuck detection if moving normally
 	G.Navigation.unwalkableCount = 0
 	G.Navigation.stuckStartTick = nil
+	
+	-- Reset node skipping cooldown to 1 tick when unstuck
+	WorkManager.setWorkCooldown("node_skipping", 1)
 end
 
 -- Add cost penalties to connections when stuck

@@ -123,6 +123,26 @@ function WorkManager.resetCooldown(identifier)
 	return true
 end
 
+--- Sets the cooldown delay for a work identifier
+--- @param identifier string A unique identifier for the work
+--- @param newDelay number The new delay in ticks to set
+--- @return boolean Always returns true to indicate the cooldown was set
+function WorkManager.setWorkCooldown(identifier, newDelay)
+	local currentTime = getCurrentTick()
+
+	-- Create or update work entry with new delay
+	if not WorkManager.works[identifier] then
+		WorkManager.works[identifier] = {
+			lastExecuted = currentTime,
+			delay = newDelay,
+		}
+	else
+		WorkManager.works[identifier].delay = newDelay
+	end
+
+	return true
+end
+
 --- Processes the works based on their priority
 function WorkManager.processWorks()
 	local currentTime = getCurrentTick()
