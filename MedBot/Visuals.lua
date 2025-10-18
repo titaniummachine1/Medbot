@@ -68,7 +68,6 @@ local function collectNodesByConnectionDepth(playerPos, maxDepth)
         currentIndex = currentIndex + 1
     end
 
-    Log:Debug("Flood-fill collected %d nodes at max depth %d", #result, maxDepth)
     return result
 end
 
