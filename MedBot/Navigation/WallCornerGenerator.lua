@@ -22,6 +22,7 @@ local function groupNeighborsByDirection(area, nodes)
 	}
 
 	if not area.c then
+		Log:Debug("groupNeighborsByDirection: area.c is nil for area %s", tostring(area.id))
 		return neighbors
 	end
 

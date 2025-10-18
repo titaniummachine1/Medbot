@@ -3510,6 +3510,7 @@ local function groupNeighborsByDirection(area, nodes)
 	}
 
 	if not area.c then
+		Log:Debug("groupNeighborsByDirection: area.c is nil for area %s", tostring(area.id))
 		return neighbors
 	end
 
@@ -3909,11 +3910,13 @@ function DoorBuilder.BuildDoorsForConnections()
 												if ConnectionUtils.GetNodeId(tConn) == nodeId then
 													hasReverse = true
 													revDir = tDirId
-													Log:Debug(
-														"Connection %s->%s: Found reverse (bidirectional)",
-														nodeId,
-														targetId
-													)
+													if G.Menu.Main.Debug then
+														Log:Debug(
+															"Connection %s->%s: Found reverse (bidirectional)",
+															nodeId,
+															targetId
+														)
+													end
 													break
 												end
 											end
@@ -3925,7 +3928,9 @@ function DoorBuilder.BuildDoorsForConnections()
 								end
 
 								if not hasReverse then
-									Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
+									if G.Menu.Main.Debug then
+										Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
+									end
 								end
 
 								-- Create SHARED doors (use canonical ordering for IDs)
@@ -6403,6 +6408,8 @@ end
 -- Check if next node is walkable from current position
 function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		Log:Debug("CheckNextNodeWalkable: Invalid node data - currentNode=%s, nextNode=%s", 
+			tostring(currentNode and currentNode.id), tostring(nextNode and nextNode.id))
 		return false
 	end
 
@@ -6422,6 +6429,8 @@ end
 -- Check if next node is closer than current node
 function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		Log:Debug("CheckNextNodeCloser: Invalid node data - currentNode=%s, nextNode=%s", 
+			tostring(currentNode and currentNode.id), tostring(nextNode and nextNode.id))
 		return false
 	end
 

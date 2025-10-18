@@ -163,6 +163,8 @@ end
 -- Check if next node is walkable from current position
 function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		Log:Debug("CheckNextNodeWalkable: Invalid node data - currentNode=%s, nextNode=%s", 
+			tostring(currentNode and currentNode.id), tostring(nextNode and nextNode.id))
 		return false
 	end
 
@@ -182,6 +184,8 @@ end
 -- Check if next node is closer than current node
 function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		Log:Debug("CheckNextNodeCloser: Invalid node data - currentNode=%s, nextNode=%s", 
+			tostring(currentNode and currentNode.id), tostring(nextNode and nextNode.id))
 		return false
 	end
 

@@ -4,7 +4,7 @@
 -- This version uses LNXlib's WPlayer as the player wrapper, removing the old custom WrappedPlayer.
 
 --[[ Imports ]]
-local G = require("MedBot.Utils.Globals")
+local G = require("MedBot.Core.Globals")
 local libLoaded, Lib = pcall(require, "LNXlib")
 assert(libLoaded, "LNXlib not found, please install it!")
 local WPlayer = Lib.TF2.WPlayer
