@@ -201,23 +201,4 @@ function Node.BuildDoorsForConnections()
 	ConnectionBuilder.BuildDoorsForConnections()
 end
 
--- Processing status
-function Node.GetConnectionProcessingStatus()
-	return {
-		isProcessing = false,
-		currentPhase = "complete",
-		processedCount = 0,
-		totalCount = 0,
-		phaseDescription = "Connection processing complete",
-	}
-end
-
-function Node.ProcessConnectionsBackground()
-	-- Simplified - no background processing needed
-end
-
-function Node.StopConnectionProcessing()
-	-- No-op - no background processing
-end
-
 return Node

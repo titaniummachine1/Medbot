@@ -11,34 +11,30 @@ local Log = Common.Log.new("WallCornerDetector")
 
 -- Group neighbors by 4 directions for an area using existing dirId from connections
 -- Source Engine nav format: connectionData[4] in NESW order (North, East, South, West)
+local DIR_NAMES = { "north", "east", "south", "west" } -- dirId 1-4 maps to NESW
+
 local function groupNeighborsByDirection(area, nodes)
 	local neighbors = {
-		north = {}, -- dirId = 1 (index 0 in C++)
-		east = {}, -- dirId = 2 (index 1 in C++)
-		south = {}, -- dirId = 3 (index 2 in C++)
-		west = {}, -- dirId = 4 (index 3 in C++)
+		north = {}, -- dirId = 1
+		east = {},  -- dirId = 2
+		south = {}, -- dirId = 3
+		west = {},  -- dirId = 4
 	}
 
 	if not area.c then
 		return neighbors
 	end
 
-	-- dirId IS the direction - use it directly from NESW array
+	-- Use dirId to directly index direction name
 	for dirId, dir in pairs(area.c) do
 		if dir.connections then
-			for _, connection in ipairs(dir.connections) do
-				local targetId = (type(connection) == "table") and connection.node or connection
-				local neighbor = nodes[targetId]
-				if neighbor then
-					-- Map dirId to direction name (NESW order)
-					if dirId == 1 then
-						table.insert(neighbors.north, neighbor)
-					elseif dirId == 2 then
-						table.insert(neighbors.east, neighbor)
-					elseif dirId == 3 then
-						table.insert(neighbors.south, neighbor)
-					elseif dirId == 4 then
-						table.insert(neighbors.west, neighbor)
+			local dirName = DIR_NAMES[dirId]
+			if dirName then
+				for _, connection in ipairs(dir.connections) do
+					local targetId = (type(connection) == "table") and connection.node or connection
+					local neighbor = nodes[targetId]
+					if neighbor then
+						table.insert(neighbors[dirName], neighbor)
 					end
 				end
 			end

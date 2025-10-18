@@ -6,12 +6,11 @@ local isWalkable = {}
 local G = require("MedBot.Core.Globals")
 local Common = require("MedBot.Core.Common")
 
--- Constants
-local pLocal = entities.GetLocalPlayer()
+-- Constants (static defaults - player properties don't change during session)
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) } -- Player collision hull
-local MaxSpeed = (pLocal and pLocal:GetPropFloat("m_flMaxspeed")) or 450 -- Default to 450 if max speed not available
+local MaxSpeed = 450 -- Default max speed (TF2 scout speed)
 local gravity = client.GetConVar("sv_gravity") or 800 -- Gravity or default one
-local STEP_HEIGHT = (pLocal and pLocal:GetPropFloat("localdata", "m_flStepSize")) or 18 -- Maximum height the player can step up
+local STEP_HEIGHT = 18 -- Maximum height the player can step up
 local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
 local MAX_FALL_DISTANCE = 250 -- Maximum distance the player can fall without taking fall damage
 local MAX_FALL_DISTANCE_Vector = Vector3(0, 0, MAX_FALL_DISTANCE)
@@ -45,7 +44,7 @@ function isWalkable.DrawDebugTraces()
 	for _, trace in ipairs(hullTraces) do
 		if trace.startPos and trace.endPos then
 			draw.Color(0, 50, 255, 255) -- Blue for hull traces
-			isWalkable.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 		end
 	end
 
@@ -60,66 +59,6 @@ function isWalkable.DrawDebugTraces()
 			end
 		end
 	end
-end
-
--- Arrow line drawing function (simplified from A_standstillDummy)
-function isWalkable.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
-	if not (start_pos and end_pos) then
-		return
-	end
-
-	-- If invert is true, swap start_pos and end_pos
-	if invert then
-		start_pos, end_pos = end_pos, start_pos
-	end
-
-	-- Calculate direction from start to end
-	local direction = end_pos - start_pos
-
-	-- Check if arrow size is too small
-	local min_acceptable_length = arrowhead_length + (arrowhead_width / 2)
-	if direction:Length() < min_acceptable_length then
-		-- Draw a regular line if arrow size is too small
-		local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-		if w2s_start and w2s_end then
-			draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
-		end
-		return
-	end
-
-	-- Normalize the direction vector
-	local normalized_direction = isWalkable.Normalize(direction)
-
-	-- Calculate the arrow base position
-	local arrow_base = end_pos - normalized_direction * arrowhead_length
-
-	-- Calculate the perpendicular vector for the arrow width
-	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
-
-	-- Convert world positions to screen positions
-	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-	local w2s_arrow_base = client.WorldToScreen(arrow_base)
-	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
-	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
-
-	if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
-		return
-	end
-
-	-- Draw the line from start to the base of the arrow
-	draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
-
-	-- Draw the sides of the arrowhead
-	draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
-	draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
-
-	-- Draw the base of the arrowhead
-	draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
-end
-
--- Vector normalization function
-function isWalkable.Normalize(vec)
-	return Common.Normalize(vec)
 end
 
 -- Toggle debug visualization on/off
@@ -147,6 +86,8 @@ local lineTraces = {}
 local DEBUG_TRACES = false -- Disabled for performance
 
 local function shouldHitEntity(entity)
+	-- Use fresh player reference from globals (updated every tick)
+	local pLocal = G.pLocal and G.pLocal.entity
 	return entity ~= pLocal -- Ignore self (the player being simulated)
 end
 

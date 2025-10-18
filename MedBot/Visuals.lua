@@ -120,53 +120,6 @@ end
 
 local UP_VECTOR = Vector3(0, 0, 1)
 
-local function ArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
-    if not (start_pos and end_pos) then
-        return
-    end
-
-    -- If invert is true, swap start_pos and end_pos
-    if invert then
-        start_pos, end_pos = end_pos, start_pos
-    end
-
-    -- Calculate direction from start to end
-    local direction = end_pos - start_pos
-    local direction_length = direction:Length()
-    if direction_length == 0 then
-        return
-    end
-
-    -- Normalize the direction vector safely
-    local normalized_direction = direction / direction_length
-
-    -- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
-    local arrow_base = end_pos - normalized_direction * arrowhead_length
-
-    -- Calculate the perpendicular vector for the arrow width
-    local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
-
-    -- Convert world positions to screen positions
-    local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-    local w2s_arrow_base = client.WorldToScreen(arrow_base)
-    local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
-    local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
-
-    if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
-        return
-    end
-
-    -- Draw the line from start to the base of the arrow (not all the way to the end)
-    draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
-
-    -- Draw the sides of the arrowhead
-    draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
-    draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
-
-    -- Optionally, draw the base of the arrowhead to close it
-    draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
-end
-
 -- 1×1 white texture for filled polygons
 local white_texture_fill = draw.CreateTextureRGBA(string.char(0xff, 0xff, 0xff, 0xff), 1, 1)
 
@@ -898,7 +851,7 @@ local function OnDraw()
                 end
                 if aPos and bPos then
                     draw.Color(255, 255, 255, 255) -- white route
-                    ArrowLine(aPos, bPos, 18, 12, false)
+                    Common.DrawArrowLine(aPos, bPos, 18, 12, false)
                 end
             end
         end
@@ -910,7 +863,7 @@ local function OnDraw()
         local targetPos = G.Navigation.currentTargetPos
         if localPos and targetPos then
             draw.Color(255, 255, 255, 220) -- White arrow to current target
-            ArrowLine(localPos, targetPos, 18, 12, false)
+            Common.DrawArrowLine(localPos, targetPos, 18, 12, false)
         end
     end
 

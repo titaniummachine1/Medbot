@@ -585,13 +585,6 @@ G.Navigation = {
 	nextNodeCloser = false, -- Flag indicating if next node is closer
 }
 
--- SmartJump integration
-G.ShouldJump = false -- Set by SmartJump module when jump should be performed
-G.LastSmartJumpAttempt = 0 -- Track last time SmartJump was attempted
-G.LastEmergencyJump = 0 -- Track last emergency jump time
-G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
-G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
-
 -- SmartJump configuration
 G.Menu.SmartJump = {
 	Enable = true,
@@ -1600,7 +1593,11 @@ function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_wi
 	-- Calculate direction from start to end
 	local direction = end_pos - start_pos
 	local direction_length = direction:Length()
-	assert(direction_length > 0, "Common.DrawArrowLine: start_pos and end_pos cannot be the same")
+	
+	-- Skip drawing if positions are identical (valid case when waypoints overlap)
+	if direction_length == 0 then
+		return
+	end
 
 	-- Normalize the direction vector safely
 	local normalized_direction = direction / direction_length
@@ -1817,22 +1814,23 @@ end
 
 -- Performance optimization utilities
 Common.Cache = {}
+local cacheStorage = {} -- Separate storage to avoid polluting Cache namespace
 
 function Common.Cache.GetOrCompute(key, computeFunc, ttl)
 	local currentTime = globals.RealTime()
-	local cached = Common.Cache[key]
+	local cached = cacheStorage[key]
 
 	if cached and (currentTime - cached.time) < (ttl or 1.0) then
 		return cached.value
 	end
 
 	local value = computeFunc()
-	Common.Cache[key] = { value = value, time = currentTime }
+	cacheStorage[key] = { value = value, time = currentTime }
 	return value
 end
 
 function Common.Cache.Clear()
-	Common.Cache = {}
+	cacheStorage = {} -- Clear the storage, not the module table
 end
 
 -- Optimized math operations
@@ -1978,53 +1976,6 @@ local function Draw3DBox(size, pos)
 end
 
 local UP_VECTOR = Vector3(0, 0, 1)
-
-local function ArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
-    if not (start_pos and end_pos) then
-        return
-    end
-
-    -- If invert is true, swap start_pos and end_pos
-    if invert then
-        start_pos, end_pos = end_pos, start_pos
-    end
-
-    -- Calculate direction from start to end
-    local direction = end_pos - start_pos
-    local direction_length = direction:Length()
-    if direction_length == 0 then
-        return
-    end
-
-    -- Normalize the direction vector safely
-    local normalized_direction = direction / direction_length
-
-    -- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
-    local arrow_base = end_pos - normalized_direction * arrowhead_length
-
-    -- Calculate the perpendicular vector for the arrow width
-    local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
-
-    -- Convert world positions to screen positions
-    local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-    local w2s_arrow_base = client.WorldToScreen(arrow_base)
-    local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
-    local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
-
-    if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
-        return
-    end
-
-    -- Draw the line from start to the base of the arrow (not all the way to the end)
-    draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
-
-    -- Draw the sides of the arrowhead
-    draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
-    draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
-
-    -- Optionally, draw the base of the arrowhead to close it
-    draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
-end
 
 -- 1×1 white texture for filled polygons
 local white_texture_fill = draw.CreateTextureRGBA(string.char(0xff, 0xff, 0xff, 0xff), 1, 1)
@@ -2757,7 +2708,7 @@ local function OnDraw()
                 end
                 if aPos and bPos then
                     draw.Color(255, 255, 255, 255) -- white route
-                    ArrowLine(aPos, bPos, 18, 12, false)
+                    Common.DrawArrowLine(aPos, bPos, 18, 12, false)
                 end
             end
         end
@@ -2769,7 +2720,7 @@ local function OnDraw()
         local targetPos = G.Navigation.currentTargetPos
         if localPos and targetPos then
             draw.Color(255, 255, 255, 220) -- White arrow to current target
-            ArrowLine(localPos, targetPos, 18, 12, false)
+            Common.DrawArrowLine(localPos, targetPos, 18, 12, false)
         end
     end
 
@@ -3103,12 +3054,11 @@ local isWalkable = {}
 local G = require("MedBot.Core.Globals")
 local Common = require("MedBot.Core.Common")
 
--- Constants
-local pLocal = entities.GetLocalPlayer()
+-- Constants (static defaults - player properties don't change during session)
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) } -- Player collision hull
-local MaxSpeed = (pLocal and pLocal:GetPropFloat("m_flMaxspeed")) or 450 -- Default to 450 if max speed not available
+local MaxSpeed = 450 -- Default max speed (TF2 scout speed)
 local gravity = client.GetConVar("sv_gravity") or 800 -- Gravity or default one
-local STEP_HEIGHT = (pLocal and pLocal:GetPropFloat("localdata", "m_flStepSize")) or 18 -- Maximum height the player can step up
+local STEP_HEIGHT = 18 -- Maximum height the player can step up
 local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
 local MAX_FALL_DISTANCE = 250 -- Maximum distance the player can fall without taking fall damage
 local MAX_FALL_DISTANCE_Vector = Vector3(0, 0, MAX_FALL_DISTANCE)
@@ -3142,7 +3092,7 @@ function isWalkable.DrawDebugTraces()
 	for _, trace in ipairs(hullTraces) do
 		if trace.startPos and trace.endPos then
 			draw.Color(0, 50, 255, 255) -- Blue for hull traces
-			isWalkable.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 		end
 	end
 
@@ -3157,66 +3107,6 @@ function isWalkable.DrawDebugTraces()
 			end
 		end
 	end
-end
-
--- Arrow line drawing function (simplified from A_standstillDummy)
-function isWalkable.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
-	if not (start_pos and end_pos) then
-		return
-	end
-
-	-- If invert is true, swap start_pos and end_pos
-	if invert then
-		start_pos, end_pos = end_pos, start_pos
-	end
-
-	-- Calculate direction from start to end
-	local direction = end_pos - start_pos
-
-	-- Check if arrow size is too small
-	local min_acceptable_length = arrowhead_length + (arrowhead_width / 2)
-	if direction:Length() < min_acceptable_length then
-		-- Draw a regular line if arrow size is too small
-		local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-		if w2s_start and w2s_end then
-			draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
-		end
-		return
-	end
-
-	-- Normalize the direction vector
-	local normalized_direction = isWalkable.Normalize(direction)
-
-	-- Calculate the arrow base position
-	local arrow_base = end_pos - normalized_direction * arrowhead_length
-
-	-- Calculate the perpendicular vector for the arrow width
-	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
-
-	-- Convert world positions to screen positions
-	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-	local w2s_arrow_base = client.WorldToScreen(arrow_base)
-	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
-	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
-
-	if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
-		return
-	end
-
-	-- Draw the line from start to the base of the arrow
-	draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
-
-	-- Draw the sides of the arrowhead
-	draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
-	draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
-
-	-- Draw the base of the arrowhead
-	draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
-end
-
--- Vector normalization function
-function isWalkable.Normalize(vec)
-	return Common.Normalize(vec)
 end
 
 -- Toggle debug visualization on/off
@@ -3244,6 +3134,8 @@ local lineTraces = {}
 local DEBUG_TRACES = false -- Disabled for performance
 
 local function shouldHitEntity(entity)
+	-- Use fresh player reference from globals (updated every tick)
+	local pLocal = G.pLocal and G.pLocal.entity
 	return entity ~= pLocal -- Ignore self (the player being simulated)
 end
 
@@ -3588,25 +3480,6 @@ function Node.BuildDoorsForConnections()
 	ConnectionBuilder.BuildDoorsForConnections()
 end
 
--- Processing status
-function Node.GetConnectionProcessingStatus()
-	return {
-		isProcessing = false,
-		currentPhase = "complete",
-		processedCount = 0,
-		totalCount = 0,
-		phaseDescription = "Connection processing complete",
-	}
-end
-
-function Node.ProcessConnectionsBackground()
-	-- Simplified - no background processing needed
-end
-
-function Node.StopConnectionProcessing()
-	-- No-op - no background processing
-end
-
 return Node
 
 end)
@@ -3624,34 +3497,30 @@ local Log = Common.Log.new("WallCornerDetector")
 
 -- Group neighbors by 4 directions for an area using existing dirId from connections
 -- Source Engine nav format: connectionData[4] in NESW order (North, East, South, West)
+local DIR_NAMES = { "north", "east", "south", "west" } -- dirId 1-4 maps to NESW
+
 local function groupNeighborsByDirection(area, nodes)
 	local neighbors = {
-		north = {}, -- dirId = 1 (index 0 in C++)
-		east = {}, -- dirId = 2 (index 1 in C++)
-		south = {}, -- dirId = 3 (index 2 in C++)
-		west = {}, -- dirId = 4 (index 3 in C++)
+		north = {}, -- dirId = 1
+		east = {},  -- dirId = 2
+		south = {}, -- dirId = 3
+		west = {},  -- dirId = 4
 	}
 
 	if not area.c then
 		return neighbors
 	end
 
-	-- dirId IS the direction - use it directly from NESW array
+	-- Use dirId to directly index direction name
 	for dirId, dir in pairs(area.c) do
 		if dir.connections then
-			for _, connection in ipairs(dir.connections) do
-				local targetId = (type(connection) == "table") and connection.node or connection
-				local neighbor = nodes[targetId]
-				if neighbor then
-					-- Map dirId to direction name (NESW order)
-					if dirId == 1 then
-						table.insert(neighbors.north, neighbor)
-					elseif dirId == 2 then
-						table.insert(neighbors.east, neighbor)
-					elseif dirId == 3 then
-						table.insert(neighbors.south, neighbor)
-					elseif dirId == 4 then
-						table.insert(neighbors.west, neighbor)
+			local dirName = DIR_NAMES[dirId]
+			if dirName then
+				for _, connection in ipairs(dir.connections) do
+					local targetId = (type(connection) == "table") and connection.node or connection
+					local neighbor = nodes[targetId]
+					if neighbor then
+						table.insert(neighbors[dirName], neighbor)
 					end
 				end
 			end
@@ -5427,10 +5296,10 @@ function SmartJump.Main(cmd)
 	local ducking = isPlayerDucking(pLocal)
 	local shouldJump = false
 
-	if G.RequestEmergencyJump then
+	if G.SmartJump.RequestEmergencyJump then
 		shouldJump = true
-		G.RequestEmergencyJump = false
-		G.LastSmartJumpAttempt = globals.TickCount()
+		G.SmartJump.RequestEmergencyJump = false
+		G.SmartJump.LastSmartJumpAttempt = globals.TickCount()
 		SJ.jumpState = SJC.STATE_PREPARE_JUMP
 		Log:Info("SmartJump: Processing emergency jump request")
 	end
@@ -5541,7 +5410,7 @@ function SmartJump.Main(cmd)
 		SJ.lastState = currentState
 	end
 
-	G.ShouldJump = shouldJump
+	G.SmartJump.ShouldJump = shouldJump
 	return shouldJump
 end
 
@@ -6475,119 +6344,9 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 	Node.AddCostToConnection(nodeA, nodeB, cost)
 end
 
---[[
--- Perform a trace hull down from the given position to the ground
----@param position Vector3 The start position of the trace
----@param hullSize table The size of the hull
----@return Vector3 The normal of the ground at that point
-local function traceHullDown(position, hullSize)
-	local endPos = position - Vector3(0, 0, DROP_HEIGHT) -- Adjust the distance as needed
-	local traceResult = engine.TraceHull(position, endPos, hullSize.min, hullSize.max, MASK_PLAYERSOLID_BRUSHONLY)
-	return traceResult.plane -- Directly using the plane as the normal
-end
-
--- Perform a trace line down from the given position to the ground
----@param position Vector3 The start position of the trace
----@return Vector3 The hit position
-local function traceLineDown(position)
-	local endPos = position - Vector3(0, 0, DROP_HEIGHT)
-	local traceResult = engine.TraceLine(position, endPos, TRACE_MASK)
-	return traceResult.endpos
-end
-
--- Calculate the remaining two corners based on the adjusted corners and ground normal
----@param corner1 Vector3 The first adjusted corner
----@param corner2 Vector3 The second adjusted corner
----@param normal Vector3 The ground normal
----@param height number The height of the rectangle
----@return table The remaining two corners
-local function calculateRemainingCorners(corner1, corner2, normal, height)
-	local widthVector = corner2 - corner1
-	local widthLength = widthVector:Length2D()
-
-	local heightVector = Vector3(-widthVector.y, widthVector.x, 0)
-
-	local function rotateAroundNormal(vector, angle)
-		local cosTheta = math.cos(angle)
-		local sinTheta = math.sin(angle)
-		return Vector3(
-			(cosTheta + (1 - cosTheta) * normal.x ^ 2) * vector.x
-				+ ((1 - cosTheta) * normal.x * normal.y - normal.z * sinTheta) * vector.y
-				+ ((1 - cosTheta) * normal.x * normal.z + normal.y * sinTheta) * vector.z,
-			((1 - cosTheta) * normal.x * normal.y + normal.z * sinTheta) * vector.x
-				+ (cosTheta + (1 - cosTheta) * normal.y ^ 2) * vector.y
-				+ ((1 - cosTheta) * normal.y * normal.z - normal.x * sinTheta) * vector.z,
-			((1 - cosTheta) * normal.x * normal.z - normal.y * sinTheta) * vector.x
-				+ ((1 - cosTheta) * normal.y * normal.z + normal.x * sinTheta) * vector.y
-				+ (cosTheta + (1 - cosTheta) * normal.z ^ 2) * vector.z
-		)
-	end
-
-	local rotatedHeightVector = rotateAroundNormal(heightVector, math.pi / 2)
-
-	local corner3 = corner1 + rotatedHeightVector * (height / widthLength)
-	local corner4 = corner2 + rotatedHeightVector * (height / widthLength)
-
-	return { corner3, corner4 }
-end
-
--- Fixes a node by adjusting its height based on TraceHull and TraceLine results
--- Moves the node 18 units up and traces down to find a new valid position
----@param nodeId integer The index of the node in the Nodes table
----@return Node The fixed node
-function Navigation.FixNode(nodeId)
-	local nodes = G.Navigation.nodes
-	local node = nodes[nodeId]
-	if not node or not node.pos then
-		Log:Warn("FixNode: Invalid node %s", tostring(nodeId))
-		return nil
-	end
-	if node.fixed then
-		return node
-	end
-
-	local upVector = Vector3(0, 0, 72)
-	local downVector = Vector3(0, 0, -72)
-	-- Fix center position
-	local traceCenter = engine.TraceHull(node.pos + upVector, node.pos + downVector, HULL_MIN, HULL_MAX, TRACE_MASK)
-	if traceCenter and traceCenter.fraction > 0 then
-		node.pos = traceCenter.endpos
-		node.z = traceCenter.endpos.z
-	else
-		node.pos = node.pos + upVector
-		node.z = node.z + 72
-	end
-	-- Fix two known corners (nw, se) via line traces
-	for _, cornerKey in ipairs({ "nw", "se" }) do
-		local c = node[cornerKey]
-		if c then
-			local world = Vector3(c.x, c.y, c.z)
-			local trace = engine.TraceLine(world + upVector, world + downVector, TRACE_MASK)
-			if trace and trace.fraction < 1 then
-				node[cornerKey] = trace.endpos
-			else
-				node[cornerKey] = world + upVector
-			end
-		end
-	end
-	-- Compute remaining corners
-	local normal = getGroundNormal(node.pos)
-	local height = math.abs(node.se.z - node.nw.z)
-	local rem = calculateRemainingCorners(node.nw, node.se, normal, height)
-	node.ne = rem[1]
-	node.sw = rem[2]
-	node.fixed = true
-	return node
-end
-
--- Adjust all nodes by fixing their positions and adding missing corners.
-function Navigation.FixAllNodes()
-	local nodes = Navigation.GetNodes()
-	for id in pairs(nodes) do
-		Navigation.FixNode(id)
-	end
-end
-]]
+-- ========================================================================
+-- SETUP & INITIALIZATION
+-- ========================================================================
 
 function Navigation.Setup()
 	if engine.GetMapName() then
@@ -6596,11 +6355,19 @@ function Navigation.Setup()
 	end
 end
 
+-- ========================================================================
+-- PATH QUERIES
+-- ========================================================================
+
 -- Get the current path
 ---@return Node[]|nil
 function Navigation.GetCurrentPath()
 	return G.Navigation.path
 end
+
+-- ========================================================================
+-- PATH MANAGEMENT
+-- ========================================================================
 
 -- Clear the current path
 function Navigation.ClearPath()
@@ -6664,7 +6431,10 @@ function Navigation.ResetTickTimer()
 	G.Navigation.currentNodeTicks = 0
 end
 
--- Function to increment the current node ticks
+-- ========================================================================
+-- NODE VALIDATION & CHECKS
+-- ========================================================================
+
 -- Check if next node is walkable from current position
 function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
@@ -6706,6 +6476,10 @@ function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 		return false
 	end
 end
+
+-- ========================================================================
+-- WAYPOINT BUILDING
+-- ========================================================================
 
 -- Build waypoints from mixed area/door path
 function Navigation.BuildDoorWaypointsFromPath()

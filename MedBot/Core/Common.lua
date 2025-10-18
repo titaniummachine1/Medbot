@@ -148,7 +148,11 @@ function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_wi
 	-- Calculate direction from start to end
 	local direction = end_pos - start_pos
 	local direction_length = direction:Length()
-	assert(direction_length > 0, "Common.DrawArrowLine: start_pos and end_pos cannot be the same")
+	
+	-- Skip drawing if positions are identical (valid case when waypoints overlap)
+	if direction_length == 0 then
+		return
+	end
 
 	-- Normalize the direction vector safely
 	local normalized_direction = direction / direction_length
@@ -365,22 +369,23 @@ end
 
 -- Performance optimization utilities
 Common.Cache = {}
+local cacheStorage = {} -- Separate storage to avoid polluting Cache namespace
 
 function Common.Cache.GetOrCompute(key, computeFunc, ttl)
 	local currentTime = globals.RealTime()
-	local cached = Common.Cache[key]
+	local cached = cacheStorage[key]
 
 	if cached and (currentTime - cached.time) < (ttl or 1.0) then
 		return cached.value
 	end
 
 	local value = computeFunc()
-	Common.Cache[key] = { value = value, time = currentTime }
+	cacheStorage[key] = { value = value, time = currentTime }
 	return value
 end
 
 function Common.Cache.Clear()
-	Common.Cache = {}
+	cacheStorage = {} -- Clear the storage, not the module table
 end
 
 -- Optimized math operations

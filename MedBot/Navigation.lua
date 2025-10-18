@@ -69,119 +69,9 @@ function Navigation.AddCostToConnection(nodeA, nodeB, cost)
 	Node.AddCostToConnection(nodeA, nodeB, cost)
 end
 
---[[
--- Perform a trace hull down from the given position to the ground
----@param position Vector3 The start position of the trace
----@param hullSize table The size of the hull
----@return Vector3 The normal of the ground at that point
-local function traceHullDown(position, hullSize)
-	local endPos = position - Vector3(0, 0, DROP_HEIGHT) -- Adjust the distance as needed
-	local traceResult = engine.TraceHull(position, endPos, hullSize.min, hullSize.max, MASK_PLAYERSOLID_BRUSHONLY)
-	return traceResult.plane -- Directly using the plane as the normal
-end
-
--- Perform a trace line down from the given position to the ground
----@param position Vector3 The start position of the trace
----@return Vector3 The hit position
-local function traceLineDown(position)
-	local endPos = position - Vector3(0, 0, DROP_HEIGHT)
-	local traceResult = engine.TraceLine(position, endPos, TRACE_MASK)
-	return traceResult.endpos
-end
-
--- Calculate the remaining two corners based on the adjusted corners and ground normal
----@param corner1 Vector3 The first adjusted corner
----@param corner2 Vector3 The second adjusted corner
----@param normal Vector3 The ground normal
----@param height number The height of the rectangle
----@return table The remaining two corners
-local function calculateRemainingCorners(corner1, corner2, normal, height)
-	local widthVector = corner2 - corner1
-	local widthLength = widthVector:Length2D()
-
-	local heightVector = Vector3(-widthVector.y, widthVector.x, 0)
-
-	local function rotateAroundNormal(vector, angle)
-		local cosTheta = math.cos(angle)
-		local sinTheta = math.sin(angle)
-		return Vector3(
-			(cosTheta + (1 - cosTheta) * normal.x ^ 2) * vector.x
-				+ ((1 - cosTheta) * normal.x * normal.y - normal.z * sinTheta) * vector.y
-				+ ((1 - cosTheta) * normal.x * normal.z + normal.y * sinTheta) * vector.z,
-			((1 - cosTheta) * normal.x * normal.y + normal.z * sinTheta) * vector.x
-				+ (cosTheta + (1 - cosTheta) * normal.y ^ 2) * vector.y
-				+ ((1 - cosTheta) * normal.y * normal.z - normal.x * sinTheta) * vector.z,
-			((1 - cosTheta) * normal.x * normal.z - normal.y * sinTheta) * vector.x
-				+ ((1 - cosTheta) * normal.y * normal.z + normal.x * sinTheta) * vector.y
-				+ (cosTheta + (1 - cosTheta) * normal.z ^ 2) * vector.z
-		)
-	end
-
-	local rotatedHeightVector = rotateAroundNormal(heightVector, math.pi / 2)
-
-	local corner3 = corner1 + rotatedHeightVector * (height / widthLength)
-	local corner4 = corner2 + rotatedHeightVector * (height / widthLength)
-
-	return { corner3, corner4 }
-end
-
--- Fixes a node by adjusting its height based on TraceHull and TraceLine results
--- Moves the node 18 units up and traces down to find a new valid position
----@param nodeId integer The index of the node in the Nodes table
----@return Node The fixed node
-function Navigation.FixNode(nodeId)
-	local nodes = G.Navigation.nodes
-	local node = nodes[nodeId]
-	if not node or not node.pos then
-		Log:Warn("FixNode: Invalid node %s", tostring(nodeId))
-		return nil
-	end
-	if node.fixed then
-		return node
-	end
-
-	local upVector = Vector3(0, 0, 72)
-	local downVector = Vector3(0, 0, -72)
-	-- Fix center position
-	local traceCenter = engine.TraceHull(node.pos + upVector, node.pos + downVector, HULL_MIN, HULL_MAX, TRACE_MASK)
-	if traceCenter and traceCenter.fraction > 0 then
-		node.pos = traceCenter.endpos
-		node.z = traceCenter.endpos.z
-	else
-		node.pos = node.pos + upVector
-		node.z = node.z + 72
-	end
-	-- Fix two known corners (nw, se) via line traces
-	for _, cornerKey in ipairs({ "nw", "se" }) do
-		local c = node[cornerKey]
-		if c then
-			local world = Vector3(c.x, c.y, c.z)
-			local trace = engine.TraceLine(world + upVector, world + downVector, TRACE_MASK)
-			if trace and trace.fraction < 1 then
-				node[cornerKey] = trace.endpos
-			else
-				node[cornerKey] = world + upVector
-			end
-		end
-	end
-	-- Compute remaining corners
-	local normal = getGroundNormal(node.pos)
-	local height = math.abs(node.se.z - node.nw.z)
-	local rem = calculateRemainingCorners(node.nw, node.se, normal, height)
-	node.ne = rem[1]
-	node.sw = rem[2]
-	node.fixed = true
-	return node
-end
-
--- Adjust all nodes by fixing their positions and adding missing corners.
-function Navigation.FixAllNodes()
-	local nodes = Navigation.GetNodes()
-	for id in pairs(nodes) do
-		Navigation.FixNode(id)
-	end
-end
-]]
+-- ========================================================================
+-- SETUP & INITIALIZATION
+-- ========================================================================
 
 function Navigation.Setup()
 	if engine.GetMapName() then
@@ -190,11 +80,19 @@ function Navigation.Setup()
 	end
 end
 
+-- ========================================================================
+-- PATH QUERIES
+-- ========================================================================
+
 -- Get the current path
 ---@return Node[]|nil
 function Navigation.GetCurrentPath()
 	return G.Navigation.path
 end
+
+-- ========================================================================
+-- PATH MANAGEMENT
+-- ========================================================================
 
 -- Clear the current path
 function Navigation.ClearPath()
@@ -258,7 +156,10 @@ function Navigation.ResetTickTimer()
 	G.Navigation.currentNodeTicks = 0
 end
 
--- Function to increment the current node ticks
+-- ========================================================================
+-- NODE VALIDATION & CHECKS
+-- ========================================================================
+
 -- Check if next node is walkable from current position
 function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
@@ -300,6 +201,10 @@ function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 		return false
 	end
 end
+
+-- ========================================================================
+-- WAYPOINT BUILDING
+-- ========================================================================
 
 -- Build waypoints from mixed area/door path
 function Navigation.BuildDoorWaypointsFromPath()

@@ -53,13 +53,6 @@ G.Navigation = {
 	nextNodeCloser = false, -- Flag indicating if next node is closer
 }
 
--- SmartJump integration
-G.ShouldJump = false -- Set by SmartJump module when jump should be performed
-G.LastSmartJumpAttempt = 0 -- Track last time SmartJump was attempted
-G.LastEmergencyJump = 0 -- Track last emergency jump time
-G.ObstacleDetected = false -- Track if obstacle is detected but no jump attempted
-G.RequestEmergencyJump = false -- Request emergency jump from stuck detection
-
 -- SmartJump configuration
 G.Menu.SmartJump = {
 	Enable = true,

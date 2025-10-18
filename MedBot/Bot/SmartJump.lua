@@ -298,10 +298,10 @@ function SmartJump.Main(cmd)
 	local ducking = isPlayerDucking(pLocal)
 	local shouldJump = false
 
-	if G.RequestEmergencyJump then
+	if G.SmartJump.RequestEmergencyJump then
 		shouldJump = true
-		G.RequestEmergencyJump = false
-		G.LastSmartJumpAttempt = globals.TickCount()
+		G.SmartJump.RequestEmergencyJump = false
+		G.SmartJump.LastSmartJumpAttempt = globals.TickCount()
 		SJ.jumpState = SJC.STATE_PREPARE_JUMP
 		Log:Info("SmartJump: Processing emergency jump request")
 	end
@@ -412,7 +412,7 @@ function SmartJump.Main(cmd)
 		SJ.lastState = currentState
 	end
 
-	G.ShouldJump = shouldJump
+	G.SmartJump.ShouldJump = shouldJump
 	return shouldJump
 end
 
