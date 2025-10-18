@@ -14,9 +14,9 @@ local Log = Common.Log.new("WallCornerDetector")
 local function groupNeighborsByDirection(area, nodes)
 	local neighbors = {
 		north = {}, -- dirId = 1 (index 0 in C++)
-		east = {},  -- dirId = 2 (index 1 in C++)
+		east = {}, -- dirId = 2 (index 1 in C++)
 		south = {}, -- dirId = 3 (index 2 in C++)
-		west = {},  -- dirId = 4 (index 3 in C++)
+		west = {}, -- dirId = 4 (index 3 in C++)
 	}
 
 	if not area.c then
@@ -71,34 +71,30 @@ local function getDirectionCorners(area, direction)
 end
 
 -- Check if point lies on neighbor's facing boundary using shared axis
--- Returns proximity score: 0.99 if on edge, 1.0 if within tolerance, 0 if outside
-local function pointLiesOnNeighborBorder(point, neighbor, direction)
+-- Returns: proximity score (0.99 if at edge, 1.0 if perfectly within), and the neighbor
+local function checkPointOnNeighborBoundary(point, neighbor, direction)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
-		return 0
+		return 0, nil
 	end
 
-	local tolerance = 1.0
+	local tolerance = 2.0 -- Increased to handle minor nav mesh misalignments
 
-	-- Determine shared axis and get neighbor's edge bounds on that axis
+	-- Determine shared axis and get neighbor's facing edge bounds
 	local axis, corner1, corner2
 	if direction == "north" then
-		-- North/South share X axis, neighbor's south boundary
 		axis = "x"
-		corner1, corner2 = neighbor.sw, neighbor.se
+		corner1, corner2 = neighbor.sw, neighbor.se -- Neighbor's south boundary
 	elseif direction == "south" then
-		-- North/South share X axis, neighbor's north boundary
 		axis = "x"
-		corner1, corner2 = neighbor.nw, neighbor.ne
+		corner1, corner2 = neighbor.nw, neighbor.ne -- Neighbor's north boundary
 	elseif direction == "east" then
-		-- East/West share Y axis, neighbor's west boundary
 		axis = "y"
-		corner1, corner2 = neighbor.sw, neighbor.nw
+		corner1, corner2 = neighbor.sw, neighbor.nw -- Neighbor's west boundary
 	elseif direction == "west" then
-		-- East/West share Y axis, neighbor's east boundary
 		axis = "y"
-		corner1, corner2 = neighbor.se, neighbor.ne
+		corner1, corner2 = neighbor.se, neighbor.ne -- Neighbor's east boundary
 	else
-		return 0
+		return 0, nil
 	end
 
 	-- Get bounds on shared axis
@@ -106,20 +102,49 @@ local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	local maxCoord = math.max(corner1[axis], corner2[axis])
 	local pointCoord = point[axis]
 
-	-- Check if point lies within bounds on shared axis
+	-- Outside bounds entirely
 	if pointCoord < minCoord - tolerance or pointCoord > maxCoord + tolerance then
-		return 0 -- Outside bounds
+		return 0, nil
 	end
 
-	-- Check if point is at edge (near min or max)
+	-- Check if at edge (near min or max boundary)
 	local distFromMin = math.abs(pointCoord - minCoord)
 	local distFromMax = math.abs(pointCoord - maxCoord)
 
 	if distFromMin < tolerance or distFromMax < tolerance then
-		return 0.99 -- On edge
+		return 0.99, neighbor -- At edge
 	else
-		return 1.0 -- Within bounds
+		return 1.0, neighbor -- Perfectly within
 	end
+end
+
+-- Get corner type and its two adjacent directions
+-- Returns: dir1, dir2 (the two directions adjacent to this corner)
+local function getCornerDirections(area, corner)
+	if corner == area.nw then
+		return "north", "west"
+	elseif corner == area.ne then
+		return "north", "east"
+	elseif corner == area.se then
+		return "south", "east"
+	elseif corner == area.sw then
+		return "south", "west"
+	end
+	return nil, nil
+end
+
+-- Get diagonal direction from two adjacent directions
+local function getDiagonalDirection(dir1, dir2)
+	if (dir1 == "north" and dir2 == "east") or (dir1 == "east" and dir2 == "north") then
+		return "north", "east" -- NE diagonal
+	elseif (dir1 == "north" and dir2 == "west") or (dir1 == "west" and dir2 == "north") then
+		return "north", "west" -- NW diagonal
+	elseif (dir1 == "south" and dir2 == "east") or (dir1 == "east" and dir2 == "south") then
+		return "south", "east" -- SE diagonal
+	elseif (dir1 == "south" and dir2 == "west") or (dir1 == "west" and dir2 == "south") then
+		return "south", "west" -- SW diagonal
+	end
+	return nil, nil
 end
 
 function WallCornerDetector.DetectWallCorners()
@@ -156,65 +181,126 @@ function WallCornerDetector.DetectWallCorners()
 				)
 			end
 
-			-- Check all 4 directions
-			for direction, dirNeighbors in pairs(neighbors) do
-				local corner1, corner2 = getDirectionCorners(area, direction)
-				if corner1 and corner2 then
-					-- Check both corners of this direction
-					for _, corner in ipairs({ corner1, corner2 }) do
-						table.insert(area.allCorners, corner)
-						allCornerCount = allCornerCount + 1
+			-- Check all 4 corners individually
+			local corners = { area.nw, area.ne, area.se, area.sw }
+			for _, corner in ipairs(corners) do
+				table.insert(area.allCorners, corner)
+				allCornerCount = allCornerCount + 1
 
-						-- Calculate proximity score: sum of all neighbor border scores
-						-- 0.99 = on edge, 1.0 = within tolerance
-						local proximityScore = 0
-						for _, neighbor in ipairs(neighbors.north) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "north")
-						end
-						for _, neighbor in ipairs(neighbors.south) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "south")
-						end
-						for _, neighbor in ipairs(neighbors.east) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "east")
-						end
-						for _, neighbor in ipairs(neighbors.west) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "west")
-						end
+				-- Get the two adjacent directions for this corner
+				local dir1, dir2 = getCornerDirections(area, corner)
+				if not dir1 or not dir2 then
+					goto continue_corner
+				end
 
-						-- Debug: log proximity scores for first few corners
-						if allCornerCount <= 10 then
-							Log:Debug(
-								"Corner at (%.1f,%.1f,%.1f) in direction %s has %.2f proximity score",
-								corner.x,
-								corner.y,
-								corner.z,
-								direction,
-								proximityScore
-							)
-						end
+				-- FAST PATH: Check if either adjacent direction is empty
+				local hasDir1 = neighbors[dir1] and #neighbors[dir1] > 0
+				local hasDir2 = neighbors[dir2] and #neighbors[dir2] > 0
 
-						-- Classification:
-						-- < 1.99 = outer corner (wall corner)
-						-- >= 1.99 = inner corner (fully surrounded)
-						local cornerType = "not_wall"
-						if proximityScore < 1.99 then
-							cornerType = "wall"
-							table.insert(area.wallCorners, corner) -- Mark as wall corner
-							wallCornerCount = wallCornerCount + 1
-						end
+				if not hasDir1 or not hasDir2 then
+					-- Corner is exposed (no neighbors on at least one side)
+					table.insert(area.wallCorners, corner)
+					wallCornerCount = wallCornerCount + 1
+					goto continue_corner
+				end
 
-						-- Store corner classification for debugging
-						if not area.cornerTypes then
-							area.cornerTypes = {}
+				-- COMPLEX PATH: Both directions have neighbors
+				-- Calculate proximity score from neighbors on both adjacent sides
+				local proximityScore = 0
+				local neighborDir1 = nil -- Track which neighbor contributed from dir1
+				local neighborDir2 = nil -- Track which neighbor contributed from dir2
+
+				-- Check dir1 neighbors
+				for _, neighbor in ipairs(neighbors[dir1]) do
+					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir1)
+					if score > 0 then
+						proximityScore = proximityScore + score
+						if not neighborDir1 then
+							neighborDir1 = contrib -- Track first contributor
 						end
-						table.insert(area.cornerTypes, {
-							pos = corner,
-							type = cornerType,
-							proximityScore = proximityScore,
-							direction = direction,
-						})
 					end
 				end
+
+				-- Check dir2 neighbors
+				for _, neighbor in ipairs(neighbors[dir2]) do
+					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir2)
+					if score > 0 then
+						proximityScore = proximityScore + score
+						if not neighborDir2 then
+							neighborDir2 = contrib -- Track first contributor
+						end
+					end
+				end
+
+				-- Classification based on proximity score:
+				-- >= 2.0: Definitely inner corner (surrounded)
+				-- 1.99: Need validation (might be concave)
+				-- 1.98: Concave corner - do diagonal validation
+				-- < 1.98: Wall corner
+
+				local isWallCorner = false
+				local reason = ""
+
+				if proximityScore >= 2.0 then
+					-- Perfectly surrounded, definitely inner corner
+					isWallCorner = false
+					reason = "surrounded"
+				elseif proximityScore >= 1.99 then
+					-- Very close to surrounded, assume inner corner
+					isWallCorner = false
+					reason = "almost_surrounded"
+				elseif proximityScore == 1.98 then
+					-- Concave corner case - do diagonal validation
+					-- Check if diagonal neighbor exists and covers this corner
+					local diagonalFound = false
+
+					if neighborDir1 and neighborDir1.c and neighborDir2 then
+						-- Get neighbors of neighborDir1 in dir2 direction
+						local diagDir1, diagDir2 = getDiagonalDirection(dir1, dir2)
+						if diagDir1 and diagDir2 then
+							-- Check neighborDir1's connections in dir2 direction
+							for dirId, dirData in pairs(neighborDir1.c) do
+								if dirData.connections then
+									for _, conn in ipairs(dirData.connections) do
+										local connId = (type(conn) == "table") and conn.node or conn
+										local diagNeighbor = nodes[connId]
+										if diagNeighbor then
+											-- Check if our corner lies on this diagonal neighbor
+											local score1 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir1)
+											local score2 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir2)
+											if score1 > 0 or score2 > 0 then
+												diagonalFound = true
+												break
+											end
+										end
+									end
+								end
+								if diagonalFound then
+									break
+								end
+							end
+						end
+					end
+
+					if diagonalFound then
+						isWallCorner = false -- Part of diagonal group, inner corner
+						reason = "diagonal_group"
+					else
+						isWallCorner = true -- Concave wall corner
+						reason = "concave"
+					end
+				else
+					-- Score < 1.98, definitely a wall corner
+					isWallCorner = true
+					reason = "low_score"
+				end
+
+				if isWallCorner then
+					table.insert(area.wallCorners, corner)
+					wallCornerCount = wallCornerCount + 1
+				end
+
+				::continue_corner::
 			end
 		end
 	end

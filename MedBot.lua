@@ -3573,9 +3573,9 @@ local Log = Common.Log.new("WallCornerDetector")
 local function groupNeighborsByDirection(area, nodes)
 	local neighbors = {
 		north = {}, -- dirId = 1 (index 0 in C++)
-		east = {},  -- dirId = 2 (index 1 in C++)
+		east = {}, -- dirId = 2 (index 1 in C++)
 		south = {}, -- dirId = 3 (index 2 in C++)
-		west = {},  -- dirId = 4 (index 3 in C++)
+		west = {}, -- dirId = 4 (index 3 in C++)
 	}
 
 	if not area.c then
@@ -3630,34 +3630,30 @@ local function getDirectionCorners(area, direction)
 end
 
 -- Check if point lies on neighbor's facing boundary using shared axis
--- Returns proximity score: 0.99 if on edge, 1.0 if within tolerance, 0 if outside
-local function pointLiesOnNeighborBorder(point, neighbor, direction)
+-- Returns: proximity score (0.99 if at edge, 1.0 if perfectly within), and the neighbor
+local function checkPointOnNeighborBoundary(point, neighbor, direction)
 	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
-		return 0
+		return 0, nil
 	end
 
-	local tolerance = 1.0
+	local tolerance = 2.0 -- Increased to handle minor nav mesh misalignments
 
-	-- Determine shared axis and get neighbor's edge bounds on that axis
+	-- Determine shared axis and get neighbor's facing edge bounds
 	local axis, corner1, corner2
 	if direction == "north" then
-		-- North/South share X axis, neighbor's south boundary
 		axis = "x"
-		corner1, corner2 = neighbor.sw, neighbor.se
+		corner1, corner2 = neighbor.sw, neighbor.se -- Neighbor's south boundary
 	elseif direction == "south" then
-		-- North/South share X axis, neighbor's north boundary
 		axis = "x"
-		corner1, corner2 = neighbor.nw, neighbor.ne
+		corner1, corner2 = neighbor.nw, neighbor.ne -- Neighbor's north boundary
 	elseif direction == "east" then
-		-- East/West share Y axis, neighbor's west boundary
 		axis = "y"
-		corner1, corner2 = neighbor.sw, neighbor.nw
+		corner1, corner2 = neighbor.sw, neighbor.nw -- Neighbor's west boundary
 	elseif direction == "west" then
-		-- East/West share Y axis, neighbor's east boundary
 		axis = "y"
-		corner1, corner2 = neighbor.se, neighbor.ne
+		corner1, corner2 = neighbor.se, neighbor.ne -- Neighbor's east boundary
 	else
-		return 0
+		return 0, nil
 	end
 
 	-- Get bounds on shared axis
@@ -3665,20 +3661,49 @@ local function pointLiesOnNeighborBorder(point, neighbor, direction)
 	local maxCoord = math.max(corner1[axis], corner2[axis])
 	local pointCoord = point[axis]
 
-	-- Check if point lies within bounds on shared axis
+	-- Outside bounds entirely
 	if pointCoord < minCoord - tolerance or pointCoord > maxCoord + tolerance then
-		return 0 -- Outside bounds
+		return 0, nil
 	end
 
-	-- Check if point is at edge (near min or max)
+	-- Check if at edge (near min or max boundary)
 	local distFromMin = math.abs(pointCoord - minCoord)
 	local distFromMax = math.abs(pointCoord - maxCoord)
 
 	if distFromMin < tolerance or distFromMax < tolerance then
-		return 0.99 -- On edge
+		return 0.99, neighbor -- At edge
 	else
-		return 1.0 -- Within bounds
+		return 1.0, neighbor -- Perfectly within
 	end
+end
+
+-- Get corner type and its two adjacent directions
+-- Returns: dir1, dir2 (the two directions adjacent to this corner)
+local function getCornerDirections(area, corner)
+	if corner == area.nw then
+		return "north", "west"
+	elseif corner == area.ne then
+		return "north", "east"
+	elseif corner == area.se then
+		return "south", "east"
+	elseif corner == area.sw then
+		return "south", "west"
+	end
+	return nil, nil
+end
+
+-- Get diagonal direction from two adjacent directions
+local function getDiagonalDirection(dir1, dir2)
+	if (dir1 == "north" and dir2 == "east") or (dir1 == "east" and dir2 == "north") then
+		return "north", "east" -- NE diagonal
+	elseif (dir1 == "north" and dir2 == "west") or (dir1 == "west" and dir2 == "north") then
+		return "north", "west" -- NW diagonal
+	elseif (dir1 == "south" and dir2 == "east") or (dir1 == "east" and dir2 == "south") then
+		return "south", "east" -- SE diagonal
+	elseif (dir1 == "south" and dir2 == "west") or (dir1 == "west" and dir2 == "south") then
+		return "south", "west" -- SW diagonal
+	end
+	return nil, nil
 end
 
 function WallCornerDetector.DetectWallCorners()
@@ -3715,65 +3740,126 @@ function WallCornerDetector.DetectWallCorners()
 				)
 			end
 
-			-- Check all 4 directions
-			for direction, dirNeighbors in pairs(neighbors) do
-				local corner1, corner2 = getDirectionCorners(area, direction)
-				if corner1 and corner2 then
-					-- Check both corners of this direction
-					for _, corner in ipairs({ corner1, corner2 }) do
-						table.insert(area.allCorners, corner)
-						allCornerCount = allCornerCount + 1
+			-- Check all 4 corners individually
+			local corners = { area.nw, area.ne, area.se, area.sw }
+			for _, corner in ipairs(corners) do
+				table.insert(area.allCorners, corner)
+				allCornerCount = allCornerCount + 1
 
-						-- Calculate proximity score: sum of all neighbor border scores
-						-- 0.99 = on edge, 1.0 = within tolerance
-						local proximityScore = 0
-						for _, neighbor in ipairs(neighbors.north) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "north")
-						end
-						for _, neighbor in ipairs(neighbors.south) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "south")
-						end
-						for _, neighbor in ipairs(neighbors.east) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "east")
-						end
-						for _, neighbor in ipairs(neighbors.west) do
-							proximityScore = proximityScore + pointLiesOnNeighborBorder(corner, neighbor, "west")
-						end
+				-- Get the two adjacent directions for this corner
+				local dir1, dir2 = getCornerDirections(area, corner)
+				if not dir1 or not dir2 then
+					goto continue_corner
+				end
 
-						-- Debug: log proximity scores for first few corners
-						if allCornerCount <= 10 then
-							Log:Debug(
-								"Corner at (%.1f,%.1f,%.1f) in direction %s has %.2f proximity score",
-								corner.x,
-								corner.y,
-								corner.z,
-								direction,
-								proximityScore
-							)
-						end
+				-- FAST PATH: Check if either adjacent direction is empty
+				local hasDir1 = neighbors[dir1] and #neighbors[dir1] > 0
+				local hasDir2 = neighbors[dir2] and #neighbors[dir2] > 0
 
-						-- Classification:
-						-- < 1.99 = outer corner (wall corner)
-						-- >= 1.99 = inner corner (fully surrounded)
-						local cornerType = "not_wall"
-						if proximityScore < 1.99 then
-							cornerType = "wall"
-							table.insert(area.wallCorners, corner) -- Mark as wall corner
-							wallCornerCount = wallCornerCount + 1
-						end
+				if not hasDir1 or not hasDir2 then
+					-- Corner is exposed (no neighbors on at least one side)
+					table.insert(area.wallCorners, corner)
+					wallCornerCount = wallCornerCount + 1
+					goto continue_corner
+				end
 
-						-- Store corner classification for debugging
-						if not area.cornerTypes then
-							area.cornerTypes = {}
+				-- COMPLEX PATH: Both directions have neighbors
+				-- Calculate proximity score from neighbors on both adjacent sides
+				local proximityScore = 0
+				local neighborDir1 = nil -- Track which neighbor contributed from dir1
+				local neighborDir2 = nil -- Track which neighbor contributed from dir2
+
+				-- Check dir1 neighbors
+				for _, neighbor in ipairs(neighbors[dir1]) do
+					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir1)
+					if score > 0 then
+						proximityScore = proximityScore + score
+						if not neighborDir1 then
+							neighborDir1 = contrib -- Track first contributor
 						end
-						table.insert(area.cornerTypes, {
-							pos = corner,
-							type = cornerType,
-							proximityScore = proximityScore,
-							direction = direction,
-						})
 					end
 				end
+
+				-- Check dir2 neighbors
+				for _, neighbor in ipairs(neighbors[dir2]) do
+					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir2)
+					if score > 0 then
+						proximityScore = proximityScore + score
+						if not neighborDir2 then
+							neighborDir2 = contrib -- Track first contributor
+						end
+					end
+				end
+
+				-- Classification based on proximity score:
+				-- >= 2.0: Definitely inner corner (surrounded)
+				-- 1.99: Need validation (might be concave)
+				-- 1.98: Concave corner - do diagonal validation
+				-- < 1.98: Wall corner
+
+				local isWallCorner = false
+				local reason = ""
+
+				if proximityScore >= 2.0 then
+					-- Perfectly surrounded, definitely inner corner
+					isWallCorner = false
+					reason = "surrounded"
+				elseif proximityScore >= 1.99 then
+					-- Very close to surrounded, assume inner corner
+					isWallCorner = false
+					reason = "almost_surrounded"
+				elseif proximityScore == 1.98 then
+					-- Concave corner case - do diagonal validation
+					-- Check if diagonal neighbor exists and covers this corner
+					local diagonalFound = false
+
+					if neighborDir1 and neighborDir1.c and neighborDir2 then
+						-- Get neighbors of neighborDir1 in dir2 direction
+						local diagDir1, diagDir2 = getDiagonalDirection(dir1, dir2)
+						if diagDir1 and diagDir2 then
+							-- Check neighborDir1's connections in dir2 direction
+							for dirId, dirData in pairs(neighborDir1.c) do
+								if dirData.connections then
+									for _, conn in ipairs(dirData.connections) do
+										local connId = (type(conn) == "table") and conn.node or conn
+										local diagNeighbor = nodes[connId]
+										if diagNeighbor then
+											-- Check if our corner lies on this diagonal neighbor
+											local score1 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir1)
+											local score2 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir2)
+											if score1 > 0 or score2 > 0 then
+												diagonalFound = true
+												break
+											end
+										end
+									end
+								end
+								if diagonalFound then
+									break
+								end
+							end
+						end
+					end
+
+					if diagonalFound then
+						isWallCorner = false -- Part of diagonal group, inner corner
+						reason = "diagonal_group"
+					else
+						isWallCorner = true -- Concave wall corner
+						reason = "concave"
+					end
+				else
+					-- Score < 1.98, definitely a wall corner
+					isWallCorner = true
+					reason = "low_score"
+				end
+
+				if isWallCorner then
+					table.insert(area.wallCorners, corner)
+					wallCornerCount = wallCornerCount + 1
+				end
+
+				::continue_corner::
 			end
 		end
 	end
@@ -3833,11 +3919,19 @@ end
 -- Convert dirId (nav mesh NESW index) to direction vector
 -- Source Engine format: connectionData[4] in NESW order
 local function dirIdToVector(dirId)
-	if dirId == 1 then return 0, -1 end  -- North
-	if dirId == 2 then return 1, 0 end   -- East
-	if dirId == 3 then return 0, 1 end   -- South
-	if dirId == 4 then return -1, 0 end  -- West
-	return 0, 0  -- Invalid
+	if dirId == 1 then
+		return 0, -1
+	end -- North
+	if dirId == 2 then
+		return 1, 0
+	end -- East
+	if dirId == 3 then
+		return 0, 1
+	end -- South
+	if dirId == 4 then
+		return -1, 0
+	end -- West
+	return 0, 0 -- Invalid
 end
 
 function ConnectionBuilder.NormalizeConnections()
@@ -3858,36 +3952,6 @@ function ConnectionBuilder.NormalizeConnections()
 		end
 	end
 	Log:Info("Normalized all connections to enriched format")
-end
-
--- Determine direction with primary and secondary axis options
-local function determineDirection(fromPos, toPos)
-	local dx = toPos.x - fromPos.x
-	local dy = toPos.y - fromPos.y
-	local absDx = math.abs(dx)
-	local absDy = math.abs(dy)
-
-	-- Primary direction based on larger axis
-	local primaryDirX, primaryDirY
-	local secondaryDirX, secondaryDirY
-
-	if absDx >= absDy then
-		-- Primary: X axis (East/West)
-		primaryDirX = (dx > 0) and 1 or -1
-		primaryDirY = 0
-		-- Secondary: Y axis (North/South)
-		secondaryDirX = 0
-		secondaryDirY = (dy > 0) and 1 or -1
-	else
-		-- Primary: Y axis (North/South)
-		primaryDirX = 0
-		primaryDirY = (dy > 0) and 1 or -1
-		-- Secondary: X axis (East/West)
-		secondaryDirX = (dx > 0) and 1 or -1
-		secondaryDirY = 0
-	end
-
-	return primaryDirX, primaryDirY, secondaryDirX, secondaryDirY
 end
 
 local function getFacingEdgeCorners(area, dirX, dirY, _)
@@ -4027,265 +4091,6 @@ local function calculateDoorOwner(a0, a1, b0, b1, areaA, areaB)
 	else
 		return "TIE", math.max(areaA.id, areaB.id)
 	end
-end
-
--- Get closest corner from neighbor's facing edge to area center
-local function getClosestNeighborCorner(neighbor, dirX, dirY, areaCenter)
-	local b0, b1 = getFacingEdgeCorners(neighbor, -dirX, -dirY, areaCenter)
-	if not (b0 and b1) then
-		return nil
-	end
-
-	-- Return corner closest to area center
-	local dist0 = (b0 - areaCenter):Length2D()
-	local dist1 = (b1 - areaCenter):Length2D()
-	return (dist0 < dist1) and b0 or b1
-end
-
--- Check if corner lies on area boundary for given direction
-local function cornerLiesOnBoundary(corner, area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, corner)
-	if not (a0 and a1) then
-		return false, 0
-	end
-
-	-- Determine shared axis
-	local axis
-	if dirX ~= 0 then
-		axis = "y" -- East/West → Y varies
-	else
-		axis = "x" -- North/South → X varies
-	end
-
-	-- Check if corner lies within boundary range on shared axis
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local cornerCoord = corner[axis]
-
-	local tolerance = 1.0
-	if cornerCoord >= aMin - tolerance and cornerCoord <= aMax + tolerance then
-		-- Corner is on boundary, calculate distance from boundary edge
-		local distFromMin = math.abs(cornerCoord - aMin)
-		local distFromMax = math.abs(cornerCoord - aMax)
-		return true, math.min(distFromMin, distFromMax)
-	end
-
-	return false, math.huge
-end
-
--- Get edge length for an area in a given direction
-local function getEdgeLength(area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, area.pos)
-	if not (a0 and a1) then
-		return math.huge
-	end
-	return (a1 - a0):Length2D()
-end
-
--- Get area diagonal size (min to max corner distance)
-local function getAreaDiagonal(area)
-	if not (area.nw and area.ne and area.se and area.sw) then
-		return 0
-	end
-
-	local minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
-	local maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
-	local minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
-	local maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
-
-	local dx = maxX - minX
-	local dy = maxY - minY
-	return math.sqrt(dx * dx + dy * dy)
-end
-
--- Get 3 closest corners from smaller area to bigger area center, sorted by distance
-local function get3ClosestCorners(area, centerPos)
-	if not (area.nw and area.ne and area.se and area.sw) then
-		return nil, nil, nil
-	end
-
-	local corners = { area.nw, area.ne, area.se, area.sw }
-	local distances = {}
-
-	for i, corner in ipairs(corners) do
-		local dist = (corner - centerPos):Length2D()
-		table.insert(distances, { corner = corner, dist = dist, index = i })
-	end
-
-	-- Sort by distance
-	table.sort(distances, function(a, b)
-		return a.dist < b.dist
-	end)
-
-	return distances[1].corner, distances[2].corner, distances[3].corner
-end
-
--- Check if point lies within edge bounds on shared axis
-local function pointWithinEdgeBounds(point, area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, point)
-	if not (a0 and a1) then
-		return false
-	end
-
-	local axis = (dirX ~= 0) and "y" or "x"
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local pointCoord = point[axis]
-
-	local tolerance = 1.0
-	return pointCoord >= aMin - tolerance and pointCoord <= aMax + tolerance
-end
-
--- Calculate distance from point to edge boundary on shared axis
-local function distanceFromEdgeBoundary(point, area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, point)
-	if not (a0 and a1) then
-		return math.huge
-	end
-
-	local axis = (dirX ~= 0) and "y" or "x"
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local pointCoord = point[axis]
-
-	-- Return smallest distance to boundary edge
-	if pointCoord < aMin then
-		return math.abs(pointCoord - aMin)
-	elseif pointCoord > aMax then
-		return math.abs(pointCoord - aMax)
-	else
-		return 0 -- Point is within bounds
-	end
-end
-
--- Test guess direction from perspective of BIGGER edge (checking if smaller edge lies on it)
-local function testGuessDirection(biggerEdgeArea, smallerEdgeArea, dirX, dirY)
-	-- Get 3 closest corners from smaller edge area to bigger edge area center
-	local middleCorner, secondClosest, thirdClosest = get3ClosestCorners(smallerEdgeArea, biggerEdgeArea.pos)
-	if not (middleCorner and secondClosest and thirdClosest) then
-		return false, nil, nil, nil
-	end
-
-	-- Check if middle corner lies on boundary
-	local middleOnBoundary = pointWithinEdgeBounds(middleCorner, biggerEdgeArea, dirX, dirY)
-	if not middleOnBoundary then
-		return false, middleCorner, secondClosest, thirdClosest
-	end
-
-	-- Get shared axis
-	local axis = (dirX ~= 0) and "y" or "x"
-
-	-- Check if 2nd closest is parallel to edge (shares same axis position as middle)
-	local middleCoord = middleCorner[axis]
-	local secondCoord = secondClosest[axis]
-	local secondParallel = math.abs(secondCoord - middleCoord) < 1.0
-
-	if not secondParallel then
-		-- 2nd closest is NOT parallel, check if it lies on boundary
-		if pointWithinEdgeBounds(secondClosest, biggerEdgeArea, dirX, dirY) then
-			return true, nil, nil, nil
-		end
-	end
-
-	-- Also check 3rd closest if 2nd was parallel
-	local thirdCoord = thirdClosest[axis]
-	local thirdParallel = math.abs(thirdCoord - middleCoord) < 1.0
-
-	if not thirdParallel then
-		if pointWithinEdgeBounds(thirdClosest, biggerEdgeArea, dirX, dirY) then
-			return true, nil, nil, nil
-		end
-	end
-
-	return false, middleCorner, secondClosest, thirdClosest
-end
-
--- Calculate edge overlap between two areas along a specific axis
-local function calculateEdgeOverlap(areaA, areaB, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
-	local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
-
-	if not (a0 and a1 and b0 and b1) then
-		return 0
-	end
-
-	local axis = (dirX ~= 0) and "y" or "x"
-
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local bMin = math.min(b0[axis], b1[axis])
-	local bMax = math.max(b0[axis], b1[axis])
-
-	-- Calculate overlap
-	local overlapMin = math.max(aMin, bMin)
-	local overlapMax = math.min(aMax, bMax)
-
-	if overlapMax > overlapMin then
-		return overlapMax - overlapMin
-	end
-
-	return 0
-end
-
--- Final fallback: compare edge overlaps to determine shared edge
-local function resolveStalemateByOverlap(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
-	-- Calculate overlap for both directions
-	local primaryOverlap = calculateEdgeOverlap(areaA, areaB, primaryDirX, primaryDirY)
-	local secondaryOverlap = calculateEdgeOverlap(areaA, areaB, secondaryDirX, secondaryDirY)
-
-	-- Pick direction with most overlap (favor primary in tie)
-	if secondaryOverlap > primaryOverlap then
-		return secondaryDirX, secondaryDirY
-	end
-	return primaryDirX, primaryDirY
-end
-
--- Validate shared edge direction from BIGGER edge perspective with fallback logic
-local function validateSharedEdge(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
-	-- Get edge lengths for both directions
-	local edgeLengthA_primary = getEdgeLength(areaA, primaryDirX, primaryDirY)
-	local edgeLengthB_primary = getEdgeLength(areaB, -primaryDirX, -primaryDirY)
-
-	local edgeLengthA_secondary = getEdgeLength(areaA, secondaryDirX, secondaryDirY)
-	local edgeLengthB_secondary = getEdgeLength(areaB, -secondaryDirX, -secondaryDirY)
-
-	-- Only test from BIGGER edge perspective for each direction
-	-- Skip if our edge is smaller (let the bigger edge handle it)
-	local primarySuccess, primaryMiddle, primarySecond, primaryThird = false, nil, nil, nil
-	local secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird = false, nil, nil, nil
-
-	-- Test PRIMARY guess from bigger edge perspective
-	if edgeLengthA_primary >= edgeLengthB_primary then
-		-- areaA has bigger primary edge
-		primarySuccess, primaryMiddle, primarySecond, primaryThird =
-			testGuessDirection(areaA, areaB, primaryDirX, primaryDirY)
-	elseif edgeLengthB_primary > edgeLengthA_primary then
-		-- areaB has bigger primary edge
-		primarySuccess, primaryMiddle, primarySecond, primaryThird =
-			testGuessDirection(areaB, areaA, -primaryDirX, -primaryDirY)
-	end
-
-	if primarySuccess then
-		return primaryDirX, primaryDirY
-	end
-
-	-- Test SECONDARY guess from bigger edge perspective
-	if edgeLengthA_secondary >= edgeLengthB_secondary then
-		-- areaA has bigger secondary edge
-		secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird =
-			testGuessDirection(areaA, areaB, secondaryDirX, secondaryDirY)
-	elseif edgeLengthB_secondary > edgeLengthA_secondary then
-		-- areaB has bigger secondary edge
-		secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird =
-			testGuessDirection(areaB, areaA, -secondaryDirX, -secondaryDirY)
-	end
-
-	if secondarySuccess then
-		return secondaryDirX, secondaryDirY
-	end
-
-	-- FALLBACK 3: Compare edge overlaps (most expensive but guaranteed to work)
-	return resolveStalemateByOverlap(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
 end
 
 -- Calculate edge overlap and door geometry
@@ -4593,32 +4398,15 @@ function ConnectionBuilder.BuildDoorsForConnections()
 									local doorPrefix = (nodeId < targetId) and (nodeId .. "_" .. targetId)
 										or (targetId .. "_" .. nodeId)
 
-									-- Calculate which SIDE of area the door is on (based on position, not connection direction)
-									local function getDoorSide(doorPos, areaPos)
-										local dx = doorPos.x - areaPos.x
-										local dy = doorPos.y - areaPos.y
-
-										-- Determine which axis has larger difference
-										if math.abs(dx) > math.abs(dy) then
-											-- Door is on East or West side
-											return (dx > 0) and 4 or 8 -- East=4, West=8
-										else
-											-- Door is on North or South side
-											return (dy > 0) and 2 or 1 -- South=2, North=1
-										end
-									end
-
 									-- Create door nodes with bidirectional connections (if applicable)
 									if door.left then
 										local doorId = doorPrefix .. "_left"
-										local doorSide = getDoorSide(door.left, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.left,
 											isDoor = true,
-											areaId = nodeId, -- Store both area associations
+											areaId = nodeId,
 											targetAreaId = targetId,
-											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
 												[fwdDir] = { connections = { targetId }, count = 1 },
 											},
@@ -4632,14 +4420,12 @@ function ConnectionBuilder.BuildDoorsForConnections()
 
 									if door.middle then
 										local doorId = doorPrefix .. "_middle"
-										local doorSide = getDoorSide(door.middle, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.middle,
 											isDoor = true,
 											areaId = nodeId,
 											targetAreaId = targetId,
-											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
 												[fwdDir] = { connections = { targetId }, count = 1 },
 											},
@@ -4652,14 +4438,12 @@ function ConnectionBuilder.BuildDoorsForConnections()
 
 									if door.right then
 										local doorId = doorPrefix .. "_right"
-										local doorSide = getDoorSide(door.right, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.right,
 											isDoor = true,
 											areaId = nodeId,
 											targetAreaId = targetId,
-											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
 												[fwdDir] = { connections = { targetId }, count = 1 },
 											},
@@ -4737,15 +4521,16 @@ function ConnectionBuilder.BuildDoorsForConnections()
 	Log:Info("Built " .. doorsBuilt .. " door nodes for connections")
 end
 
--- Determine spatial direction between two positions
+-- Determine spatial direction between two positions using NESW indices
+-- Returns dirId (1=North, 2=East, 3=South, 4=West) compatible with nav mesh format
 local function calculateSpatialDirection(fromPos, toPos)
 	local dx = toPos.x - fromPos.x
 	local dy = toPos.y - fromPos.y
 
 	if math.abs(dx) >= math.abs(dy) then
-		return (dx > 0) and 4 or 8 -- East or West
+		return (dx > 0) and 2 or 4 -- East=2, West=4
 	else
-		return (dy > 0) and 2 or 1 -- South or North
+		return (dy > 0) and 3 or 1 -- South=3, North=1
 	end
 end
 

@@ -24,11 +24,19 @@ end
 -- Convert dirId (nav mesh NESW index) to direction vector
 -- Source Engine format: connectionData[4] in NESW order
 local function dirIdToVector(dirId)
-	if dirId == 1 then return 0, -1 end  -- North
-	if dirId == 2 then return 1, 0 end   -- East
-	if dirId == 3 then return 0, 1 end   -- South
-	if dirId == 4 then return -1, 0 end  -- West
-	return 0, 0  -- Invalid
+	if dirId == 1 then
+		return 0, -1
+	end -- North
+	if dirId == 2 then
+		return 1, 0
+	end -- East
+	if dirId == 3 then
+		return 0, 1
+	end -- South
+	if dirId == 4 then
+		return -1, 0
+	end -- West
+	return 0, 0 -- Invalid
 end
 
 function ConnectionBuilder.NormalizeConnections()
@@ -49,36 +57,6 @@ function ConnectionBuilder.NormalizeConnections()
 		end
 	end
 	Log:Info("Normalized all connections to enriched format")
-end
-
--- Determine direction with primary and secondary axis options
-local function determineDirection(fromPos, toPos)
-	local dx = toPos.x - fromPos.x
-	local dy = toPos.y - fromPos.y
-	local absDx = math.abs(dx)
-	local absDy = math.abs(dy)
-
-	-- Primary direction based on larger axis
-	local primaryDirX, primaryDirY
-	local secondaryDirX, secondaryDirY
-
-	if absDx >= absDy then
-		-- Primary: X axis (East/West)
-		primaryDirX = (dx > 0) and 1 or -1
-		primaryDirY = 0
-		-- Secondary: Y axis (North/South)
-		secondaryDirX = 0
-		secondaryDirY = (dy > 0) and 1 or -1
-	else
-		-- Primary: Y axis (North/South)
-		primaryDirX = 0
-		primaryDirY = (dy > 0) and 1 or -1
-		-- Secondary: X axis (East/West)
-		secondaryDirX = (dx > 0) and 1 or -1
-		secondaryDirY = 0
-	end
-
-	return primaryDirX, primaryDirY, secondaryDirX, secondaryDirY
 end
 
 local function getFacingEdgeCorners(area, dirX, dirY, _)
@@ -218,265 +196,6 @@ local function calculateDoorOwner(a0, a1, b0, b1, areaA, areaB)
 	else
 		return "TIE", math.max(areaA.id, areaB.id)
 	end
-end
-
--- Get closest corner from neighbor's facing edge to area center
-local function getClosestNeighborCorner(neighbor, dirX, dirY, areaCenter)
-	local b0, b1 = getFacingEdgeCorners(neighbor, -dirX, -dirY, areaCenter)
-	if not (b0 and b1) then
-		return nil
-	end
-
-	-- Return corner closest to area center
-	local dist0 = (b0 - areaCenter):Length2D()
-	local dist1 = (b1 - areaCenter):Length2D()
-	return (dist0 < dist1) and b0 or b1
-end
-
--- Check if corner lies on area boundary for given direction
-local function cornerLiesOnBoundary(corner, area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, corner)
-	if not (a0 and a1) then
-		return false, 0
-	end
-
-	-- Determine shared axis
-	local axis
-	if dirX ~= 0 then
-		axis = "y" -- East/West → Y varies
-	else
-		axis = "x" -- North/South → X varies
-	end
-
-	-- Check if corner lies within boundary range on shared axis
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local cornerCoord = corner[axis]
-
-	local tolerance = 1.0
-	if cornerCoord >= aMin - tolerance and cornerCoord <= aMax + tolerance then
-		-- Corner is on boundary, calculate distance from boundary edge
-		local distFromMin = math.abs(cornerCoord - aMin)
-		local distFromMax = math.abs(cornerCoord - aMax)
-		return true, math.min(distFromMin, distFromMax)
-	end
-
-	return false, math.huge
-end
-
--- Get edge length for an area in a given direction
-local function getEdgeLength(area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, area.pos)
-	if not (a0 and a1) then
-		return math.huge
-	end
-	return (a1 - a0):Length2D()
-end
-
--- Get area diagonal size (min to max corner distance)
-local function getAreaDiagonal(area)
-	if not (area.nw and area.ne and area.se and area.sw) then
-		return 0
-	end
-
-	local minX = math.min(area.nw.x, area.ne.x, area.se.x, area.sw.x)
-	local maxX = math.max(area.nw.x, area.ne.x, area.se.x, area.sw.x)
-	local minY = math.min(area.nw.y, area.ne.y, area.se.y, area.sw.y)
-	local maxY = math.max(area.nw.y, area.ne.y, area.se.y, area.sw.y)
-
-	local dx = maxX - minX
-	local dy = maxY - minY
-	return math.sqrt(dx * dx + dy * dy)
-end
-
--- Get 3 closest corners from smaller area to bigger area center, sorted by distance
-local function get3ClosestCorners(area, centerPos)
-	if not (area.nw and area.ne and area.se and area.sw) then
-		return nil, nil, nil
-	end
-
-	local corners = { area.nw, area.ne, area.se, area.sw }
-	local distances = {}
-
-	for i, corner in ipairs(corners) do
-		local dist = (corner - centerPos):Length2D()
-		table.insert(distances, { corner = corner, dist = dist, index = i })
-	end
-
-	-- Sort by distance
-	table.sort(distances, function(a, b)
-		return a.dist < b.dist
-	end)
-
-	return distances[1].corner, distances[2].corner, distances[3].corner
-end
-
--- Check if point lies within edge bounds on shared axis
-local function pointWithinEdgeBounds(point, area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, point)
-	if not (a0 and a1) then
-		return false
-	end
-
-	local axis = (dirX ~= 0) and "y" or "x"
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local pointCoord = point[axis]
-
-	local tolerance = 1.0
-	return pointCoord >= aMin - tolerance and pointCoord <= aMax + tolerance
-end
-
--- Calculate distance from point to edge boundary on shared axis
-local function distanceFromEdgeBoundary(point, area, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(area, dirX, dirY, point)
-	if not (a0 and a1) then
-		return math.huge
-	end
-
-	local axis = (dirX ~= 0) and "y" or "x"
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local pointCoord = point[axis]
-
-	-- Return smallest distance to boundary edge
-	if pointCoord < aMin then
-		return math.abs(pointCoord - aMin)
-	elseif pointCoord > aMax then
-		return math.abs(pointCoord - aMax)
-	else
-		return 0 -- Point is within bounds
-	end
-end
-
--- Test guess direction from perspective of BIGGER edge (checking if smaller edge lies on it)
-local function testGuessDirection(biggerEdgeArea, smallerEdgeArea, dirX, dirY)
-	-- Get 3 closest corners from smaller edge area to bigger edge area center
-	local middleCorner, secondClosest, thirdClosest = get3ClosestCorners(smallerEdgeArea, biggerEdgeArea.pos)
-	if not (middleCorner and secondClosest and thirdClosest) then
-		return false, nil, nil, nil
-	end
-
-	-- Check if middle corner lies on boundary
-	local middleOnBoundary = pointWithinEdgeBounds(middleCorner, biggerEdgeArea, dirX, dirY)
-	if not middleOnBoundary then
-		return false, middleCorner, secondClosest, thirdClosest
-	end
-
-	-- Get shared axis
-	local axis = (dirX ~= 0) and "y" or "x"
-
-	-- Check if 2nd closest is parallel to edge (shares same axis position as middle)
-	local middleCoord = middleCorner[axis]
-	local secondCoord = secondClosest[axis]
-	local secondParallel = math.abs(secondCoord - middleCoord) < 1.0
-
-	if not secondParallel then
-		-- 2nd closest is NOT parallel, check if it lies on boundary
-		if pointWithinEdgeBounds(secondClosest, biggerEdgeArea, dirX, dirY) then
-			return true, nil, nil, nil
-		end
-	end
-
-	-- Also check 3rd closest if 2nd was parallel
-	local thirdCoord = thirdClosest[axis]
-	local thirdParallel = math.abs(thirdCoord - middleCoord) < 1.0
-
-	if not thirdParallel then
-		if pointWithinEdgeBounds(thirdClosest, biggerEdgeArea, dirX, dirY) then
-			return true, nil, nil, nil
-		end
-	end
-
-	return false, middleCorner, secondClosest, thirdClosest
-end
-
--- Calculate edge overlap between two areas along a specific axis
-local function calculateEdgeOverlap(areaA, areaB, dirX, dirY)
-	local a0, a1 = getFacingEdgeCorners(areaA, dirX, dirY, areaB.pos)
-	local b0, b1 = getFacingEdgeCorners(areaB, -dirX, -dirY, areaA.pos)
-
-	if not (a0 and a1 and b0 and b1) then
-		return 0
-	end
-
-	local axis = (dirX ~= 0) and "y" or "x"
-
-	local aMin = math.min(a0[axis], a1[axis])
-	local aMax = math.max(a0[axis], a1[axis])
-	local bMin = math.min(b0[axis], b1[axis])
-	local bMax = math.max(b0[axis], b1[axis])
-
-	-- Calculate overlap
-	local overlapMin = math.max(aMin, bMin)
-	local overlapMax = math.min(aMax, bMax)
-
-	if overlapMax > overlapMin then
-		return overlapMax - overlapMin
-	end
-
-	return 0
-end
-
--- Final fallback: compare edge overlaps to determine shared edge
-local function resolveStalemateByOverlap(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
-	-- Calculate overlap for both directions
-	local primaryOverlap = calculateEdgeOverlap(areaA, areaB, primaryDirX, primaryDirY)
-	local secondaryOverlap = calculateEdgeOverlap(areaA, areaB, secondaryDirX, secondaryDirY)
-
-	-- Pick direction with most overlap (favor primary in tie)
-	if secondaryOverlap > primaryOverlap then
-		return secondaryDirX, secondaryDirY
-	end
-	return primaryDirX, primaryDirY
-end
-
--- Validate shared edge direction from BIGGER edge perspective with fallback logic
-local function validateSharedEdge(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
-	-- Get edge lengths for both directions
-	local edgeLengthA_primary = getEdgeLength(areaA, primaryDirX, primaryDirY)
-	local edgeLengthB_primary = getEdgeLength(areaB, -primaryDirX, -primaryDirY)
-
-	local edgeLengthA_secondary = getEdgeLength(areaA, secondaryDirX, secondaryDirY)
-	local edgeLengthB_secondary = getEdgeLength(areaB, -secondaryDirX, -secondaryDirY)
-
-	-- Only test from BIGGER edge perspective for each direction
-	-- Skip if our edge is smaller (let the bigger edge handle it)
-	local primarySuccess, primaryMiddle, primarySecond, primaryThird = false, nil, nil, nil
-	local secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird = false, nil, nil, nil
-
-	-- Test PRIMARY guess from bigger edge perspective
-	if edgeLengthA_primary >= edgeLengthB_primary then
-		-- areaA has bigger primary edge
-		primarySuccess, primaryMiddle, primarySecond, primaryThird =
-			testGuessDirection(areaA, areaB, primaryDirX, primaryDirY)
-	elseif edgeLengthB_primary > edgeLengthA_primary then
-		-- areaB has bigger primary edge
-		primarySuccess, primaryMiddle, primarySecond, primaryThird =
-			testGuessDirection(areaB, areaA, -primaryDirX, -primaryDirY)
-	end
-
-	if primarySuccess then
-		return primaryDirX, primaryDirY
-	end
-
-	-- Test SECONDARY guess from bigger edge perspective
-	if edgeLengthA_secondary >= edgeLengthB_secondary then
-		-- areaA has bigger secondary edge
-		secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird =
-			testGuessDirection(areaA, areaB, secondaryDirX, secondaryDirY)
-	elseif edgeLengthB_secondary > edgeLengthA_secondary then
-		-- areaB has bigger secondary edge
-		secondarySuccess, secondaryMiddle, secondarySecond, secondaryThird =
-			testGuessDirection(areaB, areaA, -secondaryDirX, -secondaryDirY)
-	end
-
-	if secondarySuccess then
-		return secondaryDirX, secondaryDirY
-	end
-
-	-- FALLBACK 3: Compare edge overlaps (most expensive but guaranteed to work)
-	return resolveStalemateByOverlap(areaA, areaB, primaryDirX, primaryDirY, secondaryDirX, secondaryDirY)
 end
 
 -- Calculate edge overlap and door geometry
@@ -784,32 +503,15 @@ function ConnectionBuilder.BuildDoorsForConnections()
 									local doorPrefix = (nodeId < targetId) and (nodeId .. "_" .. targetId)
 										or (targetId .. "_" .. nodeId)
 
-									-- Calculate which SIDE of area the door is on (based on position, not connection direction)
-									local function getDoorSide(doorPos, areaPos)
-										local dx = doorPos.x - areaPos.x
-										local dy = doorPos.y - areaPos.y
-
-										-- Determine which axis has larger difference
-										if math.abs(dx) > math.abs(dy) then
-											-- Door is on East or West side
-											return (dx > 0) and 4 or 8 -- East=4, West=8
-										else
-											-- Door is on North or South side
-											return (dy > 0) and 2 or 1 -- South=2, North=1
-										end
-									end
-
 									-- Create door nodes with bidirectional connections (if applicable)
 									if door.left then
 										local doorId = doorPrefix .. "_left"
-										local doorSide = getDoorSide(door.left, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.left,
 											isDoor = true,
-											areaId = nodeId, -- Store both area associations
+											areaId = nodeId,
 											targetAreaId = targetId,
-											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
 												[fwdDir] = { connections = { targetId }, count = 1 },
 											},
@@ -823,14 +525,12 @@ function ConnectionBuilder.BuildDoorsForConnections()
 
 									if door.middle then
 										local doorId = doorPrefix .. "_middle"
-										local doorSide = getDoorSide(door.middle, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.middle,
 											isDoor = true,
 											areaId = nodeId,
 											targetAreaId = targetId,
-											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
 												[fwdDir] = { connections = { targetId }, count = 1 },
 											},
@@ -843,14 +543,12 @@ function ConnectionBuilder.BuildDoorsForConnections()
 
 									if door.right then
 										local doorId = doorPrefix .. "_right"
-										local doorSide = getDoorSide(door.right, node.pos)
 										doorNodes[doorId] = {
 											id = doorId,
 											pos = door.right,
 											isDoor = true,
 											areaId = nodeId,
 											targetAreaId = targetId,
-											direction = doorSide, -- Store which SIDE of area this door is on (N/S/E/W)
 											c = {
 												[fwdDir] = { connections = { targetId }, count = 1 },
 											},
@@ -928,15 +626,16 @@ function ConnectionBuilder.BuildDoorsForConnections()
 	Log:Info("Built " .. doorsBuilt .. " door nodes for connections")
 end
 
--- Determine spatial direction between two positions
+-- Determine spatial direction between two positions using NESW indices
+-- Returns dirId (1=North, 2=East, 3=South, 4=West) compatible with nav mesh format
 local function calculateSpatialDirection(fromPos, toPos)
 	local dx = toPos.x - fromPos.x
 	local dy = toPos.y - fromPos.y
 
 	if math.abs(dx) >= math.abs(dy) then
-		return (dx > 0) and 4 or 8 -- East or West
+		return (dx > 0) and 2 or 4 -- East=2, West=4
 	else
-		return (dy > 0) and 2 or 1 -- South or North
+		return (dy > 0) and 3 or 1 -- South=3, North=1
 	end
 end
 
