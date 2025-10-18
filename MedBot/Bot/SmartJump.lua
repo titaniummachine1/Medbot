@@ -175,12 +175,45 @@ end
 -- SMART JUMP DETECTION
 -- ============================================================================
 
+local function isNearPayload(position)
+	-- Check if position is near any payload cart
+	if not G.World.payloads then
+		return false
+	end
+	
+	for _, payload in pairs(G.World.payloads) do
+		if payload:IsValid() then
+			local payloadPos = payload:GetAbsOrigin()
+			
+			-- Check distance to entity center
+			local distToCenter = (position - payloadPos):Length()
+			if distToCenter < 200 then
+				return true
+			end
+			
+			-- Also check distance to ground-level position (offset -80 like in GoalFinder)
+			local groundPos = Vector3(payloadPos.x, payloadPos.y, payloadPos.z - 80)
+			local distToGround = (position - groundPos):Length()
+			if distToGround < 150 then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local function SmartJumpDetection(cmd, pLocal)
 	if not pLocal or (not isPlayerOnGround(pLocal)) then
 		return false
 	end
 
 	local pLocalPos = pLocal:GetAbsOrigin()
+	
+	-- Early exit: don't jump if already near payload
+	if isNearPayload(pLocalPos) then
+		return false
+	end
+	
 	local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
 	local viewAngles = engine.GetViewAngles()
 
@@ -253,6 +286,12 @@ local function SmartJumpDetection(cmd, pLocal)
 			--print(tick, minJumpTicks)
 
 			if tick <= minJumpTicks then
+				-- Check if we're trying to jump onto or near payload
+				if isNearPayload(newPos) or isNearPayload(currentPos) then
+					Log:Debug("SmartJump: Skipping jump - near payload cart")
+					return false
+				end
+				
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
 				Log:Debug("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)

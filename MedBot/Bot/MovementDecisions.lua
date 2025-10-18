@@ -21,9 +21,6 @@ local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
 local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between expensive walkability checks
 
--- Track previous distance to detect overshooting
-local previousDistance = nil
-
 -- Decision: Check if we've reached the target and advance waypoints/nodes
 function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local result = { shouldContinue = true }
@@ -43,40 +40,26 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
-	local currentDistance = horizontalDist
 
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 	
-	-- Check if we overshot (distance increasing = moving away from target)
-	local overshot = false
-	if previousDistance and currentDistance > previousDistance then
-		-- Distance is increasing - we're moving away, likely overshot
-		overshot = true
+	-- Simple node skipping: if closer to next node than current node is, skip
+	if G.Navigation.path and #G.Navigation.path >= 2 then
+		local currentNode = G.Navigation.path[1]
+		local nextNode = G.Navigation.path[2]
 		
-		-- Check if we should skip to next node
-		if G.Navigation.path and #G.Navigation.path >= 2 then
-			local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-			local currentNode = G.Navigation.path[1]
-			local nextNode = G.Navigation.path[2]
+		if currentNode and nextNode and currentNode.pos and nextNode.pos then
+			local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
+			local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 			
-			-- Use NodeSkipper logic to check if we're closer to next
-			if currentNode and nextNode and currentNode.pos and nextNode.pos then
-				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
-				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-				
-				if distPlayerToNext < distCurrentToNext then
-					Log:Debug("Overshot node - skipping to next")
-					Navigation.RemoveCurrentNode()
-					reachedTarget = false -- Don't double-advance
-					previousDistance = nil -- Reset tracking
-				end
+			if distPlayerToNext < distCurrentToNext then
+				Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
+				Navigation.RemoveCurrentNode()
+				reachedTarget = false -- Don't double-advance
 			end
 		end
 	end
-	
-	-- Update distance tracking
-	previousDistance = currentDistance
 	
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
@@ -96,9 +79,6 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 			-- Fallback to node-based advancement
 			MovementDecisions.advanceNode()
 		end
-		
-		-- Reset distance tracking after advancing
-		previousDistance = nil
 	end
 
 	return result

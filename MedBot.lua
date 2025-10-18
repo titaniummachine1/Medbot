@@ -5474,12 +5474,45 @@ end
 -- SMART JUMP DETECTION
 -- ============================================================================
 
+local function isNearPayload(position)
+	-- Check if position is near any payload cart
+	if not G.World.payloads then
+		return false
+	end
+	
+	for _, payload in pairs(G.World.payloads) do
+		if payload:IsValid() then
+			local payloadPos = payload:GetAbsOrigin()
+			
+			-- Check distance to entity center
+			local distToCenter = (position - payloadPos):Length()
+			if distToCenter < 200 then
+				return true
+			end
+			
+			-- Also check distance to ground-level position (offset -80 like in GoalFinder)
+			local groundPos = Vector3(payloadPos.x, payloadPos.y, payloadPos.z - 80)
+			local distToGround = (position - groundPos):Length()
+			if distToGround < 150 then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local function SmartJumpDetection(cmd, pLocal)
 	if not pLocal or (not isPlayerOnGround(pLocal)) then
 		return false
 	end
 
 	local pLocalPos = pLocal:GetAbsOrigin()
+	
+	-- Early exit: don't jump if already near payload
+	if isNearPayload(pLocalPos) then
+		return false
+	end
+	
 	local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
 	local viewAngles = engine.GetViewAngles()
 
@@ -5552,6 +5585,12 @@ local function SmartJumpDetection(cmd, pLocal)
 			--print(tick, minJumpTicks)
 
 			if tick <= minJumpTicks then
+				-- Check if we're trying to jump onto or near payload
+				if isNearPayload(newPos) or isNearPayload(currentPos) then
+					Log:Debug("SmartJump: Skipping jump - near payload cart")
+					return false
+				end
+				
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
 				Log:Debug("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
@@ -5896,9 +5935,6 @@ local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
 local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between expensive walkability checks
 
--- Track previous distance to detect overshooting
-local previousDistance = nil
-
 -- Decision: Check if we've reached the target and advance waypoints/nodes
 function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local result = { shouldContinue = true }
@@ -5918,40 +5954,26 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
-	local currentDistance = horizontalDist
 
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 	
-	-- Check if we overshot (distance increasing = moving away from target)
-	local overshot = false
-	if previousDistance and currentDistance > previousDistance then
-		-- Distance is increasing - we're moving away, likely overshot
-		overshot = true
+	-- Simple node skipping: if closer to next node than current node is, skip
+	if G.Navigation.path and #G.Navigation.path >= 2 then
+		local currentNode = G.Navigation.path[1]
+		local nextNode = G.Navigation.path[2]
 		
-		-- Check if we should skip to next node
-		if G.Navigation.path and #G.Navigation.path >= 2 then
-			local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-			local currentNode = G.Navigation.path[1]
-			local nextNode = G.Navigation.path[2]
+		if currentNode and nextNode and currentNode.pos and nextNode.pos then
+			local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
+			local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 			
-			-- Use NodeSkipper logic to check if we're closer to next
-			if currentNode and nextNode and currentNode.pos and nextNode.pos then
-				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
-				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-				
-				if distPlayerToNext < distCurrentToNext then
-					Log:Debug("Overshot node - skipping to next")
-					Navigation.RemoveCurrentNode()
-					reachedTarget = false -- Don't double-advance
-					previousDistance = nil -- Reset tracking
-				end
+			if distPlayerToNext < distCurrentToNext then
+				Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
+				Navigation.RemoveCurrentNode()
+				reachedTarget = false -- Don't double-advance
 			end
 		end
 	end
-	
-	-- Update distance tracking
-	previousDistance = currentDistance
 	
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
@@ -5971,9 +5993,6 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 			-- Fallback to node-based advancement
 			MovementDecisions.advanceNode()
 		end
-		
-		-- Reset distance tracking after advancing
-		previousDistance = nil
 	end
 
 	return result
@@ -6178,83 +6197,6 @@ function MovementDecisions.handleMovingState(userCmd)
 end
 
 return MovementDecisions
-
-end)
-__bundle_register("MedBot.Bot.NodeSkipper", function(require, _LOADED, __bundle_register, __bundle_modules)
---[[
-Node Skipper - Door-based funneling node skipping
-Logic:
-1. Use doors as portals (left/right edges)
-2. Funnel only in the direction the path is going (from connection data)
-3. Skip node if next node closer to player than current node to next node (avoid backwalking)
-4. Use max skip range from menu settings
-]]
-
-local Common = require("MedBot.Core.Common")
-local G = require("MedBot.Core.Globals")
-
-local NodeSkipper = {}
-
--- ============================================================================
--- NODE SKIPPING HELPERS
--- ============================================================================
-
--- ============================================================================
--- SKIP LOGIC
--- ============================================================================
-
--- Check if player is closer to next node than current node is to next node
--- This prevents backwalking - only skip if we've moved forward past current
-local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
-	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		return false
-	end
-
-	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
-	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-
-	return distPlayerToNext < distCurrentToNext
-end
-
--- ============================================================================
--- PUBLIC API
--- ============================================================================
-
--- Initialize/reset state when needed
-function NodeSkipper.Reset()
-	G.Navigation.nextNodeCloser = false
-end
-
--- Continuous node skipping check (runs every tick)
--- Uses door-based funneling algorithm
--- RETURNS: number of nodes to skip (0 = no skip)
-function NodeSkipper.CheckContinuousSkip(currentPos)
-	-- Respect Skip_Nodes menu setting
-	if not G.Menu.Main.Skip_Nodes then
-		return 0
-	end
-
-	local path = G.Navigation.path
-	if not path or #path < 2 then
-		return 0
-	end
-
-	local currentNode = path[1]
-	local nextNode = path[2]
-
-	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		return 0
-	end
-
-	-- Check if we're closer to next node (avoid backwalking)
-	if not CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-		return 0 -- Don't skip if we're not moving forward
-	end
-
-	return 1
-end
-
-return NodeSkipper
 
 end)
 __bundle_register("MedBot.WorkManager", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -7106,6 +7048,83 @@ function Navigation.FindPath(startNode, goalNode)
 end
 
 return Navigation
+
+end)
+__bundle_register("MedBot.Bot.NodeSkipper", function(require, _LOADED, __bundle_register, __bundle_modules)
+--[[
+Node Skipper - Door-based funneling node skipping
+Logic:
+1. Use doors as portals (left/right edges)
+2. Funnel only in the direction the path is going (from connection data)
+3. Skip node if next node closer to player than current node to next node (avoid backwalking)
+4. Use max skip range from menu settings
+]]
+
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
+
+local NodeSkipper = {}
+
+-- ============================================================================
+-- NODE SKIPPING HELPERS
+-- ============================================================================
+
+-- ============================================================================
+-- SKIP LOGIC
+-- ============================================================================
+
+-- Check if player is closer to next node than current node is to next node
+-- This prevents backwalking - only skip if we've moved forward past current
+local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
+	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		return false
+	end
+
+	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
+	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+
+	return distPlayerToNext < distCurrentToNext
+end
+
+-- ============================================================================
+-- PUBLIC API
+-- ============================================================================
+
+-- Initialize/reset state when needed
+function NodeSkipper.Reset()
+	G.Navigation.nextNodeCloser = false
+end
+
+-- Continuous node skipping check (runs every tick)
+-- Uses door-based funneling algorithm
+-- RETURNS: number of nodes to skip (0 = no skip)
+function NodeSkipper.CheckContinuousSkip(currentPos)
+	-- Respect Skip_Nodes menu setting
+	if not G.Menu.Main.Skip_Nodes then
+		return 0
+	end
+
+	local path = G.Navigation.path
+	if not path or #path < 2 then
+		return 0
+	end
+
+	local currentNode = path[1]
+	local nextNode = path[2]
+
+	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
+		return 0
+	end
+
+	-- Check if we're closer to next node (avoid backwalking)
+	if not CheckNextNodeCloser(currentPos, currentNode, nextNode) then
+		return 0 -- Don't skip if we're not moving forward
+	end
+
+	return 1
+end
+
+return NodeSkipper
 
 end)
 __bundle_register("MedBot.Algorithms.A-Star", function(require, _LOADED, __bundle_register, __bundle_modules)
