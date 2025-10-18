@@ -6,11 +6,7 @@ Log.Level = 0
 local SJ = G.SmartJump
 local SJC = G.SmartJump.Constants
 
-local function DebugLog(...)
-	if G.Menu.Main.Debug then
-		Log:Debug(...)
-	end
-end
+-- Log:Debug now automatically respects G.Menu.Main.Debug, no wrapper needed
 
 -- ============================================================================
 -- HELPER FUNCTIONS
@@ -259,10 +255,10 @@ local function SmartJumpDetection(cmd, pLocal)
 			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
-				DebugLog("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
+				Log:Debug("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
 				return true
 			else
-				DebugLog("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
+				Log:Debug("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
 				return false
 			end
 		end
@@ -316,9 +312,9 @@ function SmartJump.Main(cmd)
 		local obstacleDetected = SmartJumpDetection(cmd, pLocal)
 		if obstacleDetected then
 			SJ.jumpState = SJC.STATE_PREPARE_JUMP
-			DebugLog("SmartJump: Crouched movement with obstacle detected, initiating jump")
+			Log:Debug("SmartJump: Crouched movement with obstacle detected, initiating jump")
 		else
-			DebugLog("SmartJump: Crouched movement but no obstacle detected, staying idle")
+			Log:Debug("SmartJump: Crouched movement but no obstacle detected, staying idle")
 		end
 	end
 
@@ -327,19 +323,19 @@ function SmartJump.Main(cmd)
 			local smartJumpDetected = SmartJumpDetection(cmd, pLocal)
 			if smartJumpDetected or shouldJump then
 				SJ.jumpState = SJC.STATE_PREPARE_JUMP
-				DebugLog("SmartJump: IDLE -> PREPARE_JUMP (obstacle detected)")
+				Log:Debug("SmartJump: IDLE -> PREPARE_JUMP (obstacle detected)")
 			end
 		end
 	elseif SJ.jumpState == SJC.STATE_PREPARE_JUMP then
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		cmd:SetButtons(cmd.buttons & ~IN_JUMP)
 		SJ.jumpState = SJC.STATE_CTAP
-		DebugLog("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
+		Log:Debug("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
 	elseif SJ.jumpState == SJC.STATE_CTAP then
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 		cmd:SetButtons(cmd.buttons | IN_JUMP)
 		SJ.jumpState = SJC.STATE_ASCENDING
-		DebugLog("SmartJump: CTAP -> ASCENDING (unduck + jump)")
+		Log:Debug("SmartJump: CTAP -> ASCENDING (unduck + jump)")
 	elseif SJ.jumpState == SJC.STATE_ASCENDING then
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		local velocity = pLocal:EstimateAbsVelocity()
@@ -363,9 +359,9 @@ function SmartJump.Main(cmd)
 				-- If trace hits something, obstacle is still there - safe to unduck
 				if obstacleTrace.fraction < 1 then
 					shouldUnduck = true
-					DebugLog("SmartJump: Unducking - obstacle confirmed at height %.1f", G.SmartJump.LastObstacleHeight)
+					Log:Debug("SmartJump: Unducking - obstacle confirmed at height %.1f", G.SmartJump.LastObstacleHeight)
 				else
-					DebugLog(
+					Log:Debug(
 						"SmartJump: Staying ducked - no obstacle detected at height %.1f",
 						G.SmartJump.LastObstacleHeight
 					)
@@ -375,7 +371,7 @@ function SmartJump.Main(cmd)
 
 		if shouldUnduck then
 			SJ.jumpState = SJC.STATE_DESCENDING
-			DebugLog("SmartJump: ASCENDING -> DESCENDING (improved duck grab check)")
+			Log:Debug("SmartJump: ASCENDING -> DESCENDING (improved duck grab check)")
 		end
 	elseif SJ.jumpState == SJC.STATE_DESCENDING then
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
@@ -386,16 +382,16 @@ function SmartJump.Main(cmd)
 				cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 				cmd:SetButtons(cmd.buttons | IN_JUMP)
 				SJ.jumpState = SJC.STATE_PREPARE_JUMP
-				DebugLog("SmartJump: DESCENDING -> PREPARE_JUMP (bhop with obstacle)")
+				Log:Debug("SmartJump: DESCENDING -> PREPARE_JUMP (bhop with obstacle)")
 			end
 
 			if onGround then
 				SJ.jumpState = SJC.STATE_IDLE
-				DebugLog("SmartJump: DESCENDING -> IDLE (landed)")
+				Log:Debug("SmartJump: DESCENDING -> IDLE (landed)")
 			end
 		elseif onGround then
 			SJ.jumpState = SJC.STATE_IDLE
-			DebugLog("SmartJump: DESCENDING -> IDLE (no movement intent)")
+			Log:Debug("SmartJump: DESCENDING -> IDLE (no movement intent)")
 		end
 	end
 

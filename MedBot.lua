@@ -1499,6 +1499,12 @@ function Logger:Warn(msg, ...)
 end
 
 function Logger:Debug(msg, ...)
+	-- Only print debug messages if debug is enabled in menu
+	local G = require("MedBot.Core.Globals")
+	if not G.Menu.Main.Debug then
+		return -- Skip debug output when debug is disabled
+	end
+	
 	local success, formatted = pcall(string.format, "[Debug %s] %s: " .. msg, os.date("%H:%M:%S"), self.moduleName, ...)
 	if success then
 		safePrint(formatted)
@@ -1843,7 +1849,7 @@ function Common.Math.DistanceSquared(a, b)
 	return dx * dx + dy * dy + dz * dz
 end
 
--- Debug logging wrapper that respects the general debug setting
+-- Debug logging wrapper (deprecated - Logger:Debug now handles menu check automatically)
 function Common.DebugLog(level, ...)
 	local G = require("MedBot.Core.Globals")
 	if G.Menu.Main.Debug then
@@ -4968,11 +4974,7 @@ Log.Level = 0
 local SJ = G.SmartJump
 local SJC = G.SmartJump.Constants
 
-local function DebugLog(...)
-	if G.Menu.Main.Debug then
-		Log:Debug(...)
-	end
-end
+-- Log:Debug now automatically respects G.Menu.Main.Debug, no wrapper needed
 
 -- ============================================================================
 -- HELPER FUNCTIONS
@@ -5221,10 +5223,10 @@ local function SmartJumpDetection(cmd, pLocal)
 			if tick <= minJumpTicks then
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
-				DebugLog("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
+				Log:Debug("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
 				return true
 			else
-				DebugLog("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
+				Log:Debug("SmartJump: Obstacle detected at tick %d (need tick %d) -> Waiting", tick, minJumpTicks)
 				return false
 			end
 		end
@@ -5278,9 +5280,9 @@ function SmartJump.Main(cmd)
 		local obstacleDetected = SmartJumpDetection(cmd, pLocal)
 		if obstacleDetected then
 			SJ.jumpState = SJC.STATE_PREPARE_JUMP
-			DebugLog("SmartJump: Crouched movement with obstacle detected, initiating jump")
+			Log:Debug("SmartJump: Crouched movement with obstacle detected, initiating jump")
 		else
-			DebugLog("SmartJump: Crouched movement but no obstacle detected, staying idle")
+			Log:Debug("SmartJump: Crouched movement but no obstacle detected, staying idle")
 		end
 	end
 
@@ -5289,19 +5291,19 @@ function SmartJump.Main(cmd)
 			local smartJumpDetected = SmartJumpDetection(cmd, pLocal)
 			if smartJumpDetected or shouldJump then
 				SJ.jumpState = SJC.STATE_PREPARE_JUMP
-				DebugLog("SmartJump: IDLE -> PREPARE_JUMP (obstacle detected)")
+				Log:Debug("SmartJump: IDLE -> PREPARE_JUMP (obstacle detected)")
 			end
 		end
 	elseif SJ.jumpState == SJC.STATE_PREPARE_JUMP then
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		cmd:SetButtons(cmd.buttons & ~IN_JUMP)
 		SJ.jumpState = SJC.STATE_CTAP
-		DebugLog("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
+		Log:Debug("SmartJump: PREPARE_JUMP -> CTAP (ducking)")
 	elseif SJ.jumpState == SJC.STATE_CTAP then
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 		cmd:SetButtons(cmd.buttons | IN_JUMP)
 		SJ.jumpState = SJC.STATE_ASCENDING
-		DebugLog("SmartJump: CTAP -> ASCENDING (unduck + jump)")
+		Log:Debug("SmartJump: CTAP -> ASCENDING (unduck + jump)")
 	elseif SJ.jumpState == SJC.STATE_ASCENDING then
 		cmd:SetButtons(cmd.buttons | IN_DUCK)
 		local velocity = pLocal:EstimateAbsVelocity()
@@ -5325,9 +5327,9 @@ function SmartJump.Main(cmd)
 				-- If trace hits something, obstacle is still there - safe to unduck
 				if obstacleTrace.fraction < 1 then
 					shouldUnduck = true
-					DebugLog("SmartJump: Unducking - obstacle confirmed at height %.1f", G.SmartJump.LastObstacleHeight)
+					Log:Debug("SmartJump: Unducking - obstacle confirmed at height %.1f", G.SmartJump.LastObstacleHeight)
 				else
-					DebugLog(
+					Log:Debug(
 						"SmartJump: Staying ducked - no obstacle detected at height %.1f",
 						G.SmartJump.LastObstacleHeight
 					)
@@ -5337,7 +5339,7 @@ function SmartJump.Main(cmd)
 
 		if shouldUnduck then
 			SJ.jumpState = SJC.STATE_DESCENDING
-			DebugLog("SmartJump: ASCENDING -> DESCENDING (improved duck grab check)")
+			Log:Debug("SmartJump: ASCENDING -> DESCENDING (improved duck grab check)")
 		end
 	elseif SJ.jumpState == SJC.STATE_DESCENDING then
 		cmd:SetButtons(cmd.buttons & ~IN_DUCK)
@@ -5348,16 +5350,16 @@ function SmartJump.Main(cmd)
 				cmd:SetButtons(cmd.buttons & ~IN_DUCK)
 				cmd:SetButtons(cmd.buttons | IN_JUMP)
 				SJ.jumpState = SJC.STATE_PREPARE_JUMP
-				DebugLog("SmartJump: DESCENDING -> PREPARE_JUMP (bhop with obstacle)")
+				Log:Debug("SmartJump: DESCENDING -> PREPARE_JUMP (bhop with obstacle)")
 			end
 
 			if onGround then
 				SJ.jumpState = SJC.STATE_IDLE
-				DebugLog("SmartJump: DESCENDING -> IDLE (landed)")
+				Log:Debug("SmartJump: DESCENDING -> IDLE (landed)")
 			end
 		elseif onGround then
 			SJ.jumpState = SJC.STATE_IDLE
-			DebugLog("SmartJump: DESCENDING -> IDLE (no movement intent)")
+			Log:Debug("SmartJump: DESCENDING -> IDLE (no movement intent)")
 		end
 	end
 
@@ -5556,11 +5558,7 @@ local PathValidator = require("MedBot.Navigation.PathValidator")
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
 
-local function DebugLog(...)
-	if G.Menu.Main.Debug then
-		Log:Debug(...)
-	end
-end
+-- Log:Debug now automatically respects G.Menu.Main.Debug, no wrapper needed
 
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
@@ -5612,7 +5610,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 				
 				if distPlayerToNext < distCurrentToNext then
-					DebugLog("Overshot node - skipping to next")
+					Log:Debug("Overshot node - skipping to next")
 					Navigation.RemoveCurrentNode()
 					reachedTarget = false -- Don't double-advance
 					previousDistance = nil -- Reset tracking
@@ -5625,7 +5623,7 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	previousDistance = currentDistance
 	
 	if reachedTarget then
-		DebugLog("Reached target - advancing waypoint/node")
+		Log:Debug("Reached target - advancing waypoint/node")
 
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
@@ -5681,13 +5679,13 @@ end
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
-	DebugLog(
+	Log:Debug(
 		tostring(G.Menu.Main.Skip_Nodes),
 		#G.Navigation.path
 	)
 
 	if G.Menu.Main.Skip_Nodes then
-		DebugLog("Removing current node (Skip Nodes enabled)")
+		Log:Debug("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
 		-- Reset node skipping timer when manually advancing
@@ -5701,7 +5699,7 @@ function MovementDecisions.advanceNode()
 			return false -- Don't continue
 		end
 	else
-		DebugLog("Skip Nodes disabled - not removing node")
+		Log:Debug("Skip Nodes disabled - not removing node")
 		if #G.Navigation.path <= 1 then
 			Navigation.ClearPath()
 			Log:Info("Reached final node (Skip Nodes disabled)")
@@ -5786,7 +5784,7 @@ function MovementDecisions.handleDebugLogging()
 		local targetPos = MovementDecisions.getCurrentTarget()
 		if targetPos then
 			local pathLen = G.Navigation.path and #G.Navigation.path or 0
-			DebugLog("MOVING: pathLen=%d", pathLen)
+			Log:Debug("MOVING: pathLen=%d", pathLen)
 		end
 		G.__lastMoveDebugTick = now
 	end
@@ -7317,11 +7315,7 @@ local SmartJump = require("MedBot.Bot.SmartJump")
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
 
-local function DebugLog(...)
-	if G.Menu.Main.Debug then
-		Log:Debug(...)
-	end
-end
+-- Log:Debug now automatically respects G.Menu.Main.Debug, no wrapper needed
 
 function StateHandler.handleUserInput(userCmd)
 	if userCmd:GetForwardMove() ~= 0 or userCmd:GetSideMove() ~= 0 then
@@ -7347,7 +7341,7 @@ function StateHandler.handleIdleState()
 
 	-- Ensure navigation is ready before any goal work
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
-		DebugLog("No navigation nodes available, staying in IDLE state")
+		Log:Debug("No navigation nodes available, staying in IDLE state")
 		return
 	end
 
@@ -7430,7 +7424,7 @@ function StateHandler.handleIdleState()
 			G.lastPathfindingTick = currentTick
 			Log:Info("Moving directly to goal from goal node %d", startNode.id)
 		else
-			DebugLog("Already at goal node %d, staying in IDLE", startNode.id)
+			Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
 			G.lastPathfindingTick = currentTick
 		end
 		return
@@ -7468,22 +7462,16 @@ function StateHandler.handlePathfindingState()
 					end
 
 					if currentTick - G.lastRepathTick > 30 then
-						if G.Menu.Main.Debug then
-							Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
-						end
+						Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
 						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 						G.lastRepathTick = currentTick
 					end
 				else
-					if G.Menu.Main.Debug then
-						Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
-					end
+					Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
 					G.currentState = G.States.IDLE
 				end
 			else
-				if G.Menu.Main.Debug then
-					Log:Debug("No existing goal for repath, returning to IDLE")
-				end
+				Log:Debug("No existing goal for repath, returning to IDLE")
 				G.currentState = G.States.IDLE
 			end
 		end

@@ -54,6 +54,12 @@ function Logger:Warn(msg, ...)
 end
 
 function Logger:Debug(msg, ...)
+	-- Only print debug messages if debug is enabled in menu
+	local G = require("MedBot.Core.Globals")
+	if not G.Menu.Main.Debug then
+		return -- Skip debug output when debug is disabled
+	end
+	
 	local success, formatted = pcall(string.format, "[Debug %s] %s: " .. msg, os.date("%H:%M:%S"), self.moduleName, ...)
 	if success then
 		safePrint(formatted)
@@ -398,7 +404,7 @@ function Common.Math.DistanceSquared(a, b)
 	return dx * dx + dy * dy + dz * dz
 end
 
--- Debug logging wrapper that respects the general debug setting
+-- Debug logging wrapper (deprecated - Logger:Debug now handles menu check automatically)
 function Common.DebugLog(level, ...)
 	local G = require("MedBot.Core.Globals")
 	if G.Menu.Main.Debug then

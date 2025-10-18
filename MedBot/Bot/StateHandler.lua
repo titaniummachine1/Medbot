@@ -15,11 +15,7 @@ local SmartJump = require("MedBot.Bot.SmartJump")
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
 
-local function DebugLog(...)
-	if G.Menu.Main.Debug then
-		Log:Debug(...)
-	end
-end
+-- Log:Debug now automatically respects G.Menu.Main.Debug, no wrapper needed
 
 function StateHandler.handleUserInput(userCmd)
 	if userCmd:GetForwardMove() ~= 0 or userCmd:GetSideMove() ~= 0 then
@@ -45,7 +41,7 @@ function StateHandler.handleIdleState()
 
 	-- Ensure navigation is ready before any goal work
 	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
-		DebugLog("No navigation nodes available, staying in IDLE state")
+		Log:Debug("No navigation nodes available, staying in IDLE state")
 		return
 	end
 
@@ -128,7 +124,7 @@ function StateHandler.handleIdleState()
 			G.lastPathfindingTick = currentTick
 			Log:Info("Moving directly to goal from goal node %d", startNode.id)
 		else
-			DebugLog("Already at goal node %d, staying in IDLE", startNode.id)
+			Log:Debug("Already at goal node %d, staying in IDLE", startNode.id)
 			G.lastPathfindingTick = currentTick
 		end
 		return
@@ -166,22 +162,16 @@ function StateHandler.handlePathfindingState()
 					end
 
 					if currentTick - G.lastRepathTick > 30 then
-						if G.Menu.Main.Debug then
-							Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
-						end
+						Log:Info("Repathing from stuck state: node %d to node %d", startNode.id, goalNode.id)
 						WorkManager.addWork(Navigation.FindPath, { startNode, goalNode }, 33, "Pathfinding")
 						G.lastRepathTick = currentTick
 					end
 				else
-					if G.Menu.Main.Debug then
-						Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
-					end
+					Log:Debug("Cannot repath - invalid start/goal nodes, returning to IDLE")
 					G.currentState = G.States.IDLE
 				end
 			else
-				if G.Menu.Main.Debug then
-					Log:Debug("No existing goal for repath, returning to IDLE")
-				end
+				Log:Debug("No existing goal for repath, returning to IDLE")
 				G.currentState = G.States.IDLE
 			end
 		end
