@@ -85,10 +85,10 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Allow skipping nodes when direct path is walkable (handles all optimization)")
 		TimMenu.NextLine()
 
-		-- Max Nodes Skipped slider
-		G.Menu.Main.MaxNodesSkipped = G.Menu.Main.MaxNodesSkipped or 10
-		G.Menu.Main.MaxNodesSkipped = TimMenu.Slider("Max Nodes Skipped", G.Menu.Main.MaxNodesSkipped, 1, 50, 1)
-		TimMenu.Tooltip("Maximum nodes to skip in one continuous sequence (default: 10)")
+		-- Max Skip Range slider
+		G.Menu.Main.MaxSkipRange = G.Menu.Main.MaxSkipRange or 500
+		G.Menu.Main.MaxSkipRange = TimMenu.Slider("Max Skip Range", G.Menu.Main.MaxSkipRange, 100, 2000, 50)
+		TimMenu.Tooltip("Maximum distance to skip nodes in units (default: 500)")
 		TimMenu.NextLine()
 
 		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)

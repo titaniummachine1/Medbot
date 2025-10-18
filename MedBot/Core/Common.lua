@@ -11,12 +11,67 @@ assert(Lib.GetVersion() >= 1.0, "LNXlib version is too old, please update it!")
 Common.Lib = Lib
 Common.Notify = Lib.UI.Notify
 Common.TF2 = Lib.TF2
-Common.Log = Lib.Utils.Logger
 Common.Math = Lib.Utils.Math
 Common.Conversion = Lib.Utils.Conversion
 Common.WPlayer = Lib.TF2.WPlayer
 Common.PR = Lib.TF2.PlayerResource
 Common.Helpers = Lib.TF2.Helpers
+
+-- Safe logging system (replaces LNX Logger)
+local function safePrint(msg)
+	local success, err = pcall(print, msg)
+	if not success then
+		-- Fallback: try again
+		pcall(print, "LOG ERROR")
+	end
+end
+
+local Logger = {}
+Logger.__index = Logger
+
+function Logger.new(moduleName)
+	local self = setmetatable({}, Logger)
+	self.moduleName = moduleName or "MedBot"
+	return self
+end
+
+function Logger:Info(msg, ...)
+	local success, formatted = pcall(string.format, "[Info  %s] %s: " .. msg, os.date("%H:%M:%S"), self.moduleName, ...)
+	if success then
+		safePrint(formatted)
+	else
+		safePrint("[Info] " .. self.moduleName .. ": " .. tostring(msg))
+	end
+end
+
+function Logger:Warn(msg, ...)
+	local success, formatted = pcall(string.format, "[Warn  %s] %s: " .. msg, os.date("%H:%M:%S"), self.moduleName, ...)
+	if success then
+		safePrint(formatted)
+	else
+		safePrint("[Warn] " .. self.moduleName .. ": " .. tostring(msg))
+	end
+end
+
+function Logger:Debug(msg, ...)
+	local success, formatted = pcall(string.format, "[Debug %s] %s: " .. msg, os.date("%H:%M:%S"), self.moduleName, ...)
+	if success then
+		safePrint(formatted)
+	else
+		safePrint("[Debug] " .. self.moduleName .. ": " .. tostring(msg))
+	end
+end
+
+function Logger:Error(msg, ...)
+	local success, formatted = pcall(string.format, "[Error %s] %s: " .. msg, os.date("%H:%M:%S"), self.moduleName, ...)
+	if success then
+		safePrint(formatted)
+	else
+		safePrint("[Error] " .. self.moduleName .. ": " .. tostring(msg))
+	end
+end
+
+Common.Log = Logger
 
 -- JSON support
 local JSON = {}

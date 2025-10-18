@@ -1,19 +1,22 @@
 --[[
-Node Skipper - Simple funneling-based node skipping
-Two skip modes:
-1. Proximity skip: Skip to next node if we're closer to it than current node is
-2. Funneling skip: Use 2D funnel algorithm on area quads to skip multiple nodes
-Runs every tick (no WorkManager cooldowns)
+Node Skipper - Door-based funneling node skipping
+Logic:
+1. Use doors as portals (left/right edges)
+2. Funnel only in the direction the path is going (from connection data)
+3. Skip node if next node closer to player than current node to next node (avoid backwalking)
+4. Use max skip range from menu settings
 ]]
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 
+local ConnectionBuilder = require("MedBot.Navigation.ConnectionBuilder")
+local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
+
 local NodeSkipper = {}
-local Log = Common.Log.new("NodeSkipper")
 
 -- ============================================================================
--- 2D FUNNEL ALGORITHM (horizontal only, ignore Z)
+-- 2D FUNNEL ALGORITHM (uses doors as portals)
 -- ============================================================================
 
 -- Get 2D vector (ignore Z)
@@ -31,96 +34,125 @@ local function sub2D(a, b)
 	return { x = a.x - b.x, y = a.y - b.y }
 end
 
--- Find the two shared corners between consecutive quads (portal edge)
--- Returns left, right corners of the portal (or nil if no shared edge)
-local function findPortalEdge(prevNode, nextNode)
-	if not (prevNode.nw and prevNode.ne and prevNode.se and prevNode.sw) then
-		return nil, nil
-	end
-	if not (nextNode.nw and nextNode.ne and nextNode.se and nextNode.sw) then
-		return nil, nil
+-- Get door data between two nodes
+-- Returns door with left/middle/right positions or nil
+local function getDoorBetweenNodes(nodeA, nodeB)
+	if not (nodeA and nodeB) then
+		return nil
 	end
 	
-	-- Get all 4 corners from each node
-	local prevCorners = { prevNode.nw, prevNode.ne, prevNode.se, prevNode.sw }
-	local nextCorners = { nextNode.nw, nextNode.ne, nextNode.se, nextNode.sw }
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return nil
+	end
 	
-	-- Find shared corners (within small epsilon for floating point)
-	local sharedCorners = {}
-	local epsilon = 1.0
+	-- Try both orderings for door prefix
+	local doorPrefix1 = nodeA.id .. "_" .. nodeB.id
+	local doorPrefix2 = nodeB.id .. "_" .. nodeA.id
 	
-	for _, pc in ipairs(prevCorners) do
-		for _, nc in ipairs(nextCorners) do
-			local dist = math.sqrt((pc.x - nc.x)^2 + (pc.y - nc.y)^2)
-			if dist < epsilon then
-				table.insert(sharedCorners, to2D(pc))
-				break
-			end
+	for _, prefix in ipairs({doorPrefix1, doorPrefix2}) do
+		-- Check for middle door first (always exists)
+		local middleDoorId = prefix .. "_middle"
+		local middleDoor = nodes[middleDoorId]
+		
+		if middleDoor and middleDoor.pos then
+			-- Found door - get left/right if they exist
+			local leftDoorId = prefix .. "_left"
+			local rightDoorId = prefix .. "_right"
+			
+			local leftDoor = nodes[leftDoorId]
+			local rightDoor = nodes[rightDoorId]
+			
+			return {
+				left = leftDoor and leftDoor.pos or nil,
+				middle = middleDoor.pos,
+				right = rightDoor and rightDoor.pos or nil
+			}
 		end
 	end
 	
-	-- Need exactly 2 shared corners for a valid portal
-	if #sharedCorners == 2 then
-		return sharedCorners[1], sharedCorners[2]
-	end
-	
-	-- Fallback: use opposite corners if areas are separate
-	-- Use NW and SE as default portal
-	return to2D(nextNode.nw), to2D(nextNode.se)
+	return nil
 end
 
--- Simple funnel algorithm on nav quads (4 corners per area)
+-- Door-based funnel algorithm
+-- Uses doors as portals with left/right edges
+-- Only funnels in the direction the path is going (from connection data)
+-- Path structure: path[1] = closest to player, path[#path] = destination (furthest)
 -- Returns: number of nodes we can skip (0 = no skip)
 local function RunFunneling(currentPos, path)
-	if not path or #path < 3 then
-		return 0 -- Need current + next + at least one more
+	if not path or #path < 2 then
+		return 0 -- Need at least 2 nodes
 	end
 
-	-- Start funnel from current position (2D only)
+	-- Get range limit from menu settings
+	local maxSkipRange = G.Menu.Main.MaxSkipRange or 500
+	
+	-- Start funnel from player position (2D)
 	local apex = to2D(currentPos)
 	local leftEdge = apex
 	local rightEdge = apex
 	
-	-- Process each portal between consecutive nodes
-	for i = 2, #path do
-		local prevNode = path[i - 1]
-		local node = path[i]
+	local nodesSkipped = 0
+	
+	-- Process path forward (from closest to furthest)
+	-- path[1] is closest, path[#path] is destination
+	for i = 1, #path - 1 do
+		local currentNode = path[i]
+		local nextNode = path[i + 1]
 		
-		-- Stop at door nodes - they're transition points
-		if node.isDoor then
-			Common.DebugLog("Debug", "Funnel: Stopped at door node %d", node.id)
-			return math.max(0, i - 2)
+		-- Check range limit FIRST - enforce for ALL nodes
+		if currentNode.pos then
+			local dist = Common.Distance3D(currentPos, currentNode.pos)
+			if dist > maxSkipRange then
+				return nodesSkipped
+			end
 		end
 		
-		-- Find portal edge between prev and current node
-		local portal1, portal2 = findPortalEdge(prevNode, node)
-		if not portal1 or not portal2 then
-			Common.DebugLog("Debug", "Funnel: No portal found at node %d, stopping", node.id)
-			return math.max(0, i - 2)
+		if nextNode.pos then
+			local dist = Common.Distance3D(currentPos, nextNode.pos)
+			if dist > maxSkipRange then
+				return nodesSkipped
+			end
 		end
 		
-		-- Determine which portal point is left/right based on cross product
-		local toPortal1 = sub2D(portal1, apex)
-		local toPortal2 = sub2D(portal2, apex)
-		local cross = cross2D(toPortal1, toPortal2)
+		-- Skip door nodes (they're waypoints, no geometry)
+		if currentNode.isDoor then
+			nodesSkipped = nodesSkipped + 1
+			goto continue_funnel
+		end
 		
-		local leftPortal, rightPortal
-		if cross > 0 then
-			leftPortal = portal1
-			rightPortal = portal2
-		else
-			leftPortal = portal2
-			rightPortal = portal1
+		if nextNode.isDoor then
+			nodesSkipped = nodesSkipped + 1
+			goto continue_funnel
+		end
+		
+		-- Get door between current and next (portal)
+		local door = getDoorBetweenNodes(currentNode, nextNode)
+		if not door or not door.middle then
+			-- No door portal found - stop funneling
+			return nodesSkipped
+		end
+		
+		-- Use left/right if they exist, otherwise use middle as both
+		local leftPortal = door.left and to2D(door.left) or to2D(door.middle)
+		local rightPortal = door.right and to2D(door.right) or to2D(door.middle)
+		
+		-- Determine left/right relative to apex using cross product
+		local toLeft = sub2D(leftPortal, apex)
+		local toRight = sub2D(rightPortal, apex)
+		local cross = cross2D(toLeft, toRight)
+		
+		-- Swap if necessary
+		if cross < 0 then
+			leftPortal, rightPortal = rightPortal, leftPortal
 		end
 		
 		-- Try to narrow left edge
 		local leftCross = cross2D(sub2D(leftPortal, apex), sub2D(leftEdge, apex))
 		if leftCross >= 0 then
-			-- Check if it crosses right edge
+			-- Check if it crosses right edge (funnel closes)
 			if cross2D(sub2D(leftPortal, apex), sub2D(rightEdge, apex)) < 0 then
-				-- Funnel closes - stop here
-				Common.DebugLog("Debug", "Funnel: Left crossed right at node %d", node.id)
-				return math.max(0, i - 2)
+				return nodesSkipped -- Funnel closed, can't skip further
 			end
 			leftEdge = leftPortal
 		end
@@ -128,31 +160,30 @@ local function RunFunneling(currentPos, path)
 		-- Try to narrow right edge
 		local rightCross = cross2D(sub2D(rightPortal, apex), sub2D(rightEdge, apex))
 		if rightCross <= 0 then
-			-- Check if it crosses left edge
+			-- Check if it crosses left edge (funnel closes)
 			if cross2D(sub2D(rightPortal, apex), sub2D(leftEdge, apex)) > 0 then
-				-- Funnel closes - stop here
-				Common.DebugLog("Debug", "Funnel: Right crossed left at node %d", node.id)
-				return math.max(0, i - 2)
+				return nodesSkipped -- Funnel closed, can't skip further
 			end
 			rightEdge = rightPortal
 		end
 		
-		Common.DebugLog("Debug", "Funnel: Node %d in corridor, continuing", node.id)
+		-- Funnel successfully narrowed - can skip this node
+		nodesSkipped = nodesSkipped + 1
+		
+		::continue_funnel::
 	end
 	
-	-- Successfully funneled through all nodes
-	local skipCount = #path - 1
-	Common.DebugLog("Debug", "Funnel: Can skip %d nodes", skipCount)
-	return skipCount
+	return nodesSkipped
 end
 
 -- ============================================================================
--- PROXIMITY SKIP
+-- SKIP LOGIC
 -- ============================================================================
 
--- Check if we're closer to next node than current node is (geometric check)
+-- Check if we're closer to next node than current node is
+-- This prevents backwalking
 local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
-	if not currentNode or not nextNode then
+	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
 		return false
 	end
 
@@ -169,13 +200,10 @@ end
 -- Initialize/reset state when needed
 function NodeSkipper.Reset()
 	G.Navigation.nextNodeCloser = false
-	Log:Debug("NodeSkipper state reset")
 end
 
 -- Continuous node skipping check (runs every tick)
--- Two modes:
--- 1. Proximity skip: Skip to next node if closer to it
--- 2. Funneling skip: Use funnel algorithm to skip multiple nodes
+-- Uses door-based funneling algorithm
 -- RETURNS: number of nodes to skip (0 = no skip)
 function NodeSkipper.CheckContinuousSkip(currentPos)
 	-- Respect Skip_Nodes menu setting
@@ -195,29 +223,20 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 		return 0
 	end
 
-	-- NEVER skip door nodes
-	if nextNode.isDoor then
-		return 0
-	end
-
-	-- MODE 1: Funneling skip - try to skip multiple nodes using funnel algorithm
-	-- Try this FIRST since it can skip more nodes than proximity
-	if #path > 2 then
-		local funnelSkip = RunFunneling(currentPos, path)
-		if funnelSkip > 0 then
-			Common.DebugLog("Debug", "Funneling skip: Can skip %d nodes", funnelSkip)
-			return funnelSkip
-		end
-	end
-
-	-- MODE 2: Proximity skip - fallback if funneling didn't work
-	-- If we're closer to next node, skip current
-	if CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-		Common.DebugLog("Debug", "Proximity skip: Closer to next node %d", nextNode.id)
+	-- If current node is a door, skip it immediately
+	if currentNode.isDoor then
 		return 1
 	end
 
-	return 0
+	-- Check if we're closer to next node (avoid backwalking)
+	if not CheckNextNodeCloser(currentPos, currentNode, nextNode) then
+		return 0 -- Don't skip if we're not moving forward
+	end
+
+	-- Run funneling algorithm
+	local skipCount = RunFunneling(currentPos, path)
+	
+	return skipCount
 end
 
 return NodeSkipper
