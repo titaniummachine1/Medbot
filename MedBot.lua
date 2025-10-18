@@ -5728,6 +5728,9 @@ local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
 local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between expensive walkability checks
 
+-- Track previous distance to detect overshooting
+local previousDistance = nil
+
 -- Decision: Check if we've reached the target and advance waypoints/nodes
 function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local result = { shouldContinue = true }
@@ -5747,13 +5750,43 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
+	local currentDistance = horizontalDist
 
 	-- Check if we've reached the target
-	if MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist) then
+	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
+	
+	-- Check if we overshot (distance increasing = moving away from target)
+	local overshot = false
+	if previousDistance and currentDistance > previousDistance then
+		-- Distance is increasing - we're moving away, likely overshot
+		overshot = true
+		
+		-- Check if we should skip to next node
+		if G.Navigation.path and #G.Navigation.path >= 2 then
+			local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+			local currentNode = G.Navigation.path[1]
+			local nextNode = G.Navigation.path[2]
+			
+			-- Use NodeSkipper logic to check if we're closer to next
+			if currentNode and nextNode and currentNode.pos and nextNode.pos then
+				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
+				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+				
+				if distPlayerToNext < distCurrentToNext then
+					Log:Debug("Overshot node - skipping to next")
+					Navigation.RemoveCurrentNode()
+					reachedTarget = false -- Don't double-advance
+					previousDistance = nil -- Reset tracking
+				end
+			end
+		end
+	end
+	
+	-- Update distance tracking
+	previousDistance = currentDistance
+	
+	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
-
-		-- Handle node skipping logic when we reach a node
-		-- REMOVED: Old skipping logic - now using passive distance-based skipping in NodeSkipper.CheckContinuousSkip
 
 		-- Advance waypoint or node
 		if G.Navigation.waypoints and #G.Navigation.waypoints > 0 then
@@ -5770,26 +5803,9 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 			-- Fallback to node-based advancement
 			MovementDecisions.advanceNode()
 		end
-	end
-
-	-- Handle continuous node skipping logic
-	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-	local nodesToSkip = NodeSkipper.CheckContinuousSkip(LocalOrigin)
-
-	if nodesToSkip > 0 then
-		Log:Debug("NodeSkipper decided to skip %d nodes", nodesToSkip)
-
-		-- Skip the requested number of nodes
-		for i = 1, nodesToSkip do
-			Navigation.RemoveCurrentNode()
-		end
-
-		-- Node(s) were skipped, get new target
-		targetPos = MovementDecisions.getCurrentTarget()
-		if not targetPos then
-			result.shouldContinue = false
-			return result
-		end
+		
+		-- Reset distance tracking after advancing
+		previousDistance = nil
 	end
 
 	return result
@@ -5818,8 +5834,14 @@ function MovementDecisions.hasReachedTarget(origin, targetPos, horizontalDist, v
 	return (horizontalDist < G.Misc.NodeTouchDistance) and (verticalDist <= G.Misc.NodeTouchHeight)
 end
 
+-- Reset distance tracking (call when path changes)
+function MovementDecisions.resetDistanceTracking()
+	previousDistance = nil
+end
+
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
+	previousDistance = nil -- Reset tracking when advancing nodes
 	Log:Debug(
 		tostring(G.Menu.Main.Skip_Nodes),
 		#G.Navigation.path
@@ -6003,178 +6025,18 @@ Logic:
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 
-local ConnectionBuilder = require("MedBot.Navigation.ConnectionBuilder")
-local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
-
 local NodeSkipper = {}
 
 -- ============================================================================
--- 2D FUNNEL ALGORITHM (uses doors as portals)
+-- NODE SKIPPING HELPERS
 -- ============================================================================
-
--- Get 2D vector (ignore Z)
-local function to2D(v)
-	return { x = v.x, y = v.y }
-end
-
--- 2D cross product (returns scalar)
-local function cross2D(a, b)
-	return a.x * b.y - a.y * b.x
-end
-
--- 2D vector subtraction
-local function sub2D(a, b)
-	return { x = a.x - b.x, y = a.y - b.y }
-end
-
--- Get door data between two nodes
--- Returns door with left/middle/right positions or nil
-local function getDoorBetweenNodes(nodeA, nodeB)
-	if not (nodeA and nodeB) then
-		return nil
-	end
-	
-	local nodes = G.Navigation.nodes
-	if not nodes then
-		return nil
-	end
-	
-	-- Try both orderings for door prefix
-	local doorPrefix1 = nodeA.id .. "_" .. nodeB.id
-	local doorPrefix2 = nodeB.id .. "_" .. nodeA.id
-	
-	for _, prefix in ipairs({doorPrefix1, doorPrefix2}) do
-		-- Check for middle door first (always exists)
-		local middleDoorId = prefix .. "_middle"
-		local middleDoor = nodes[middleDoorId]
-		
-		if middleDoor and middleDoor.pos then
-			-- Found door - get left/right if they exist
-			local leftDoorId = prefix .. "_left"
-			local rightDoorId = prefix .. "_right"
-			
-			local leftDoor = nodes[leftDoorId]
-			local rightDoor = nodes[rightDoorId]
-			
-			return {
-				left = leftDoor and leftDoor.pos or nil,
-				middle = middleDoor.pos,
-				right = rightDoor and rightDoor.pos or nil
-			}
-		end
-	end
-	
-	return nil
-end
-
--- Door-based funnel algorithm
--- Uses doors as portals with left/right edges
--- Only funnels in the direction the path is going (from connection data)
--- Path structure: path[1] = closest to player, path[#path] = destination (furthest)
--- Returns: number of nodes we can skip (0 = no skip)
-local function RunFunneling(currentPos, path)
-	if not path or #path < 2 then
-		return 0 -- Need at least 2 nodes
-	end
-
-	-- Get range limit from menu settings
-	local maxSkipRange = G.Menu.Main.MaxSkipRange or 500
-	
-	-- Start funnel from player position (2D)
-	local apex = to2D(currentPos)
-	local leftEdge = apex
-	local rightEdge = apex
-	
-	local nodesSkipped = 0
-	
-	-- Process path forward (from closest to furthest)
-	-- path[1] is closest, path[#path] is destination
-	for i = 1, #path - 1 do
-		local currentNode = path[i]
-		local nextNode = path[i + 1]
-		
-		-- Check range limit FIRST - enforce for ALL nodes
-		if currentNode.pos then
-			local dist = Common.Distance3D(currentPos, currentNode.pos)
-			if dist > maxSkipRange then
-				return nodesSkipped
-			end
-		end
-		
-		if nextNode.pos then
-			local dist = Common.Distance3D(currentPos, nextNode.pos)
-			if dist > maxSkipRange then
-				return nodesSkipped
-			end
-		end
-		
-		-- Skip door nodes (they're waypoints, no geometry)
-		if currentNode.isDoor then
-			nodesSkipped = nodesSkipped + 1
-			goto continue_funnel
-		end
-		
-		if nextNode.isDoor then
-			nodesSkipped = nodesSkipped + 1
-			goto continue_funnel
-		end
-		
-		-- Get door between current and next (portal)
-		local door = getDoorBetweenNodes(currentNode, nextNode)
-		if not door or not door.middle then
-			-- No door portal found - stop funneling
-			return nodesSkipped
-		end
-		
-		-- Use left/right if they exist, otherwise use middle as both
-		local leftPortal = door.left and to2D(door.left) or to2D(door.middle)
-		local rightPortal = door.right and to2D(door.right) or to2D(door.middle)
-		
-		-- Determine left/right relative to apex using cross product
-		local toLeft = sub2D(leftPortal, apex)
-		local toRight = sub2D(rightPortal, apex)
-		local cross = cross2D(toLeft, toRight)
-		
-		-- Swap if necessary
-		if cross < 0 then
-			leftPortal, rightPortal = rightPortal, leftPortal
-		end
-		
-		-- Try to narrow left edge
-		local leftCross = cross2D(sub2D(leftPortal, apex), sub2D(leftEdge, apex))
-		if leftCross >= 0 then
-			-- Check if it crosses right edge (funnel closes)
-			if cross2D(sub2D(leftPortal, apex), sub2D(rightEdge, apex)) < 0 then
-				return nodesSkipped -- Funnel closed, can't skip further
-			end
-			leftEdge = leftPortal
-		end
-		
-		-- Try to narrow right edge
-		local rightCross = cross2D(sub2D(rightPortal, apex), sub2D(rightEdge, apex))
-		if rightCross <= 0 then
-			-- Check if it crosses left edge (funnel closes)
-			if cross2D(sub2D(rightPortal, apex), sub2D(leftEdge, apex)) > 0 then
-				return nodesSkipped -- Funnel closed, can't skip further
-			end
-			rightEdge = rightPortal
-		end
-		
-		-- Funnel successfully narrowed - can skip this node
-		nodesSkipped = nodesSkipped + 1
-		
-		::continue_funnel::
-	end
-	
-	return nodesSkipped
-end
 
 -- ============================================================================
 -- SKIP LOGIC
 -- ============================================================================
 
--- Check if we're closer to next node than current node is
--- This prevents backwalking
+-- Check if player is closer to next node than current node is to next node
+-- This prevents backwalking - only skip if we've moved forward past current
 local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
 		return false
@@ -6216,20 +6078,12 @@ function NodeSkipper.CheckContinuousSkip(currentPos)
 		return 0
 	end
 
-	-- If current node is a door, skip it immediately
-	if currentNode.isDoor then
-		return 1
-	end
-
 	-- Check if we're closer to next node (avoid backwalking)
 	if not CheckNextNodeCloser(currentPos, currentNode, nextNode) then
 		return 0 -- Don't skip if we're not moving forward
 	end
 
-	-- Run funneling algorithm
-	local skipCount = RunFunneling(currentPos, path)
-	
-	return skipCount
+	return 1
 end
 
 return NodeSkipper
