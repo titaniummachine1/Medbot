@@ -233,18 +233,14 @@ local function createDoorForAreas(areaA, areaB, dirId)
 
 	local a0, a1, b0, b1 = geometry.a0, geometry.a1, geometry.b0, geometry.b1
 
-	print(string.format("[DOOR] Creating door %d->%d", areaA.id, areaB.id))
-
 	-- Pick higher Z border as base (door stays at owner's boundary)
 	local aMaxZ = math.max(a0.z, a1.z)
 	local bMaxZ = math.max(b0.z, b1.z)
 	local baseEdge0, baseEdge1
 	if bMaxZ > aMaxZ + 0.5 then
 		baseEdge0, baseEdge1 = b0, b1 -- Use B's edge (B is owner)
-		print(string.format("[DOOR] Using area B edge (higher: %.1f vs %.1f)", bMaxZ, aMaxZ))
 	else
 		baseEdge0, baseEdge1 = a0, a1 -- Use A's edge (A is owner)
-		print(string.format("[DOOR] Using area A edge (higher: %.1f vs %.1f)", aMaxZ, bMaxZ))
 	end
 
 	-- Determine shared axis: vertical edge (Y varies) or horizontal edge (X varies)
@@ -271,7 +267,6 @@ local function createDoorForAreas(areaA, areaB, dirId)
 	-- If overlap too small, create center-only door at midpoint between areas
 	if overlapMax - overlapMin < HITBOX_WIDTH then
 		local centerPoint = lerpVec(a0, a1, 0.5)
-		print(string.format("[DOOR] %d->%d: Overlap too small (%.1f), using center-only", areaA.id, areaB.id, overlapMax - overlapMin))
 		return {
 			left = nil,
 			middle = centerPoint,
@@ -332,7 +327,6 @@ local function createDoorForAreas(areaA, areaB, dirId)
 	if finalWidth < HITBOX_WIDTH then
 		-- Too narrow after clamping, use center-only door
 		local centerPoint = lerpVec(overlapLeft, overlapRight, 0.5)
-		print(string.format("[DOOR] %d->%d: Too narrow after clamping (%.1f), center-only", areaA.id, areaB.id, finalWidth))
 		return {
 			left = nil,
 			middle = centerPoint,
@@ -357,15 +351,10 @@ local function createDoorForAreas(areaA, areaB, dirId)
 	local shrinkFromMin = 0
 	local shrinkFromMax = 0
 
-	local wallCornersChecked = 0
-	local wallCornersAffecting = 0
-	
 	-- Check all wall corners from both areas
 	for _, area in ipairs({ areaA, areaB }) do
 		if area.wallCorners then
-			print(string.format("[DOOR] Checking %d wall corners from area %d", #area.wallCorners, area.id))
 			for _, wallCorner in ipairs(area.wallCorners) do
-				wallCornersChecked = wallCornersChecked + 1
 				-- Get coordinates on both axes
 				local cornerVaryingCoord = wallCorner[axis] -- Door varies on this axis
 
@@ -378,8 +367,6 @@ local function createDoorForAreas(areaA, areaB, dirId)
 				if distToEdge > WALL_CLEARANCE then
 					goto continue_corner -- Corner is too far away from door edge
 				end
-				
-				wallCornersAffecting = wallCornersAffecting + 1
 
 				-- SECOND: Check distance to door endpoints on the VARYING axis
 				local distToMin = math.abs(cornerVaryingCoord - minDoor)
@@ -387,27 +374,18 @@ local function createDoorForAreas(areaA, areaB, dirId)
 
 				-- Shrink from min side if wall corner is within 24 units of it
 				if distToMin < WALL_CLEARANCE then
-					local shrink = WALL_CLEARANCE - distToMin
-					shrinkFromMin = math.max(shrinkFromMin, shrink)
-					print(string.format("[DOOR] Corner affecting MIN: distToEdge=%.1f, distToMin=%.1f, shrink=%.1f", distToEdge, distToMin, shrink))
+					shrinkFromMin = math.max(shrinkFromMin, WALL_CLEARANCE - distToMin)
 				end
 				
 				-- Shrink from max side if wall corner is within 24 units of it
 				if distToMax < WALL_CLEARANCE then
-					local shrink = WALL_CLEARANCE - distToMax
-					shrinkFromMax = math.max(shrinkFromMax, shrink)
-					print(string.format("[DOOR] Corner affecting MAX: distToEdge=%.1f, distToMax=%.1f, shrink=%.1f", distToEdge, distToMax, shrink))
+					shrinkFromMax = math.max(shrinkFromMax, WALL_CLEARANCE - distToMax)
 				end
 
 				::continue_corner::
 			end
-		else
-			print(string.format("[DOOR] Area %d has NO wall corners", area.id))
 		end
 	end
-	
-	print(string.format("[DOOR] Wall corners: checked=%d, affecting=%d, shrinkMin=%.1f, shrinkMax=%.1f", 
-		wallCornersChecked, wallCornersAffecting, shrinkFromMin, shrinkFromMax))
 
 	-- Apply shrinking to door endpoints and snap back to edge line
 	if shrinkFromMin > 0 then
@@ -418,7 +396,6 @@ local function createDoorForAreas(areaA, areaB, dirId)
 			newCoord = leftCoordFinal - shrinkFromMin
 		end
 		overlapLeft = pointOnEdge(newCoord) -- Snap to edge line after shrinking
-		print(string.format("[DOOR] Shrunk left endpoint by %.1f units", shrinkFromMin))
 	end
 
 	if shrinkFromMax > 0 then
@@ -429,23 +406,13 @@ local function createDoorForAreas(areaA, areaB, dirId)
 			newCoord = rightCoordFinal + shrinkFromMax
 		end
 		overlapRight = pointOnEdge(newCoord) -- Snap to edge line after shrinking
-		print(string.format("[DOOR] Shrunk right endpoint by %.1f units", shrinkFromMax))
 	end
 
 	-- Recalculate width after wall avoidance
 	local finalWidthAfterWalls = (overlapRight - overlapLeft):Length2D()
-	
-	print(string.format("[DOOR] %d->%d: Final width=%.1f (narrow=%s)", 
-		areaA.id, areaB.id, finalWidthAfterWalls, finalWidthAfterWalls < (HITBOX_WIDTH * 2) and "YES" or "NO"))
 
 	-- Check if this is a narrow passage (< 48 units = bottleneck)
 	local isNarrowPassage = finalWidthAfterWalls < (HITBOX_WIDTH * 2)
-	
-	print(string.format("[DOOR] %d->%d: Created doors - left=%s, middle=%s, right=%s",
-		areaA.id, areaB.id,
-		isNarrowPassage and "NO" or "YES",
-		"YES",
-		isNarrowPassage and "NO" or "YES"))
 
 	return {
 		left = isNarrowPassage and nil or overlapLeft,
@@ -525,17 +492,14 @@ function ConnectionBuilder.BuildDoorsForConnections()
 									Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
 								end
 
-								print(string.format("[BUILD] Processing connection %s->%s (dir=%d)", nodeId, targetId, dirId))
-								
-						-- Create SHARED doors (use canonical ordering for IDs)
-						local door = createDoorForAreas(node, targetNode, dirId)
-						if door then
+								-- Create SHARED doors (use canonical ordering for IDs)
+								local door = createDoorForAreas(node, targetNode, dirId)
+								if door then
 									local fwdDir = dirId
 
 									-- Use smaller nodeId first for canonical door IDs
 									local doorPrefix = (nodeId < targetId) and (nodeId .. "_" .. targetId)
 										or (targetId .. "_" .. nodeId)
-									print(string.format("[BUILD] Creating door %s->%s (prefix=%s)", nodeId, targetId, doorPrefix))
 
 									-- Create door nodes with bidirectional connections (if applicable)
 									if door.left then
@@ -593,7 +557,7 @@ function ConnectionBuilder.BuildDoorsForConnections()
 										doorsBuilt = doorsBuilt + 1
 									end
 								else
-									print(string.format("[BUILD] FAILED to create door for %s->%s", nodeId, targetId))
+									print(string.format("[BUILD] to create door for %s->%s", nodeId, targetId))
 								end
 							end
 						end
