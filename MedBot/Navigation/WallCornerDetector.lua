@@ -48,28 +48,6 @@ local function groupNeighborsByDirection(area, nodes)
 	return neighbors
 end
 
--- Get 2 corner points for a direction edge
-local function getDirectionCorners(area, direction)
-	if not (area.nw and area.ne and area.se and area.sw) then
-		return nil, nil
-	end
-
-	if direction == "north" then
-		return area.nw, area.ne
-	end
-	if direction == "south" then
-		return area.se, area.sw
-	end
-	if direction == "east" then
-		return area.ne, area.se
-	end
-	if direction == "west" then
-		return area.sw, area.nw
-	end
-
-	return nil, nil
-end
-
 -- Check if point lies on neighbor's facing boundary using shared axis
 -- Returns: proximity score (0.99 if at edge, 1.0 if perfectly within), and the neighbor
 local function checkPointOnNeighborBoundary(point, neighbor, direction)
