@@ -22,7 +22,7 @@ local function findPayloadGoal()
 	for _, entity in pairs(G.World.payloads or {}) do
 		if entity:IsValid() and entity:GetTeamNumber() == pLocal:GetTeamNumber() then
 			local pos = entity:GetAbsOrigin()
-			return Navigation.GetClosestNode(pos), pos
+			return Navigation.GetAreaAtPosition(pos), pos
 		end
 	end
 end
@@ -78,7 +78,7 @@ local function findFlagGoal()
 	end
 
 	if targetFlag and targetPos then
-		return Navigation.GetClosestNode(targetPos), targetPos
+		return Navigation.GetAreaAtPosition(targetPos), targetPos
 	end
 
 	if shouldLog then
@@ -92,7 +92,7 @@ local function findHealthGoal()
 	local closestNode = nil
 	local closestPos = nil
 	for _, pos in pairs(G.World.healthPacks) do
-		local healthNode = Navigation.GetClosestNode(pos)
+		local healthNode = Navigation.GetAreaAtPosition(pos)
 		if healthNode then
 			local dist = (G.pLocal.Origin - pos):Length()
 			if dist < closestDist then
@@ -134,7 +134,7 @@ local function findFollowGoal()
 				closestDist = dist
 				-- Update our memory of where we last saw this target
 				G.Navigation.lastKnownTargetPosition = pos
-				closestNode = Navigation.GetClosestNode(pos)
+				closestNode = Navigation.GetAreaAtPosition(pos)
 				targetPos = pos
 			end
 		end
@@ -143,7 +143,7 @@ local function findFollowGoal()
 	-- If no alive teammates found, but we have a last known position, use that
 	if not foundTarget and G.Navigation.lastKnownTargetPosition then
 		Log:Info("No alive teammates found, moving to last known position")
-		closestNode = Navigation.GetClosestNode(G.Navigation.lastKnownTargetPosition)
+		closestNode = Navigation.GetAreaAtPosition(G.Navigation.lastKnownTargetPosition)
 		targetPos = G.Navigation.lastKnownTargetPosition
 	end
 

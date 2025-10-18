@@ -453,6 +453,22 @@ function Navigation.GetClosestNode(pos)
 	return n
 end
 
+-- Get area at position using multi-point distance check (more precise than GetClosestNode)
+---@param pos Vector3|{ x:number, y:number, z:number }
+---@return Node|nil
+function Navigation.GetAreaAtPosition(pos)
+	-- Safety check: ensure nodes are available
+	if not G.Navigation.nodes or not next(G.Navigation.nodes) then
+		Log:Debug("No navigation nodes available for GetAreaAtPosition")
+		return nil
+	end
+	local n = Node.GetAreaAtPosition(pos)
+	if not n then
+		return nil
+	end
+	return n
+end
+
 -- Main pathfinding function - FIXED TO USE DUAL A* SYSTEM
 ---@param startNode Node
 ---@param goalNode Node

@@ -25,8 +25,8 @@ local function collectNodesByConnectionDepth(playerPos, maxDepth)
         return {}
     end
 
-    -- Get player's closest nav position
-    local startNode = Node.GetClosestNode(playerPos)
+    -- Get area containing player position (uses flood fill + multi-point distance)
+    local startNode = Node.GetAreaAtPosition(playerPos)
     if not startNode then
         return {}
     end
