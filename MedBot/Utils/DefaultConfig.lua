@@ -16,7 +16,6 @@ defaultconfig = {
 		smoothFactor = 0.05,
 		LookingAhead = true, -- Enable automatic camera rotation towards target node
 		Duck_Grab = true,
-		Debug = false, -- Enable debug logging across all modules
 	},
 	Navigation = {
 		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
@@ -38,6 +37,7 @@ defaultconfig = {
 		showNodeIds = false, -- Show node ID numbers for debugging
 		showAgentBoxes = false, -- Show agent boxes
 		showSmartJump = false, -- Show SmartJump hitbox and trajectory visualization
+		Debug_Mode = false, -- Master debug toggle for visuals and debug logging
 	},
 	Movement = {
 		lookatpath = true, -- Look at where we are walking

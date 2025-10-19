@@ -418,11 +418,6 @@ local function OnDrawMenu()
 
 		TimMenu.NextLine()
 
-		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)
-		G.Menu.Main.Debug = TimMenu.Checkbox("Enable Debug Output", G.Menu.Main.Debug or false)
-		TimMenu.Tooltip("Enable debug prints from Smart Jump and Node Skipper (useful for debugging but spammy)")
-		TimMenu.NextLine()
-
 		-- Smart Jump (works independently of MedBot enable state)
 		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
 		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
@@ -525,6 +520,9 @@ local function OnDrawMenu()
 	elseif G.Menu.Tab == "Visuals" then
 		-- Visual Settings Section
 		TimMenu.BeginSector("Visual Settings")
+		G.Menu.Visuals.Debug_Mode = TimMenu.Checkbox("Debug Mode", G.Menu.Visuals.Debug_Mode or false)
+		TimMenu.Tooltip("Enable debug visuals and verbose logging for troubleshooting")
+		TimMenu.NextLine()
 		-- Initialize only if nil (not false)
 		if G.Menu.Visuals.EnableVisuals == nil then
 			G.Menu.Visuals.EnableVisuals = true
@@ -770,7 +768,6 @@ defaultconfig = {
 		smoothFactor = 0.05,
 		LookingAhead = true, -- Enable automatic camera rotation towards target node
 		Duck_Grab = true,
-		Debug = false, -- Enable debug logging across all modules
 	},
 	Navigation = {
 		Skip_Nodes = true, --skips nodes if it can go directly to ones closer to target.
@@ -792,6 +789,7 @@ defaultconfig = {
 		showNodeIds = false, -- Show node ID numbers for debugging
 		showAgentBoxes = false, -- Show agent boxes
 		showSmartJump = false, -- Show SmartJump hitbox and trajectory visualization
+		Debug_Mode = false, -- Master debug toggle for visuals and debug logging
 	},
 	Movement = {
 		lookatpath = true, -- Look at where we are walking
@@ -1585,7 +1583,7 @@ end
 function Logger:Debug(msg, ...)
 	-- Only print debug messages if debug is enabled in menu
 	local G = require("MedBot.Core.Globals")
-	if not G.Menu.Main.Debug then
+	if not (G.Menu.Visuals and G.Menu.Visuals.Debug_Mode) then
 		return -- Skip debug output when debug is disabled
 	end
 	
@@ -1936,7 +1934,7 @@ end
 -- Debug logging wrapper (deprecated - Logger:Debug now handles menu check automatically)
 function Common.DebugLog(level, ...)
 	local G = require("MedBot.Core.Globals")
-	if G.Menu.Main.Debug then
+	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode then
 		Common.Log[level](...)
 	end
 end
@@ -3072,12 +3070,41 @@ local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
 local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
 
 -- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
+local DEBUG_TRACES = (G.Menu.Visuals and G.Menu.Visuals.Debug_Mode) or false -- follow global debug setting by default
 
 -- Traces tables for debugging (MUST be declared before DrawDebugTraces function)
 local hullTraces = {}
 local lineTraces = {}
 local validationResults = {} -- Store multiple validation results (start, end, result, time)
+
+local POSITION_TOLERANCE = 8 -- Units tolerance when reusing recent validation result
+
+local lastValidation = {
+	tick = -math.huge,
+	start = nil,
+	goal = nil,
+	result = nil,
+}
+
+local function copyVectorComponents(vec)
+	return { x = vec.x, y = vec.y, z = vec.z }
+end
+
+local function vectorsClose(vec, cached)
+	if not vec or not cached then
+		return false
+	end
+	return math.abs(vec.x - cached.x) <= POSITION_TOLERANCE
+		and math.abs(vec.y - cached.y) <= POSITION_TOLERANCE
+		and math.abs(vec.z - cached.z) <= POSITION_TOLERANCE
+end
+
+local function cacheValidationResult(tick, startPos, goalPos, result)
+	lastValidation.tick = tick
+	lastValidation.start = copyVectorComponents(startPos)
+	lastValidation.goal = copyVectorComponents(goalPos)
+	lastValidation.result = result
+end
 
 -- Calculate tick interval at runtime
 local function getTraceExpireTime()
@@ -3086,9 +3113,16 @@ end
 
 -- Debug visualization function for trace hulls
 function PathValidator.DrawDebugTraces()
+	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode ~= nil then
+		DEBUG_TRACES = G.Menu.Visuals.Debug_Mode
+	end
+	if not DEBUG_TRACES then
+		return
+	end
+
 	local currentTime = globals.RealTime()
 	local expireTime = getTraceExpireTime()
-	
+
 	-- Remove expired validation results
 	local i = 1
 	while i <= #validationResults do
@@ -3098,7 +3132,7 @@ function PathValidator.DrawDebugTraces()
 			i = i + 1
 		end
 	end
-	
+
 	-- Draw all hull traces as BLUE arrows (background layer)
 	if hullTraces and #hullTraces > 0 then
 		for _, trace in ipairs(hullTraces) do
@@ -3108,7 +3142,7 @@ function PathValidator.DrawDebugTraces()
 			end
 		end
 	end
-	
+
 	-- Draw all line traces as white lines (middle layer)
 	if lineTraces and #lineTraces > 0 then
 		for _, trace in ipairs(lineTraces) do
@@ -3122,7 +3156,7 @@ function PathValidator.DrawDebugTraces()
 			end
 		end
 	end
-	
+
 	-- Draw ALL validation result arrows LAST (foreground layer - GREEN = walkable, RED = blocked)
 	for _, validation in ipairs(validationResults) do
 		if validation.startPos and validation.endPos then
@@ -3138,8 +3172,12 @@ end
 
 -- Toggle debug visualization on/off
 function PathValidator.ToggleDebug()
-	DEBUG_TRACES = not DEBUG_TRACES
-	print("PathValidator debug traces: " .. (DEBUG_TRACES and "ENABLED" or "DISABLED"))
+	local newState = not DEBUG_TRACES
+	DEBUG_TRACES = newState
+	if G.Menu.Visuals then
+		G.Menu.Visuals.Debug_Mode = newState
+	end
+	print("PathValidator debug mode: " .. (newState and "ENABLED" or "DISABLED"))
 end
 
 -- Get current debug state
@@ -3168,10 +3206,10 @@ end
 local function performTraceHull(startPos, endPos)
 	local result =
 		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
-	
+
 	local currentTime = globals.RealTime()
 	local expireTime = getTraceExpireTime()
-	
+
 	-- Before adding new trace, remove old ones (older than 4 ticks)
 	local i = 1
 	while i <= #hullTraces do
@@ -3181,7 +3219,7 @@ local function performTraceHull(startPos, endPos)
 			i = i + 1
 		end
 	end
-	
+
 	-- Add new trace
 	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos, time = currentTime })
 	return result
@@ -3212,7 +3250,18 @@ end
 function PathValidator.Path(startPos, goalPos, overrideMode)
 	-- Don't clear traces - accumulate them over time
 	-- Old traces are removed in DrawDebugTraces based on timestamp
-	
+
+	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode ~= nil then
+		DEBUG_TRACES = G.Menu.Visuals.Debug_Mode
+	end
+
+	local currentTick = globals.TickCount()
+	if (currentTick - lastValidation.tick) < 11 then
+		if vectorsClose(startPos, lastValidation.start) and vectorsClose(goalPos, lastValidation.goal) then
+			return lastValidation.result
+		end
+	end
+
 	local checkTime = globals.RealTime() -- Record when check happened
 
 	if DEBUG_TRACES then
@@ -3267,12 +3316,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 
 			if altWallTrace.fraction == 0 then
 				-- Store validation result BEFORE returning
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = false, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = false,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, false)
 				return false -- Still blocked after smaller step - truly unwalkable
 			else
 				currentPos = altWallTrace.endpos -- Use the smaller step that worked
@@ -3293,12 +3343,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 
 			if groundTrace.fraction == 1 then
 				-- Store validation result BEFORE returning
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = false, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = false,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, false)
 				return false -- No ground beneath; path is unwalkable
 			end
 
@@ -3314,32 +3365,35 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
 		if currentDistance > MaxDistance then --if target is unreachable
 			-- Store validation result BEFORE returning
-			table.insert(validationResults, { 
-				startPos = startPos, 
-				endPos = goalPos, 
-				result = false, 
-				time = checkTime 
+			table.insert(validationResults, {
+				startPos = startPos,
+				endPos = goalPos,
+				result = false,
+				time = checkTime,
 			})
+			cacheValidationResult(currentTick, startPos, goalPos, false)
 			return false
 		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
 			if verticalDist < 24 then --within vertical range
 				-- Store validation result BEFORE returning (SUCCESS)
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = true, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = true,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, true)
 				return true -- Goal is within reach; path is walkable
 			else --unreachable
 				-- Store validation result BEFORE returning
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = false, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = false,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, false)
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
@@ -3350,12 +3404,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 	end
 
 	-- Store validation result BEFORE returning (max iterations)
-	table.insert(validationResults, { 
-		startPos = startPos, 
-		endPos = goalPos, 
-		result = false, 
-		time = checkTime 
+	table.insert(validationResults, {
+		startPos = startPos,
+		endPos = goalPos,
+		result = false,
+		time = checkTime,
 	})
+	cacheValidationResult(currentTick, startPos, goalPos, false)
 	return false -- Max iterations reached without finding a path
 end
 
@@ -4197,7 +4252,7 @@ function DoorBuilder.BuildDoorsForConnections()
 												if ConnectionUtils.GetNodeId(tConn) == nodeId then
 													hasReverse = true
 													revDir = tDirId
-													if G.Menu.Main.Debug then
+													if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode then
 														Log:Debug(
 															"Connection %s->%s: Found reverse (bidirectional)",
 															nodeId,
@@ -4215,7 +4270,7 @@ function DoorBuilder.BuildDoorsForConnections()
 								end
 
 								if not hasReverse then
-									if G.Menu.Main.Debug then
+									if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode then
 										Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
 									end
 								end
@@ -6024,7 +6079,7 @@ function MovementDecisions.advanceNode()
 	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
 	if G.Menu.Navigation.Skip_Nodes then
-		print("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
+		Log:Debug("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
 		
 		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
 		if #G.Navigation.path >= 2 then
@@ -6221,6 +6276,7 @@ Logic:
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
+local WorkManager = require("MedBot.WorkManager")
 local PathValidator = require("MedBot.Navigation.PathValidator")
 
 local Log = Common.Log.new("NodeSkipper")
@@ -6255,16 +6311,16 @@ function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
 	end
 
 	-- Path goes player → goal (normal order)
-	-- path[1] = behind us (last node)
-	-- path[2] = next immediate node (walking toward)
+	-- path[1] = current target (walking toward RIGHT NOW)
+	-- path[2] = next node (after current)
 	-- path[3] = skip target (validate if we can reach this directly)
 	if #path < 3 then
 		Log:Debug("ABORT - Path too short (length=%d, need 3+)", #path)
 		return false
 	end
 
-	local currentNode = path[1] -- Behind us
-	local nextNode = path[2] -- Next immediate
+	local currentNode = path[1] -- Current target
+	local nextNode = path[2] -- Next after current
 	local skipToNode = path[3] -- Skip target
 
 	if not currentNode or not nextNode or not skipToNode then
@@ -6279,21 +6335,33 @@ function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
 
 	Log:Debug("Path valid, checking distances (path length=%d)", #path)
 	Log:Debug(
-		"path[1]=%s (behind), path[2]=%s (next), path[3]=%s (skip target)",
+		"path[1]=%s (current), path[2]=%s (next), path[3]=%s (skip target)",
 		tostring(currentNode.id or "nil"),
 		tostring(nextNode.id or "nil"),
 		tostring(skipToNode.id or "nil")
 	)
 
+	-- CRITICAL: Only skip if we're actually AT or PAST path[1]
+	-- If player is far from path[1], we haven't reached it yet (e.g., fell and need to climb back)
+	local distPlayerToCurrent = Common.Distance3D(currentPos, currentNode.pos)
+	local REACH_THRESHOLD = 60 -- Same as MovementDecisions reach distance
+	
+	if distPlayerToCurrent > REACH_THRESHOLD then
+		Log:Debug("ABORT - Haven't reached path[1] yet (dist=%.0f > threshold=%d)", distPlayerToCurrent, REACH_THRESHOLD)
+		Log:Debug("Path[1] might be above/behind us after falling - don't skip until we reach it")
+		return false
+	end
+	
 	local distPlayerToSkip = Common.Distance3D(currentPos, skipToNode.pos)
 	local distNextToSkip = Common.Distance3D(nextNode.pos, skipToNode.pos)
 
 	Log:Debug("Player pos=(%.0f,%.0f,%.0f)", currentPos.x, currentPos.y, currentPos.z)
-	Log:Debug("path[1] (behind) pos=(%.0f,%.0f,%.0f)", currentNode.pos.x, currentNode.pos.y, currentNode.pos.z)
+	Log:Debug("path[1] (current) pos=(%.0f,%.0f,%.0f)", currentNode.pos.x, currentNode.pos.y, currentNode.pos.z)
 	Log:Debug("path[2] (next) pos=(%.0f,%.0f,%.0f)", nextNode.pos.x, nextNode.pos.y, nextNode.pos.z)
 	Log:Debug("path[3] (skip target) pos=(%.0f,%.0f,%.0f)", skipToNode.pos.x, skipToNode.pos.y, skipToNode.pos.z)
 
-	-- Only skip if player is closer to skip target than next node is to skip target
+	-- Only skip if player is closer to skip target than NEXT node is to skip target
+	-- (meaning we're progressing past the current node already)
 	if distPlayerToSkip >= distNextToSkip then
 		Log:Debug("ABORT - Not closer (player=%.0f >= next=%.0f)", distPlayerToSkip, distNextToSkip)
 		return false -- Don't skip if we're not moving forward
@@ -6313,6 +6381,11 @@ function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
 		skipToNode.pos.z
 	)
 
+	if not WorkManager.attemptWork(11, "node_skip_validation") then
+		Log:Debug("Skip validation on cooldown - waiting 11 ticks between checks")
+		return false
+	end
+
 	local isWalkable = PathValidator.Path(currentPos, skipToNode.pos)
 	Log:Debug("Can reach skip target directly: %s", tostring(isWalkable))
 
@@ -6329,9 +6402,9 @@ function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
 		return false -- Don't skip if path has walls/obstacles
 	end
 
-	-- Execute the skip
+	-- Execute the skip - remove path[1] (current node) so path[2] becomes new current
 	if removeNodeCallback then
-		Log:Debug("Skipping node - path is clear")
+		Log:Debug("Skipping path[1] (node %s) - direct path to path[3] validated", tostring(currentNode.id))
 		removeNodeCallback()
 		return true
 	end

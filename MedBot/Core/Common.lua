@@ -56,7 +56,7 @@ end
 function Logger:Debug(msg, ...)
 	-- Only print debug messages if debug is enabled in menu
 	local G = require("MedBot.Core.Globals")
-	if not G.Menu.Main.Debug then
+	if not (G.Menu.Visuals and G.Menu.Visuals.Debug_Mode) then
 		return -- Skip debug output when debug is disabled
 	end
 	
@@ -407,7 +407,7 @@ end
 -- Debug logging wrapper (deprecated - Logger:Debug now handles menu check automatically)
 function Common.DebugLog(level, ...)
 	local G = require("MedBot.Core.Globals")
-	if G.Menu.Main.Debug then
+	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode then
 		Common.Log[level](...)
 	end
 end

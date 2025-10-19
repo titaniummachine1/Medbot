@@ -70,11 +70,6 @@ local function OnDrawMenu()
 
 		TimMenu.NextLine()
 
-		-- Debug output toggle (controls Smart Jump and Node Skipper debug prints)
-		G.Menu.Main.Debug = TimMenu.Checkbox("Enable Debug Output", G.Menu.Main.Debug or false)
-		TimMenu.Tooltip("Enable debug prints from Smart Jump and Node Skipper (useful for debugging but spammy)")
-		TimMenu.NextLine()
-
 		-- Smart Jump (works independently of MedBot enable state)
 		G.Menu.SmartJump.Enable = TimMenu.Checkbox("Smart Jump", G.Menu.SmartJump.Enable)
 		TimMenu.Tooltip("Enable intelligent jumping over obstacles (works even when MedBot is disabled)")
@@ -177,6 +172,9 @@ local function OnDrawMenu()
 	elseif G.Menu.Tab == "Visuals" then
 		-- Visual Settings Section
 		TimMenu.BeginSector("Visual Settings")
+		G.Menu.Visuals.Debug_Mode = TimMenu.Checkbox("Debug Mode", G.Menu.Visuals.Debug_Mode or false)
+		TimMenu.Tooltip("Enable debug visuals and verbose logging for troubleshooting")
+		TimMenu.NextLine()
 		-- Initialize only if nil (not false)
 		if G.Menu.Visuals.EnableVisuals == nil then
 			G.Menu.Visuals.EnableVisuals = true

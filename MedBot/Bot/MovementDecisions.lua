@@ -118,7 +118,7 @@ function MovementDecisions.advanceNode()
 	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
 	if G.Menu.Navigation.Skip_Nodes then
-		print("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
+		Log:Debug("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
 		
 		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
 		if #G.Navigation.path >= 2 then

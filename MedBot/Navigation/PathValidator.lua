@@ -23,12 +23,41 @@ local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
 local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
 
 -- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
+local DEBUG_TRACES = (G.Menu.Visuals and G.Menu.Visuals.Debug_Mode) or false -- follow global debug setting by default
 
 -- Traces tables for debugging (MUST be declared before DrawDebugTraces function)
 local hullTraces = {}
 local lineTraces = {}
 local validationResults = {} -- Store multiple validation results (start, end, result, time)
+
+local POSITION_TOLERANCE = 8 -- Units tolerance when reusing recent validation result
+
+local lastValidation = {
+	tick = -math.huge,
+	start = nil,
+	goal = nil,
+	result = nil,
+}
+
+local function copyVectorComponents(vec)
+	return { x = vec.x, y = vec.y, z = vec.z }
+end
+
+local function vectorsClose(vec, cached)
+	if not vec or not cached then
+		return false
+	end
+	return math.abs(vec.x - cached.x) <= POSITION_TOLERANCE
+		and math.abs(vec.y - cached.y) <= POSITION_TOLERANCE
+		and math.abs(vec.z - cached.z) <= POSITION_TOLERANCE
+end
+
+local function cacheValidationResult(tick, startPos, goalPos, result)
+	lastValidation.tick = tick
+	lastValidation.start = copyVectorComponents(startPos)
+	lastValidation.goal = copyVectorComponents(goalPos)
+	lastValidation.result = result
+end
 
 -- Calculate tick interval at runtime
 local function getTraceExpireTime()
@@ -37,9 +66,16 @@ end
 
 -- Debug visualization function for trace hulls
 function PathValidator.DrawDebugTraces()
+	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode ~= nil then
+		DEBUG_TRACES = G.Menu.Visuals.Debug_Mode
+	end
+	if not DEBUG_TRACES then
+		return
+	end
+
 	local currentTime = globals.RealTime()
 	local expireTime = getTraceExpireTime()
-	
+
 	-- Remove expired validation results
 	local i = 1
 	while i <= #validationResults do
@@ -49,7 +85,7 @@ function PathValidator.DrawDebugTraces()
 			i = i + 1
 		end
 	end
-	
+
 	-- Draw all hull traces as BLUE arrows (background layer)
 	if hullTraces and #hullTraces > 0 then
 		for _, trace in ipairs(hullTraces) do
@@ -59,7 +95,7 @@ function PathValidator.DrawDebugTraces()
 			end
 		end
 	end
-	
+
 	-- Draw all line traces as white lines (middle layer)
 	if lineTraces and #lineTraces > 0 then
 		for _, trace in ipairs(lineTraces) do
@@ -73,7 +109,7 @@ function PathValidator.DrawDebugTraces()
 			end
 		end
 	end
-	
+
 	-- Draw ALL validation result arrows LAST (foreground layer - GREEN = walkable, RED = blocked)
 	for _, validation in ipairs(validationResults) do
 		if validation.startPos and validation.endPos then
@@ -89,8 +125,12 @@ end
 
 -- Toggle debug visualization on/off
 function PathValidator.ToggleDebug()
-	DEBUG_TRACES = not DEBUG_TRACES
-	print("PathValidator debug traces: " .. (DEBUG_TRACES and "ENABLED" or "DISABLED"))
+	local newState = not DEBUG_TRACES
+	DEBUG_TRACES = newState
+	if G.Menu.Visuals then
+		G.Menu.Visuals.Debug_Mode = newState
+	end
+	print("PathValidator debug mode: " .. (newState and "ENABLED" or "DISABLED"))
 end
 
 -- Get current debug state
@@ -119,10 +159,10 @@ end
 local function performTraceHull(startPos, endPos)
 	local result =
 		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
-	
+
 	local currentTime = globals.RealTime()
 	local expireTime = getTraceExpireTime()
-	
+
 	-- Before adding new trace, remove old ones (older than 4 ticks)
 	local i = 1
 	while i <= #hullTraces do
@@ -132,7 +172,7 @@ local function performTraceHull(startPos, endPos)
 			i = i + 1
 		end
 	end
-	
+
 	-- Add new trace
 	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos, time = currentTime })
 	return result
@@ -163,7 +203,18 @@ end
 function PathValidator.Path(startPos, goalPos, overrideMode)
 	-- Don't clear traces - accumulate them over time
 	-- Old traces are removed in DrawDebugTraces based on timestamp
-	
+
+	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode ~= nil then
+		DEBUG_TRACES = G.Menu.Visuals.Debug_Mode
+	end
+
+	local currentTick = globals.TickCount()
+	if (currentTick - lastValidation.tick) < 11 then
+		if vectorsClose(startPos, lastValidation.start) and vectorsClose(goalPos, lastValidation.goal) then
+			return lastValidation.result
+		end
+	end
+
 	local checkTime = globals.RealTime() -- Record when check happened
 
 	if DEBUG_TRACES then
@@ -218,12 +269,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 
 			if altWallTrace.fraction == 0 then
 				-- Store validation result BEFORE returning
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = false, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = false,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, false)
 				return false -- Still blocked after smaller step - truly unwalkable
 			else
 				currentPos = altWallTrace.endpos -- Use the smaller step that worked
@@ -244,12 +296,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 
 			if groundTrace.fraction == 1 then
 				-- Store validation result BEFORE returning
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = false, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = false,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, false)
 				return false -- No ground beneath; path is unwalkable
 			end
 
@@ -265,32 +318,35 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
 		if currentDistance > MaxDistance then --if target is unreachable
 			-- Store validation result BEFORE returning
-			table.insert(validationResults, { 
-				startPos = startPos, 
-				endPos = goalPos, 
-				result = false, 
-				time = checkTime 
+			table.insert(validationResults, {
+				startPos = startPos,
+				endPos = goalPos,
+				result = false,
+				time = checkTime,
 			})
+			cacheValidationResult(currentTick, startPos, goalPos, false)
 			return false
 		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
 			if verticalDist < 24 then --within vertical range
 				-- Store validation result BEFORE returning (SUCCESS)
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = true, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = true,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, true)
 				return true -- Goal is within reach; path is walkable
 			else --unreachable
 				-- Store validation result BEFORE returning
-				table.insert(validationResults, { 
-					startPos = startPos, 
-					endPos = goalPos, 
-					result = false, 
-					time = checkTime 
+				table.insert(validationResults, {
+					startPos = startPos,
+					endPos = goalPos,
+					result = false,
+					time = checkTime,
 				})
+				cacheValidationResult(currentTick, startPos, goalPos, false)
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
@@ -301,12 +357,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 	end
 
 	-- Store validation result BEFORE returning (max iterations)
-	table.insert(validationResults, { 
-		startPos = startPos, 
-		endPos = goalPos, 
-		result = false, 
-		time = checkTime 
+	table.insert(validationResults, {
+		startPos = startPos,
+		endPos = goalPos,
+		result = false,
+		time = checkTime,
 	})
+	cacheValidationResult(currentTick, startPos, goalPos, false)
 	return false -- Max iterations reached without finding a path
 end
 

@@ -89,7 +89,7 @@ function DoorBuilder.BuildDoorsForConnections()
 												if ConnectionUtils.GetNodeId(tConn) == nodeId then
 													hasReverse = true
 													revDir = tDirId
-													if G.Menu.Main.Debug then
+													if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode then
 														Log:Debug(
 															"Connection %s->%s: Found reverse (bidirectional)",
 															nodeId,
@@ -107,7 +107,7 @@ function DoorBuilder.BuildDoorsForConnections()
 								end
 
 								if not hasReverse then
-									if G.Menu.Main.Debug then
+									if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode then
 										Log:Debug("Connection %s->%s: No reverse found (one-way)", nodeId, targetId)
 									end
 								end
