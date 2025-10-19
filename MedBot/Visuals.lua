@@ -25,8 +25,8 @@ local function collectNodesByConnectionDepth(playerPos, maxDepth)
         return {}
     end
 
-    -- Get area containing player position (uses flood fill + multi-point distance)
-    local startNode = Node.GetAreaAtPosition(playerPos)
+    -- Get closest area to player (fast center-distance check, not expensive containment check)
+    local startNode = Node.GetClosestNode(playerPos)
     if not startNode then
         return {}
     end
