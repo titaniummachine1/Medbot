@@ -177,7 +177,10 @@ local function OnDrawMenu()
 	elseif G.Menu.Tab == "Visuals" then
 		-- Visual Settings Section
 		TimMenu.BeginSector("Visual Settings")
-		G.Menu.Visuals.EnableVisuals = G.Menu.Visuals.EnableVisuals or true
+		-- Initialize only if nil (not false)
+		if G.Menu.Visuals.EnableVisuals == nil then
+			G.Menu.Visuals.EnableVisuals = true
+		end
 		G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 		TimMenu.NextLine()
 

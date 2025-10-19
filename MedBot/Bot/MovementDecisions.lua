@@ -37,32 +37,47 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		return result
 	end
 
+	-- In FOLLOWING state we don't advance nodes based on reach distance
+	if G.currentState == G.States.FOLLOWING then
+		return result
+	end
+
 	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
 
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
-	
+
 	-- Simple node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
 	if WorkManager.attemptWork(1, "node_skipping") then
 		if G.Navigation.path and #G.Navigation.path >= 2 then
 			local currentNode = G.Navigation.path[1]
 			local nextNode = G.Navigation.path[2]
-			
+
 			if currentNode and nextNode and currentNode.pos and nextNode.pos then
 				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
 				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-				
-				if distPlayerToNext < distCurrentToNext then
-					Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
-					Navigation.RemoveCurrentNode()
-					reachedTarget = false -- Don't double-advance
+
+				-- Only skip if: 1) closer to next than current is, 2) within reasonable range, 3) path is walkable
+				if distPlayerToNext < distCurrentToNext and distPlayerToNext < (distCurrentToNext * 0.75) then
+					local isWalkable = PathValidator.Path(LocalOrigin, nextNode.pos)
+					Log:Debug(
+						"Skip check: player=%.0f current=%.0f walkable=%s",
+						distPlayerToNext,
+						distCurrentToNext,
+						tostring(isWalkable)
+					)
+					if isWalkable then
+						Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
+						Navigation.RemoveCurrentNode()
+						reachedTarget = false -- Don't double-advance
+					end
 				end
 			end
 		end
 	end
-	
+
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
 
@@ -117,10 +132,7 @@ end
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
-	Log:Debug(
-		tostring(G.Menu.Main.Skip_Nodes),
-		#G.Navigation.path
-	)
+	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
 	if G.Menu.Main.Skip_Nodes then
 		Log:Debug("Removing current node (Skip Nodes enabled)")
@@ -186,7 +198,11 @@ function MovementDecisions.checkStuckState()
 
 					-- If velocity too low for 66 ticks (1 second), switch to STUCK state
 					if G.Navigation.lowVelocityTicks > 66 then
-						Log:Warn("STUCK: Low velocity (%d) for %d ticks, entering STUCK state", speed2D, G.Navigation.lowVelocityTicks)
+						Log:Warn(
+							"STUCK: Low velocity (%d) for %d ticks, entering STUCK state",
+							speed2D,
+							G.Navigation.lowVelocityTicks
+						)
 						G.currentState = G.States.STUCK
 						G.Navigation.lowVelocityTicks = 0
 					end
@@ -196,7 +212,7 @@ function MovementDecisions.checkStuckState()
 			end
 		end
 	end
-	
+
 	-- Simple walkability check for ALL modes (with 33 tick cooldown)
 	-- Only when NOT walking autonomously (walking mode has velocity checks)
 	if not G.Menu.Main.EnableWalking then

@@ -1,10 +1,9 @@
 --[[
-Node Skipper - Door-based funneling node skipping
+Node Skipper - Simple forward-progress node skipping
 Logic:
-1. Use doors as portals (left/right edges)
-2. Funnel only in the direction the path is going (from connection data)
-3. Skip node if next node closer to player than current node to next node (avoid backwalking)
-4. Use max skip range from menu settings
+1. Respect Skip_Nodes toggle
+2. Only skip when the player is closer to the next node than the current node is
+3. Returns fixed skip count (1) to advance steadily without funneling
 ]]
 
 local Common = require("MedBot.Core.Common")

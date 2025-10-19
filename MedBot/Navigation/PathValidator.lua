@@ -29,16 +29,12 @@ function PathValidator.DrawDebugTraces()
 	end
 
 	if not hullTraces then
-		print("ISWalkable: hullTraces is nil!")
 		return
 	end
 
 	if #hullTraces == 0 then
-		print("ISWalkable: hullTraces is empty")
 		return
 	end
-
-	print("ISWalkable: Drawing " .. #hullTraces .. " hull traces")
 
 	-- Draw all hull traces as blue arrow lines
 	for _, trace in ipairs(hullTraces) do
@@ -83,7 +79,7 @@ local hullTraces = {}
 local lineTraces = {}
 
 -- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = false -- Disabled for performance
+local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
 
 local function shouldHitEntity(entity)
 	-- Use fresh player reference from globals (updated every tick)
@@ -126,9 +122,20 @@ end
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
 function PathValidator.Path(startPos, goalPos, overrideMode)
-	-- Clear trace tables for debugging (like A_standstillDummy)
-	hullTraces = {}
-	lineTraces = {}
+	-- DON'T clear traces here - let them persist for visualization
+	-- They'll be overwritten on next call anyway
+	if not hullTraces then
+		hullTraces = {}
+	end
+	if not lineTraces then
+		lineTraces = {}
+	end
+
+	-- Clear only when starting a new check (not every iteration)
+	if DEBUG_TRACES then
+		hullTraces = {}
+		lineTraces = {}
+	end
 
 	-- print("ISWalkable: Path called from " .. tostring(startPos) .. " to " .. tostring(goalPos))
 

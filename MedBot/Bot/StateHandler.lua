@@ -58,16 +58,14 @@ function StateHandler.handleIdleState()
 		-- Only use direct-walk shortcut outside CTF and for short hops
 		local mapName = engine.GetMapName():lower()
 		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
-		if allowDirectWalk then
-			if PathValidator.Path(G.pLocal.Origin, goalPos) then
-				Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
-				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-				G.Navigation.goalPos = goalPos
-				G.Navigation.goalNodeId = goalNode.id
-				G.currentState = G.States.MOVING
-				G.lastPathfindingTick = globals.TickCount()
-				return
-			end
+		if allowDirectWalk and PathValidator.Path(G.pLocal.Origin, goalPos) then
+			Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
+			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+			G.Navigation.goalPos = goalPos
+			G.Navigation.goalNodeId = goalNode.id
+			G.currentState = G.States.MOVING
+			G.lastPathfindingTick = globals.TickCount()
+			return
 		end
 
 		-- Check if goal has changed significantly from current path
@@ -81,13 +79,8 @@ function StateHandler.handleIdleState()
 	end
 
 	-- Prevent pathfinding spam by limiting frequency
-	local currentTick = globals.TickCount()
-	if not G.lastPathfindingTick then
-		G.lastPathfindingTick = 0
-	end
-
-	-- Only allow pathfinding every 90 ticks (~1.5 seconds) to prevent spam
-	if currentTick - G.lastPathfindingTick < 90 then
+	G.lastPathfindingTick = G.lastPathfindingTick or 0
+	if currentTick - G.lastPathfindingTick < 33 then
 		return
 	end
 
@@ -99,10 +92,7 @@ function StateHandler.handleIdleState()
 		return
 	end
 
-	if not goalNode then
-		goalNode, goalPos = GoalFinder.findGoal("Objective")
-	end
-	if not goalNode then
+	if not (goalNode and goalPos) then
 		-- Throttle warn to avoid log spam
 		G.lastNoGoalWarnTick = G.lastNoGoalWarnTick or 0
 		if currentTick - G.lastNoGoalWarnTick > 60 then
@@ -138,6 +128,7 @@ function StateHandler.handleIdleState()
 			-- Check distance to see if we're close enough
 			local dist = (G.pLocal.Origin - goalPos):Length()
 			local stopRadius = G.Menu.Navigation.StopDistance or 50
+			G.Navigation.followingStopRadius = stopRadius
 
 			if dist <= stopRadius then
 				-- Within stop radius - enter FOLLOWING state and just track position
@@ -150,6 +141,7 @@ function StateHandler.handleIdleState()
 				-- Too far - move closer (still direct movement, not pathfinding)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.currentState = G.States.MOVING
+				G.Navigation.followingStopRadius = nil
 				Log:Info(
 					"Moving to goal position (%.0f, %.0f, %.0f) from node %d (dist=%.0f) %s",
 					goalPos.x,
@@ -163,6 +155,7 @@ function StateHandler.handleIdleState()
 		else
 			Log:Debug("No goal position available, staying in IDLE")
 			G.lastPathfindingTick = currentTick
+			G.Navigation.followingStopRadius = nil
 		end
 		return
 	end
@@ -347,6 +340,7 @@ function StateHandler.handleFollowingState(userCmd)
 		Log:Debug("Lost target in FOLLOWING state, returning to IDLE")
 		G.currentState = G.States.IDLE
 		G.lastPathfindingTick = 0
+		G.Navigation.followingStopRadius = nil
 		return
 	end
 
@@ -357,6 +351,7 @@ function StateHandler.handleFollowingState(userCmd)
 		Log:Debug("Left target node in FOLLOWING state, returning to IDLE")
 		G.currentState = G.States.IDLE
 		G.lastPathfindingTick = 0
+		G.Navigation.followingStopRadius = nil
 		return
 	end
 
@@ -376,6 +371,7 @@ function StateHandler.handleFollowingState(userCmd)
 		if currentDist > stopRadius then
 			Log:Debug("Target moved outside stop radius, switching to MOVING")
 			G.currentState = G.States.MOVING
+			G.Navigation.followingStopRadius = nil
 		end
 	end
 

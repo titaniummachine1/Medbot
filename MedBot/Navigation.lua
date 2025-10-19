@@ -156,6 +156,11 @@ function Navigation.ResetTickTimer()
 	G.Navigation.currentNodeTicks = 0
 end
 
+function Navigation.ResetNodeSkipping()
+	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+	NodeSkipper.Reset()
+end
+
 -- ========================================================================
 -- NODE VALIDATION & CHECKS
 -- ========================================================================

@@ -79,18 +79,6 @@ Log.Level = 0
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
 
--- Helper function: Check if we've reached the target with optimized distance calculation
-local function hasReachedTarget(origin, targetPos, touchDistance, touchHeight)
-	if not origin or not targetPos then
-		return false
-	end
-
-	local horizontalDist = Common.Distance2D(origin, targetPos)
-	local verticalDist = math.abs(origin.z - targetPos.z)
-
-	return (horizontalDist < touchDistance) and (verticalDist <= touchHeight)
-end
-
 -- Initialize current state
 G.currentState = G.States.IDLE
 
@@ -537,7 +525,10 @@ local function OnDrawMenu()
 	elseif G.Menu.Tab == "Visuals" then
 		-- Visual Settings Section
 		TimMenu.BeginSector("Visual Settings")
-		G.Menu.Visuals.EnableVisuals = G.Menu.Visuals.EnableVisuals or true
+		-- Initialize only if nil (not false)
+		if G.Menu.Visuals.EnableVisuals == nil then
+			G.Menu.Visuals.EnableVisuals = true
+		end
 		G.Menu.Visuals.EnableVisuals = TimMenu.Checkbox("Enable Visuals", G.Menu.Visuals.EnableVisuals)
 		TimMenu.NextLine()
 
@@ -3176,16 +3167,12 @@ function PathValidator.DrawDebugTraces()
 	end
 
 	if not hullTraces then
-		print("ISWalkable: hullTraces is nil!")
 		return
 	end
 
 	if #hullTraces == 0 then
-		print("ISWalkable: hullTraces is empty")
 		return
 	end
-
-	print("ISWalkable: Drawing " .. #hullTraces .. " hull traces")
 
 	-- Draw all hull traces as blue arrow lines
 	for _, trace in ipairs(hullTraces) do
@@ -3230,7 +3217,7 @@ local hullTraces = {}
 local lineTraces = {}
 
 -- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = false -- Disabled for performance
+local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
 
 local function shouldHitEntity(entity)
 	-- Use fresh player reference from globals (updated every tick)
@@ -3273,9 +3260,20 @@ end
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
 function PathValidator.Path(startPos, goalPos, overrideMode)
-	-- Clear trace tables for debugging (like A_standstillDummy)
-	hullTraces = {}
-	lineTraces = {}
+	-- DON'T clear traces here - let them persist for visualization
+	-- They'll be overwritten on next call anyway
+	if not hullTraces then
+		hullTraces = {}
+	end
+	if not lineTraces then
+		lineTraces = {}
+	end
+
+	-- Clear only when starting a new check (not every iteration)
+	if DEBUG_TRACES then
+		hullTraces = {}
+		lineTraces = {}
+	end
 
 	-- print("ISWalkable: Path called from " .. tostring(startPos) .. " to " .. tostring(goalPos))
 
@@ -5951,32 +5949,47 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		return result
 	end
 
+	-- In FOLLOWING state we don't advance nodes based on reach distance
+	if G.currentState == G.States.FOLLOWING then
+		return result
+	end
+
 	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
 
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
-	
+
 	-- Simple node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
 	if WorkManager.attemptWork(1, "node_skipping") then
 		if G.Navigation.path and #G.Navigation.path >= 2 then
 			local currentNode = G.Navigation.path[1]
 			local nextNode = G.Navigation.path[2]
-			
+
 			if currentNode and nextNode and currentNode.pos and nextNode.pos then
 				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
 				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-				
-				if distPlayerToNext < distCurrentToNext then
-					Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
-					Navigation.RemoveCurrentNode()
-					reachedTarget = false -- Don't double-advance
+
+				-- Only skip if: 1) closer to next than current is, 2) within reasonable range, 3) path is walkable
+				if distPlayerToNext < distCurrentToNext and distPlayerToNext < (distCurrentToNext * 0.75) then
+					local isWalkable = PathValidator.Path(LocalOrigin, nextNode.pos)
+					Log:Debug(
+						"Skip check: player=%.0f current=%.0f walkable=%s",
+						distPlayerToNext,
+						distCurrentToNext,
+						tostring(isWalkable)
+					)
+					if isWalkable then
+						Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
+						Navigation.RemoveCurrentNode()
+						reachedTarget = false -- Don't double-advance
+					end
 				end
 			end
 		end
 	end
-	
+
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
 
@@ -6031,10 +6044,7 @@ end
 -- Decision: Handle node advancement
 function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
-	Log:Debug(
-		tostring(G.Menu.Main.Skip_Nodes),
-		#G.Navigation.path
-	)
+	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
 	if G.Menu.Main.Skip_Nodes then
 		Log:Debug("Removing current node (Skip Nodes enabled)")
@@ -6100,7 +6110,11 @@ function MovementDecisions.checkStuckState()
 
 					-- If velocity too low for 66 ticks (1 second), switch to STUCK state
 					if G.Navigation.lowVelocityTicks > 66 then
-						Log:Warn("STUCK: Low velocity (%d) for %d ticks, entering STUCK state", speed2D, G.Navigation.lowVelocityTicks)
+						Log:Warn(
+							"STUCK: Low velocity (%d) for %d ticks, entering STUCK state",
+							speed2D,
+							G.Navigation.lowVelocityTicks
+						)
 						G.currentState = G.States.STUCK
 						G.Navigation.lowVelocityTicks = 0
 					end
@@ -6110,7 +6124,7 @@ function MovementDecisions.checkStuckState()
 			end
 		end
 	end
-	
+
 	-- Simple walkability check for ALL modes (with 33 tick cooldown)
 	-- Only when NOT walking autonomously (walking mode has velocity checks)
 	if not G.Menu.Main.EnableWalking then
@@ -6694,6 +6708,11 @@ function Navigation.ResetTickTimer()
 	G.Navigation.currentNodeTicks = 0
 end
 
+function Navigation.ResetNodeSkipping()
+	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+	NodeSkipper.Reset()
+end
+
 -- ========================================================================
 -- NODE VALIDATION & CHECKS
 -- ========================================================================
@@ -7074,12 +7093,11 @@ return Navigation
 end)
 __bundle_register("MedBot.Bot.NodeSkipper", function(require, _LOADED, __bundle_register, __bundle_modules)
 --[[
-Node Skipper - Door-based funneling node skipping
+Node Skipper - Simple forward-progress node skipping
 Logic:
-1. Use doors as portals (left/right edges)
-2. Funnel only in the direction the path is going (from connection data)
-3. Skip node if next node closer to player than current node to next node (avoid backwalking)
-4. Use max skip range from menu settings
+1. Respect Skip_Nodes toggle
+2. Only skip when the player is closer to the next node than the current node is
+3. Returns fixed skip count (1) to advance steadily without funneling
 ]]
 
 local Common = require("MedBot.Core.Common")
@@ -7746,16 +7764,14 @@ function StateHandler.handleIdleState()
 		-- Only use direct-walk shortcut outside CTF and for short hops
 		local mapName = engine.GetMapName():lower()
 		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
-		if allowDirectWalk then
-			if PathValidator.Path(G.pLocal.Origin, goalPos) then
-				Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
-				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-				G.Navigation.goalPos = goalPos
-				G.Navigation.goalNodeId = goalNode.id
-				G.currentState = G.States.MOVING
-				G.lastPathfindingTick = globals.TickCount()
-				return
-			end
+		if allowDirectWalk and PathValidator.Path(G.pLocal.Origin, goalPos) then
+			Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
+			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+			G.Navigation.goalPos = goalPos
+			G.Navigation.goalNodeId = goalNode.id
+			G.currentState = G.States.MOVING
+			G.lastPathfindingTick = globals.TickCount()
+			return
 		end
 
 		-- Check if goal has changed significantly from current path
@@ -7769,13 +7785,8 @@ function StateHandler.handleIdleState()
 	end
 
 	-- Prevent pathfinding spam by limiting frequency
-	local currentTick = globals.TickCount()
-	if not G.lastPathfindingTick then
-		G.lastPathfindingTick = 0
-	end
-
-	-- Only allow pathfinding every 90 ticks (~1.5 seconds) to prevent spam
-	if currentTick - G.lastPathfindingTick < 90 then
+	G.lastPathfindingTick = G.lastPathfindingTick or 0
+	if currentTick - G.lastPathfindingTick < 33 then
 		return
 	end
 
@@ -7787,10 +7798,7 @@ function StateHandler.handleIdleState()
 		return
 	end
 
-	if not goalNode then
-		goalNode, goalPos = GoalFinder.findGoal("Objective")
-	end
-	if not goalNode then
+	if not (goalNode and goalPos) then
 		-- Throttle warn to avoid log spam
 		G.lastNoGoalWarnTick = G.lastNoGoalWarnTick or 0
 		if currentTick - G.lastNoGoalWarnTick > 60 then
@@ -7826,6 +7834,7 @@ function StateHandler.handleIdleState()
 			-- Check distance to see if we're close enough
 			local dist = (G.pLocal.Origin - goalPos):Length()
 			local stopRadius = G.Menu.Navigation.StopDistance or 50
+			G.Navigation.followingStopRadius = stopRadius
 
 			if dist <= stopRadius then
 				-- Within stop radius - enter FOLLOWING state and just track position
@@ -7838,6 +7847,7 @@ function StateHandler.handleIdleState()
 				-- Too far - move closer (still direct movement, not pathfinding)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.currentState = G.States.MOVING
+				G.Navigation.followingStopRadius = nil
 				Log:Info(
 					"Moving to goal position (%.0f, %.0f, %.0f) from node %d (dist=%.0f) %s",
 					goalPos.x,
@@ -7851,6 +7861,7 @@ function StateHandler.handleIdleState()
 		else
 			Log:Debug("No goal position available, staying in IDLE")
 			G.lastPathfindingTick = currentTick
+			G.Navigation.followingStopRadius = nil
 		end
 		return
 	end
@@ -8035,6 +8046,7 @@ function StateHandler.handleFollowingState(userCmd)
 		Log:Debug("Lost target in FOLLOWING state, returning to IDLE")
 		G.currentState = G.States.IDLE
 		G.lastPathfindingTick = 0
+		G.Navigation.followingStopRadius = nil
 		return
 	end
 
@@ -8045,6 +8057,7 @@ function StateHandler.handleFollowingState(userCmd)
 		Log:Debug("Left target node in FOLLOWING state, returning to IDLE")
 		G.currentState = G.States.IDLE
 		G.lastPathfindingTick = 0
+		G.Navigation.followingStopRadius = nil
 		return
 	end
 
@@ -8064,6 +8077,7 @@ function StateHandler.handleFollowingState(userCmd)
 		if currentDist > stopRadius then
 			Log:Debug("Target moved outside stop radius, switching to MOVING")
 			G.currentState = G.States.MOVING
+			G.Navigation.followingStopRadius = nil
 		end
 	end
 

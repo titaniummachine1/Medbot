@@ -36,18 +36,6 @@ Log.Level = 0
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
 local DEBUG_LOG_COOLDOWN = 15 -- ticks (~0.25s) between debug logs
 
--- Helper function: Check if we've reached the target with optimized distance calculation
-local function hasReachedTarget(origin, targetPos, touchDistance, touchHeight)
-	if not origin or not targetPos then
-		return false
-	end
-
-	local horizontalDist = Common.Distance2D(origin, targetPos)
-	local verticalDist = math.abs(origin.z - targetPos.z)
-
-	return (horizontalDist < touchDistance) and (verticalDist <= touchHeight)
-end
-
 -- Initialize current state
 G.currentState = G.States.IDLE
 
