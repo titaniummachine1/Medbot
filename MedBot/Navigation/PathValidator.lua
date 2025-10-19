@@ -22,36 +22,52 @@ local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval() -- Minimum step size to 
 local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
 local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
 
--- Debug visualization function for trace hulls (like A_standstillDummy)
+-- Debug flag (set to true to enable trace visualization)
+local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
+
+-- Traces tables for debugging (MUST be declared before DrawDebugTraces function)
+local hullTraces = {}
+local lineTraces = {}
+local lastCheckStart = nil
+local lastCheckEnd = nil
+local lastCheckResult = false
+local lastCheckTime = 0 -- Time when last check was performed
+local TRACE_EXPIRE_TIME = 0.015 -- Traces expire after 15ms
+
+-- Debug visualization function for trace hulls (EXACTLY like A_standstillDummy)
 function PathValidator.DrawDebugTraces()
-	if not DEBUG_TRACES then
-		return
+	local currentTime = globals.RealTime()
+	
+	-- Draw main result arrow first (GREEN = walkable, RED = blocked)
+	if lastCheckStart and lastCheckEnd and (currentTime - lastCheckTime) <= TRACE_EXPIRE_TIME then
+		if lastCheckResult then
+			draw.Color(0, 255, 0, 255) -- Green for walkable
+		else
+			draw.Color(255, 0, 0, 255) -- Red for blocked
+		end
+		Common.DrawArrowLine(lastCheckStart, lastCheckEnd, 10, 20, false)
 	end
-
-	if not hullTraces then
-		return
-	end
-
-	if #hullTraces == 0 then
-		return
-	end
-
-	-- Draw all hull traces as blue arrow lines
-	for _, trace in ipairs(hullTraces) do
-		if trace.startPos and trace.endPos then
-			draw.Color(0, 50, 255, 255) -- Blue for hull traces
-			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+	
+	-- Draw all line traces as white lines
+	if lineTraces and #lineTraces > 0 then
+		for _, trace in ipairs(lineTraces) do
+			if trace.startPos and trace.endPos then
+				draw.Color(255, 255, 255, 255) -- White for line traces
+				local w2s_start = client.WorldToScreen(trace.startPos)
+				local w2s_end = client.WorldToScreen(trace.endPos)
+				if w2s_start and w2s_end then
+					draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+				end
+			end
 		end
 	end
-
-	-- Draw all line traces as white lines
-	for _, trace in ipairs(lineTraces) do
-		if trace.startPos and trace.endPos then
-			draw.Color(255, 255, 255, 255) -- White for line traces
-			local w2s_start = client.WorldToScreen(trace.startPos)
-			local w2s_end = client.WorldToScreen(trace.endPos)
-			if w2s_start and w2s_end then
-				draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+	
+	-- Draw all hull traces as BLUE arrows (like A_standstillDummy)
+	if hullTraces and #hullTraces > 0 then
+		for _, trace in ipairs(hullTraces) do
+			if trace.startPos and trace.endPos then
+				draw.Color(0, 50, 255, 255) -- Blue for hull traces
+				Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 			end
 		end
 	end
@@ -74,13 +90,6 @@ function PathValidator.ClearDebugTraces()
 	lineTraces = {}
 end
 
--- Traces tables for debugging
-local hullTraces = {}
-local lineTraces = {}
-
--- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
-
 local function shouldHitEntity(entity)
 	-- Use fresh player reference from globals (updated every tick)
 	local pLocal = G.pLocal and G.pLocal.entity
@@ -95,7 +104,21 @@ end
 local function performTraceHull(startPos, endPos)
 	local result =
 		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
-	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos })
+	
+	local currentTime = globals.RealTime()
+	
+	-- Before adding new trace, remove old ones (older than one tick interval)
+	local i = 1
+	while i <= #hullTraces do
+		if (currentTime - hullTraces[i].time) > TRACE_EXPIRE_TIME then
+			table.remove(hullTraces, i)
+		else
+			i = i + 1
+		end
+	end
+	
+	-- Add new trace
+	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos, time = currentTime })
 	return result
 end
 
@@ -122,22 +145,27 @@ end
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
 function PathValidator.Path(startPos, goalPos, overrideMode)
-	-- DON'T clear traces here - let them persist for visualization
-	-- They'll be overwritten on next call anyway
-	if not hullTraces then
-		hullTraces = {}
-	end
-	if not lineTraces then
-		lineTraces = {}
-	end
+	-- Don't clear traces - accumulate them over time
+	-- Old traces are removed in DrawDebugTraces based on timestamp
+	
+	-- Save start/end for main result arrow visualization
+	lastCheckStart = startPos
+	lastCheckEnd = goalPos
+	lastCheckTime = globals.RealTime() -- Record when check happened
 
-	-- Clear only when starting a new check (not every iteration)
 	if DEBUG_TRACES then
-		hullTraces = {}
-		lineTraces = {}
+		print(
+			string.format(
+				"PathValidator: Checking path from (%.0f,%.0f,%.0f) to (%.0f,%.0f,%.0f)",
+				startPos.x,
+				startPos.y,
+				startPos.z,
+				goalPos.x,
+				goalPos.y,
+				goalPos.z
+			)
+		)
 	end
-
-	-- print("ISWalkable: Path called from " .. tostring(startPos) .. " to " .. tostring(goalPos))
 
 	-- Initialize variables
 	local currentPos = startPos
@@ -176,6 +204,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local altWallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, alternativePos + STEP_HEIGHT_Vector)
 
 			if altWallTrace.fraction == 0 then
+				lastCheckResult = false
 				return false -- Still blocked after smaller step - truly unwalkable
 			else
 				currentPos = altWallTrace.endpos -- Use the smaller step that worked
@@ -195,6 +224,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local groundTrace = performTraceHull(segmentTop, segmentBottom)
 
 			if groundTrace.fraction == 1 then
+				lastCheckResult = false
 				return false -- No ground beneath; path is unwalkable
 			end
 
@@ -209,12 +239,15 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
 		if currentDistance > MaxDistance then --if target is unreachable
+			lastCheckResult = false
 			return false
 		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
 			if verticalDist < 24 then --within vertical range
+				lastCheckResult = true
 				return true -- Goal is within reach; path is walkable
 			else --unreachable
+				lastCheckResult = false
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
@@ -224,6 +257,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		lastDirection = direction
 	end
 
+	lastCheckResult = false
 	return false -- Max iterations reached without finding a path
 end
 

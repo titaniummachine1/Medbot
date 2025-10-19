@@ -117,9 +117,9 @@ function MovementController.walkTo(cmd, player, dest)
 	cmd:SetSideMove(moveVec.y)
 end
 
--- Handle camera rotation if LookingAhead is enabled
+--- Handle camera rotation if LookingAhead is enabled AND walking is enabled
 function MovementController.handleCameraRotation(userCmd, targetPos)
-	if not G.Menu.Main.LookingAhead then
+	if not G.Menu.Main.EnableWalking or not G.Menu.Main.LookingAhead then
 		return
 	end
 

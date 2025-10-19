@@ -642,7 +642,7 @@ G.World_Default = {
 G.World = G.World_Default
 
 G.Misc = {
-	NodeTouchDistance = 24,
+	NodeTouchDistance = 12,
 	NodeTouchHeight = 82,
 	workLimit = 1,
 }
@@ -1960,11 +1960,6 @@ local Fonts = Lib.UI.Fonts
 local tahoma_bold = draw.CreateFont("Tahoma", 12, 800, FONTFLAG_OUTLINE)
 local Log = Common.Log.new("Visuals")
 
--- Grid-based rendering helpers
-local gridIndex = {}
-local nodeCell = {}
-local visBuf = {}
-local visCount = 0
 -- Flood-fill algorithm to collect nodes within connection depth from player
 local function collectNodesByConnectionDepth(playerPos, maxDepth)
     local nodes = G.Navigation.nodes
@@ -1972,8 +1967,8 @@ local function collectNodesByConnectionDepth(playerPos, maxDepth)
         return {}
     end
 
-    -- Get area containing player position (uses flood fill + multi-point distance)
-    local startNode = Node.GetAreaAtPosition(playerPos)
+    -- Get closest area to player (fast center-distance check, not expensive containment check)
+    local startNode = Node.GetClosestNode(playerPos)
     if not startNode then
         return {}
     end
@@ -2092,90 +2087,6 @@ end
 -- Easy color configuration for area rendering
 local AREA_FILL_COLOR = { 55, 255, 155, 12 }     -- r, g, b, a for filled area
 local AREA_OUTLINE_COLOR = { 255, 255, 255, 77 } -- r, g, b, a for area outline
-
--- Convert world position to chunk cell
-local function worldToCell(pos)
-    local size = G.Menu.Visuals.chunkSize or 256
-    if size <= 0 then
-        error("chunkSize must be greater than 0")
-    end
-    return math.floor(pos.x / size),
-        math.floor(pos.y / size),
-        math.floor(pos.z / size)
-end
-
--- Build lookup grid of node ids per cell
-local function buildGrid()
-    gridIndex = {}
-    nodeCell = {}
-    local size = G.Menu.Visuals.chunkSize or 256
-    for id, node in pairs(G.Navigation.nodes or {}) do
-        -- if isWalkable(nodeA.pos, nodeB.pos) then -- Temporarily disabled
-        if false then
-            Log:Warn("Visuals.buildGrid: skipping invalid node %s", tostring(id))
-            goto continue
-        end
-        local cx, cy, cz = worldToCell(node.pos)
-        gridIndex[cx] = gridIndex[cx] or {}
-        gridIndex[cx][cy] = gridIndex[cx][cy] or {}
-        gridIndex[cx][cy][cz] = gridIndex[cx][cy][cz] or {}
-        table.insert(gridIndex[cx][cy][cz], id)
-        nodeCell[id] = { cx, cy, cz }
-        ::continue::
-    end
-    Visuals.lastChunkSize = size
-    Visuals.lastRenderChunks = G.Menu.Visuals.renderChunks or 3
-end
-
--- Rebuild grid if configuration changed
-function Visuals.MaybeRebuildGrid()
-    local size = G.Menu.Visuals.chunkSize or 256
-    local chunks = G.Menu.Visuals.renderChunks or 3
-    if size ~= Visuals.lastChunkSize or chunks ~= Visuals.lastRenderChunks then
-        buildGrid()
-    end
-end
-
--- External access to rebuild grid
-function Visuals.BuildGrid()
-    buildGrid()
-end
-
-function Visuals.Initialize()
-    local success, err = pcall(buildGrid)
-    if not success then
-        print("Error initializing visuals grid: " .. tostring(err))
-        gridIndex = {}
-        nodeCell = {}
-        visBuf = {}
-        visCount = 0
-    end
-end
-
--- Collect visible node ids around player
-local function collectVisible(me)
-    visCount = 0
-    local px, py, pz = worldToCell(me:GetAbsOrigin())
-    local r = G.Menu.Visuals.renderChunks or 3
-    for dx = -r, r do
-        local ax = math.abs(dx)
-        for dy = -(r - ax), (r - ax) do
-            local dzMax = r - ax - math.abs(dy)
-            for dz = -dzMax, dzMax do
-                local bx = gridIndex[px + dx]
-                local by = bx and bx[py + dy]
-                local bucket = by and by[pz + dz]
-                if bucket then
-                    for _, id in ipairs(bucket) do
-                        visCount = visCount + 1
-                        visBuf[visCount] = id
-                    end
-                end
-            end
-        end
-    end
-end
-
 
 local function OnDraw()
     draw.SetFont(Fonts.Verdana)
@@ -3160,36 +3071,52 @@ local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval() -- Minimum step size to 
 local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
 local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
 
--- Debug visualization function for trace hulls (like A_standstillDummy)
+-- Debug flag (set to true to enable trace visualization)
+local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
+
+-- Traces tables for debugging (MUST be declared before DrawDebugTraces function)
+local hullTraces = {}
+local lineTraces = {}
+local lastCheckStart = nil
+local lastCheckEnd = nil
+local lastCheckResult = false
+local lastCheckTime = 0 -- Time when last check was performed
+local TRACE_EXPIRE_TIME = 0.015 -- Traces expire after 15ms
+
+-- Debug visualization function for trace hulls (EXACTLY like A_standstillDummy)
 function PathValidator.DrawDebugTraces()
-	if not DEBUG_TRACES then
-		return
+	local currentTime = globals.RealTime()
+	
+	-- Draw main result arrow first (GREEN = walkable, RED = blocked)
+	if lastCheckStart and lastCheckEnd and (currentTime - lastCheckTime) <= TRACE_EXPIRE_TIME then
+		if lastCheckResult then
+			draw.Color(0, 255, 0, 255) -- Green for walkable
+		else
+			draw.Color(255, 0, 0, 255) -- Red for blocked
+		end
+		Common.DrawArrowLine(lastCheckStart, lastCheckEnd, 10, 20, false)
 	end
-
-	if not hullTraces then
-		return
-	end
-
-	if #hullTraces == 0 then
-		return
-	end
-
-	-- Draw all hull traces as blue arrow lines
-	for _, trace in ipairs(hullTraces) do
-		if trace.startPos and trace.endPos then
-			draw.Color(0, 50, 255, 255) -- Blue for hull traces
-			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+	
+	-- Draw all line traces as white lines
+	if lineTraces and #lineTraces > 0 then
+		for _, trace in ipairs(lineTraces) do
+			if trace.startPos and trace.endPos then
+				draw.Color(255, 255, 255, 255) -- White for line traces
+				local w2s_start = client.WorldToScreen(trace.startPos)
+				local w2s_end = client.WorldToScreen(trace.endPos)
+				if w2s_start and w2s_end then
+					draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+				end
+			end
 		end
 	end
-
-	-- Draw all line traces as white lines
-	for _, trace in ipairs(lineTraces) do
-		if trace.startPos and trace.endPos then
-			draw.Color(255, 255, 255, 255) -- White for line traces
-			local w2s_start = client.WorldToScreen(trace.startPos)
-			local w2s_end = client.WorldToScreen(trace.endPos)
-			if w2s_start and w2s_end then
-				draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+	
+	-- Draw all hull traces as BLUE arrows (like A_standstillDummy)
+	if hullTraces and #hullTraces > 0 then
+		for _, trace in ipairs(hullTraces) do
+			if trace.startPos and trace.endPos then
+				draw.Color(0, 50, 255, 255) -- Blue for hull traces
+				Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 			end
 		end
 	end
@@ -3212,13 +3139,6 @@ function PathValidator.ClearDebugTraces()
 	lineTraces = {}
 end
 
--- Traces tables for debugging
-local hullTraces = {}
-local lineTraces = {}
-
--- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
-
 local function shouldHitEntity(entity)
 	-- Use fresh player reference from globals (updated every tick)
 	local pLocal = G.pLocal and G.pLocal.entity
@@ -3233,7 +3153,21 @@ end
 local function performTraceHull(startPos, endPos)
 	local result =
 		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
-	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos })
+	
+	local currentTime = globals.RealTime()
+	
+	-- Before adding new trace, remove old ones (older than one tick interval)
+	local i = 1
+	while i <= #hullTraces do
+		if (currentTime - hullTraces[i].time) > TRACE_EXPIRE_TIME then
+			table.remove(hullTraces, i)
+		else
+			i = i + 1
+		end
+	end
+	
+	-- Add new trace
+	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos, time = currentTime })
 	return result
 end
 
@@ -3260,22 +3194,27 @@ end
 -- Uses the expensive but accurate algorithm from A_standstillDummy.lua
 -- Only called during stuck detection, so performance cost is acceptable
 function PathValidator.Path(startPos, goalPos, overrideMode)
-	-- DON'T clear traces here - let them persist for visualization
-	-- They'll be overwritten on next call anyway
-	if not hullTraces then
-		hullTraces = {}
-	end
-	if not lineTraces then
-		lineTraces = {}
-	end
+	-- Don't clear traces - accumulate them over time
+	-- Old traces are removed in DrawDebugTraces based on timestamp
+	
+	-- Save start/end for main result arrow visualization
+	lastCheckStart = startPos
+	lastCheckEnd = goalPos
+	lastCheckTime = globals.RealTime() -- Record when check happened
 
-	-- Clear only when starting a new check (not every iteration)
 	if DEBUG_TRACES then
-		hullTraces = {}
-		lineTraces = {}
+		print(
+			string.format(
+				"PathValidator: Checking path from (%.0f,%.0f,%.0f) to (%.0f,%.0f,%.0f)",
+				startPos.x,
+				startPos.y,
+				startPos.z,
+				goalPos.x,
+				goalPos.y,
+				goalPos.z
+			)
+		)
 	end
-
-	-- print("ISWalkable: Path called from " .. tostring(startPos) .. " to " .. tostring(goalPos))
 
 	-- Initialize variables
 	local currentPos = startPos
@@ -3314,6 +3253,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local altWallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, alternativePos + STEP_HEIGHT_Vector)
 
 			if altWallTrace.fraction == 0 then
+				lastCheckResult = false
 				return false -- Still blocked after smaller step - truly unwalkable
 			else
 				currentPos = altWallTrace.endpos -- Use the smaller step that worked
@@ -3333,6 +3273,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local groundTrace = performTraceHull(segmentTop, segmentBottom)
 
 			if groundTrace.fraction == 1 then
+				lastCheckResult = false
 				return false -- No ground beneath; path is unwalkable
 			end
 
@@ -3347,12 +3288,15 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
 		if currentDistance > MaxDistance then --if target is unreachable
+			lastCheckResult = false
 			return false
 		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
 			if verticalDist < 24 then --within vertical range
+				lastCheckResult = true
 				return true -- Goal is within reach; path is walkable
 			else --unreachable
+				lastCheckResult = false
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
@@ -3362,6 +3306,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		lastDirection = direction
 	end
 
+	lastCheckResult = false
 	return false -- Max iterations reached without finding a path
 end
 
@@ -5961,32 +5906,14 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 
-	-- Simple node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
+	-- Node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
 	if WorkManager.attemptWork(1, "node_skipping") then
-		if G.Navigation.path and #G.Navigation.path >= 2 then
-			local currentNode = G.Navigation.path[1]
-			local nextNode = G.Navigation.path[2]
-
-			if currentNode and nextNode and currentNode.pos and nextNode.pos then
-				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
-				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-
-				-- Only skip if: 1) closer to next than current is, 2) within reasonable range, 3) path is walkable
-				if distPlayerToNext < distCurrentToNext and distPlayerToNext < (distCurrentToNext * 0.75) then
-					local isWalkable = PathValidator.Path(LocalOrigin, nextNode.pos)
-					Log:Debug(
-						"Skip check: player=%.0f current=%.0f walkable=%s",
-						distPlayerToNext,
-						distCurrentToNext,
-						tostring(isWalkable)
-					)
-					if isWalkable then
-						Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
-						Navigation.RemoveCurrentNode()
-						reachedTarget = false -- Don't double-advance
-					end
-				end
-			end
+		local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+		local skipped = NodeSkipper.TrySkipNode(LocalOrigin, function()
+			Navigation.RemoveCurrentNode()
+		end)
+		if skipped then
+			reachedTarget = false -- Don't double-advance
 		end
 	end
 
@@ -6046,7 +5973,8 @@ function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
 	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
-	if G.Menu.Main.Skip_Nodes then
+	if G.Menu.Navigation.Skip_Nodes then
+		print("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
 		Log:Debug("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
@@ -6128,15 +6056,16 @@ function MovementDecisions.checkStuckState()
 	-- Simple walkability check for ALL modes (with 33 tick cooldown)
 	-- Only when NOT walking autonomously (walking mode has velocity checks)
 	if not G.Menu.Main.EnableWalking then
-		if WorkManager.attemptWork(33, "stuck_walkability_check") then
-			local targetPos = MovementDecisions.getCurrentTarget()
-			if targetPos then
-				if not PathValidator.Path(G.pLocal.Origin, targetPos) then
-					Log:Warn("STUCK: Path to current target not walkable, repathing")
-					G.currentState = G.States.STUCK
-				end
-			end
-		end
+		-- TEMPORARILY DISABLED to debug NodeSkipper traces (this was interfering with visualization)
+		-- if WorkManager.attemptWork(33, "stuck_walkability_check") then
+		-- 	local targetPos = MovementDecisions.getCurrentTarget()
+		-- 	if targetPos then
+		-- 		if not PathValidator.Path(G.pLocal.Origin, targetPos) then
+		-- 			Log:Warn("STUCK: Path to current target not walkable, repathing")
+		-- 			G.currentState = G.States.STUCK
+		-- 		end
+		-- 	end
+		-- end
 	end
 end
 
@@ -6213,6 +6142,116 @@ function MovementDecisions.handleMovingState(userCmd)
 end
 
 return MovementDecisions
+
+end)
+__bundle_register("MedBot.Bot.NodeSkipper", function(require, _LOADED, __bundle_register, __bundle_modules)
+--[[
+Node Skipper - Simple forward-progress node skipping
+Logic:
+1. Respect Skip_Nodes toggle
+2. Only skip when the player is closer to the next node than the current node is
+3. Returns fixed skip count (1) to advance steadily without funneling
+]]
+
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
+local PathValidator = require("MedBot.Navigation.PathValidator")
+
+local NodeSkipper = {}
+
+-- ============================================================================
+-- PUBLIC API
+-- ============================================================================
+
+-- Initialize/reset state when needed
+function NodeSkipper.Reset()
+	G.Navigation.nextNodeCloser = false
+end
+
+-- SINGLE SOURCE OF TRUTH for node skipping
+-- Checks if we should skip current node and executes the skip
+-- RETURNS: true if skipped, false otherwise
+function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
+	-- Respect Skip_Nodes menu setting
+	if not G.Menu.Navigation.Skip_Nodes then
+		print("NodeSkipper: Skip_Nodes is disabled")
+		return false
+	end
+	
+	print("NodeSkipper: Skip_Nodes is ENABLED, checking conditions...")
+
+	local path = G.Navigation.path
+	if not path then
+		print("NodeSkipper: ABORT - No path exists")
+		return false
+	end
+	
+	if #path < 2 then
+		print(string.format("NodeSkipper: ABORT - Path too short (length=%d)", #path))
+		return false
+	end
+
+	local currentNode = path[1]
+	local nextNode = path[2]
+
+	if not currentNode or not nextNode then
+		print("NodeSkipper: ABORT - Missing nodes")
+		return false
+	end
+	
+	if not currentNode.pos or not nextNode.pos then
+		print("NodeSkipper: ABORT - Missing node positions")
+		return false
+	end
+	
+	print(string.format("NodeSkipper: Path valid, checking distances (path length=%d)", #path))
+	print(string.format("NodeSkipper: Current node ID=%s, Next node ID=%s", tostring(currentNode.id or "nil"), tostring(nextNode.id or "nil")))
+
+	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
+	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+	
+	print(string.format("NodeSkipper: Player pos=(%.0f,%.0f,%.0f)", currentPos.x, currentPos.y, currentPos.z))
+	print(string.format("NodeSkipper: Current node pos=(%.0f,%.0f,%.0f)", currentNode.pos.x, currentNode.pos.y, currentNode.pos.z))
+	print(string.format("NodeSkipper: Next node pos=(%.0f,%.0f,%.0f)", nextNode.pos.x, nextNode.pos.y, nextNode.pos.z))
+
+	-- User spec: Only skip if player is closer to next node than current node is to next node
+	if distPlayerToNext >= distCurrentToNext then
+		print(string.format("NodeSkipper: ABORT - Not closer (player=%.0f >= current=%.0f)", distPlayerToNext, distCurrentToNext))
+		return false -- Don't skip if we're not moving forward
+	end
+	
+	print(string.format("NodeSkipper: Distance check PASSED (player=%.0f < current=%.0f)", distPlayerToNext, distCurrentToNext))
+
+	-- Validate player can walk DIRECTLY to next node (if yes, we don't need current node!)
+	print(string.format("NodeSkipper: === CALLING PathValidator ==="))
+	print(string.format("NodeSkipper: FROM PLAYER(%.0f,%.0f,%.0f) TO NEXT_NODE(%.0f,%.0f,%.0f)", 
+		currentPos.x, currentPos.y, currentPos.z, 
+		nextNode.pos.x, nextNode.pos.y, nextNode.pos.z))
+	
+	local isWalkable = PathValidator.Path(currentPos, nextNode.pos)
+	
+	print(string.format("NodeSkipper: === PathValidator RETURNED %s ===", tostring(isWalkable)))
+	
+	-- Debug logging (respects G.Menu.Main.Debug)
+	local Log = require("MedBot.Core.Common").Log.new("NodeSkipper")
+	Log:Debug("Skip check: playerDist=%.0f currentDist=%.0f walkable=%s", distPlayerToNext, distCurrentToNext, tostring(isWalkable))
+	
+	if not isWalkable then
+		Log:Debug("Skip blocked: path not walkable (wall detected)")
+		return false -- Don't skip if path has walls/obstacles
+	end
+
+	-- Execute the skip
+	if removeNodeCallback then
+		Log:Debug("Skipping node - path is clear")
+		removeNodeCallback()
+		return true
+	end
+
+	return false
+end
+
+return NodeSkipper
 
 end)
 __bundle_register("MedBot.WorkManager", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -6523,9 +6562,9 @@ function MovementController.walkTo(cmd, player, dest)
 	cmd:SetSideMove(moveVec.y)
 end
 
--- Handle camera rotation if LookingAhead is enabled
+--- Handle camera rotation if LookingAhead is enabled AND walking is enabled
 function MovementController.handleCameraRotation(userCmd, targetPos)
-	if not G.Menu.Main.LookingAhead then
+	if not G.Menu.Main.EnableWalking or not G.Menu.Main.LookingAhead then
 		return
 	end
 
@@ -7089,82 +7128,6 @@ function Navigation.FindPath(startNode, goalNode)
 end
 
 return Navigation
-
-end)
-__bundle_register("MedBot.Bot.NodeSkipper", function(require, _LOADED, __bundle_register, __bundle_modules)
---[[
-Node Skipper - Simple forward-progress node skipping
-Logic:
-1. Respect Skip_Nodes toggle
-2. Only skip when the player is closer to the next node than the current node is
-3. Returns fixed skip count (1) to advance steadily without funneling
-]]
-
-local Common = require("MedBot.Core.Common")
-local G = require("MedBot.Core.Globals")
-
-local NodeSkipper = {}
-
--- ============================================================================
--- NODE SKIPPING HELPERS
--- ============================================================================
-
--- ============================================================================
--- SKIP LOGIC
--- ============================================================================
-
--- Check if player is closer to next node than current node is to next node
--- This prevents backwalking - only skip if we've moved forward past current
-local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
-	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		return false
-	end
-
-	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
-	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-
-	return distPlayerToNext < distCurrentToNext
-end
-
--- ============================================================================
--- PUBLIC API
--- ============================================================================
-
--- Initialize/reset state when needed
-function NodeSkipper.Reset()
-	G.Navigation.nextNodeCloser = false
-end
-
--- Continuous node skipping check (runs every tick)
--- Uses door-based funneling algorithm
--- RETURNS: number of nodes to skip (0 = no skip)
-function NodeSkipper.CheckContinuousSkip(currentPos)
-	-- Respect Skip_Nodes menu setting
-	if not G.Menu.Main.Skip_Nodes then
-		return 0
-	end
-
-	local path = G.Navigation.path
-	if not path or #path < 2 then
-		return 0
-	end
-
-	local currentNode = path[1]
-	local nextNode = path[2]
-
-	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		return 0
-	end
-
-	-- Check if we're closer to next node (avoid backwalking)
-	if not CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-		return 0 -- Don't skip if we're not moving forward
-	end
-
-	return 1
-end
-
-return NodeSkipper
 
 end)
 __bundle_register("MedBot.Algorithms.A-Star", function(require, _LOADED, __bundle_register, __bundle_modules)

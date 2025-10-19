@@ -8,29 +8,9 @@ Logic:
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
+local PathValidator = require("MedBot.Navigation.PathValidator")
 
 local NodeSkipper = {}
-
--- ============================================================================
--- NODE SKIPPING HELPERS
--- ============================================================================
-
--- ============================================================================
--- SKIP LOGIC
--- ============================================================================
-
--- Check if player is closer to next node than current node is to next node
--- This prevents backwalking - only skip if we've moved forward past current
-local function CheckNextNodeCloser(currentPos, currentNode, nextNode)
-	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		return false
-	end
-
-	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
-	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-
-	return distPlayerToNext < distCurrentToNext
-end
 
 -- ============================================================================
 -- PUBLIC API
@@ -41,33 +21,87 @@ function NodeSkipper.Reset()
 	G.Navigation.nextNodeCloser = false
 end
 
--- Continuous node skipping check (runs every tick)
--- Uses door-based funneling algorithm
--- RETURNS: number of nodes to skip (0 = no skip)
-function NodeSkipper.CheckContinuousSkip(currentPos)
+-- SINGLE SOURCE OF TRUTH for node skipping
+-- Checks if we should skip current node and executes the skip
+-- RETURNS: true if skipped, false otherwise
+function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
 	-- Respect Skip_Nodes menu setting
-	if not G.Menu.Main.Skip_Nodes then
-		return 0
+	if not G.Menu.Navigation.Skip_Nodes then
+		print("NodeSkipper: Skip_Nodes is disabled")
+		return false
 	end
+	
+	print("NodeSkipper: Skip_Nodes is ENABLED, checking conditions...")
 
 	local path = G.Navigation.path
-	if not path or #path < 2 then
-		return 0
+	if not path then
+		print("NodeSkipper: ABORT - No path exists")
+		return false
+	end
+	
+	if #path < 2 then
+		print(string.format("NodeSkipper: ABORT - Path too short (length=%d)", #path))
+		return false
 	end
 
 	local currentNode = path[1]
 	local nextNode = path[2]
 
-	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		return 0
+	if not currentNode or not nextNode then
+		print("NodeSkipper: ABORT - Missing nodes")
+		return false
+	end
+	
+	if not currentNode.pos or not nextNode.pos then
+		print("NodeSkipper: ABORT - Missing node positions")
+		return false
+	end
+	
+	print(string.format("NodeSkipper: Path valid, checking distances (path length=%d)", #path))
+	print(string.format("NodeSkipper: Current node ID=%s, Next node ID=%s", tostring(currentNode.id or "nil"), tostring(nextNode.id or "nil")))
+
+	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
+	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+	
+	print(string.format("NodeSkipper: Player pos=(%.0f,%.0f,%.0f)", currentPos.x, currentPos.y, currentPos.z))
+	print(string.format("NodeSkipper: Current node pos=(%.0f,%.0f,%.0f)", currentNode.pos.x, currentNode.pos.y, currentNode.pos.z))
+	print(string.format("NodeSkipper: Next node pos=(%.0f,%.0f,%.0f)", nextNode.pos.x, nextNode.pos.y, nextNode.pos.z))
+
+	-- User spec: Only skip if player is closer to next node than current node is to next node
+	if distPlayerToNext >= distCurrentToNext then
+		print(string.format("NodeSkipper: ABORT - Not closer (player=%.0f >= current=%.0f)", distPlayerToNext, distCurrentToNext))
+		return false -- Don't skip if we're not moving forward
+	end
+	
+	print(string.format("NodeSkipper: Distance check PASSED (player=%.0f < current=%.0f)", distPlayerToNext, distCurrentToNext))
+
+	-- Validate player can walk DIRECTLY to next node (if yes, we don't need current node!)
+	print(string.format("NodeSkipper: === CALLING PathValidator ==="))
+	print(string.format("NodeSkipper: FROM PLAYER(%.0f,%.0f,%.0f) TO NEXT_NODE(%.0f,%.0f,%.0f)", 
+		currentPos.x, currentPos.y, currentPos.z, 
+		nextNode.pos.x, nextNode.pos.y, nextNode.pos.z))
+	
+	local isWalkable = PathValidator.Path(currentPos, nextNode.pos)
+	
+	print(string.format("NodeSkipper: === PathValidator RETURNED %s ===", tostring(isWalkable)))
+	
+	-- Debug logging (respects G.Menu.Main.Debug)
+	local Log = require("MedBot.Core.Common").Log.new("NodeSkipper")
+	Log:Debug("Skip check: playerDist=%.0f currentDist=%.0f walkable=%s", distPlayerToNext, distCurrentToNext, tostring(isWalkable))
+	
+	if not isWalkable then
+		Log:Debug("Skip blocked: path not walkable (wall detected)")
+		return false -- Don't skip if path has walls/obstacles
 	end
 
-	-- Check if we're closer to next node (avoid backwalking)
-	if not CheckNextNodeCloser(currentPos, currentNode, nextNode) then
-		return 0 -- Don't skip if we're not moving forward
+	-- Execute the skip
+	if removeNodeCallback then
+		Log:Debug("Skipping node - path is clear")
+		removeNodeCallback()
+		return true
 	end
 
-	return 1
+	return false
 end
 
 return NodeSkipper

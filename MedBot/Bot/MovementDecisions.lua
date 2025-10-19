@@ -49,32 +49,14 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 
-	-- Simple node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
+	-- Node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
 	if WorkManager.attemptWork(1, "node_skipping") then
-		if G.Navigation.path and #G.Navigation.path >= 2 then
-			local currentNode = G.Navigation.path[1]
-			local nextNode = G.Navigation.path[2]
-
-			if currentNode and nextNode and currentNode.pos and nextNode.pos then
-				local distPlayerToNext = Common.Distance3D(LocalOrigin, nextNode.pos)
-				local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-
-				-- Only skip if: 1) closer to next than current is, 2) within reasonable range, 3) path is walkable
-				if distPlayerToNext < distCurrentToNext and distPlayerToNext < (distCurrentToNext * 0.75) then
-					local isWalkable = PathValidator.Path(LocalOrigin, nextNode.pos)
-					Log:Debug(
-						"Skip check: player=%.0f current=%.0f walkable=%s",
-						distPlayerToNext,
-						distCurrentToNext,
-						tostring(isWalkable)
-					)
-					if isWalkable then
-						Log:Debug("Skipping node - closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
-						Navigation.RemoveCurrentNode()
-						reachedTarget = false -- Don't double-advance
-					end
-				end
-			end
+		local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+		local skipped = NodeSkipper.TrySkipNode(LocalOrigin, function()
+			Navigation.RemoveCurrentNode()
+		end)
+		if skipped then
+			reachedTarget = false -- Don't double-advance
 		end
 	end
 
@@ -134,7 +116,8 @@ function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
 	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
-	if G.Menu.Main.Skip_Nodes then
+	if G.Menu.Navigation.Skip_Nodes then
+		print("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
 		Log:Debug("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
@@ -216,15 +199,16 @@ function MovementDecisions.checkStuckState()
 	-- Simple walkability check for ALL modes (with 33 tick cooldown)
 	-- Only when NOT walking autonomously (walking mode has velocity checks)
 	if not G.Menu.Main.EnableWalking then
-		if WorkManager.attemptWork(33, "stuck_walkability_check") then
-			local targetPos = MovementDecisions.getCurrentTarget()
-			if targetPos then
-				if not PathValidator.Path(G.pLocal.Origin, targetPos) then
-					Log:Warn("STUCK: Path to current target not walkable, repathing")
-					G.currentState = G.States.STUCK
-				end
-			end
-		end
+		-- TEMPORARILY DISABLED to debug NodeSkipper traces (this was interfering with visualization)
+		-- if WorkManager.attemptWork(33, "stuck_walkability_check") then
+		-- 	local targetPos = MovementDecisions.getCurrentTarget()
+		-- 	if targetPos then
+		-- 		if not PathValidator.Path(G.pLocal.Origin, targetPos) then
+		-- 			Log:Warn("STUCK: Path to current target not walkable, repathing")
+		-- 			G.currentState = G.States.STUCK
+		-- 		end
+		-- 	end
+		-- end
 	end
 end
 
