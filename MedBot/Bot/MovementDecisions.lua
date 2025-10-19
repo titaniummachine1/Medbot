@@ -56,7 +56,8 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 			Navigation.RemoveCurrentNode()
 		end)
 		if skipped then
-			reachedTarget = false -- Don't double-advance
+			-- Skip was validated - don't do reach-based advancement on same tick
+			reachedTarget = false
 		end
 	end
 
@@ -118,6 +119,22 @@ function MovementDecisions.advanceNode()
 
 	if G.Menu.Navigation.Skip_Nodes then
 		print("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
+		
+		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
+		if #G.Navigation.path >= 2 then
+			local PathValidator = require("MedBot.Navigation.PathValidator")
+			local nextNode = G.Navigation.path[2]
+			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
+			
+			if not canReachNext then
+				Log:Debug("BLOCKED: Wall between current and next node - triggering repath")
+				Navigation.ClearPath()
+				G.currentState = G.States.IDLE
+				G.lastPathfindingTick = 0
+				return false -- Force repath
+			end
+		end
+		
 		Log:Debug("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()

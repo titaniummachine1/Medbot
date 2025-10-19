@@ -28,27 +28,39 @@ local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
 -- Traces tables for debugging (MUST be declared before DrawDebugTraces function)
 local hullTraces = {}
 local lineTraces = {}
-local lastCheckStart = nil
-local lastCheckEnd = nil
-local lastCheckResult = false
-local lastCheckTime = 0 -- Time when last check was performed
-local TRACE_EXPIRE_TIME = 0.015 -- Traces expire after 15ms
+local validationResults = {} -- Store multiple validation results (start, end, result, time)
 
--- Debug visualization function for trace hulls (EXACTLY like A_standstillDummy)
+-- Calculate tick interval at runtime
+local function getTraceExpireTime()
+	return globals.TickInterval() * 4 -- Keep traces for 4 ticks
+end
+
+-- Debug visualization function for trace hulls
 function PathValidator.DrawDebugTraces()
 	local currentTime = globals.RealTime()
+	local expireTime = getTraceExpireTime()
 	
-	-- Draw main result arrow first (GREEN = walkable, RED = blocked)
-	if lastCheckStart and lastCheckEnd and (currentTime - lastCheckTime) <= TRACE_EXPIRE_TIME then
-		if lastCheckResult then
-			draw.Color(0, 255, 0, 255) -- Green for walkable
+	-- Remove expired validation results
+	local i = 1
+	while i <= #validationResults do
+		if (currentTime - validationResults[i].time) > expireTime then
+			table.remove(validationResults, i)
 		else
-			draw.Color(255, 0, 0, 255) -- Red for blocked
+			i = i + 1
 		end
-		Common.DrawArrowLine(lastCheckStart, lastCheckEnd, 10, 20, false)
 	end
 	
-	-- Draw all line traces as white lines
+	-- Draw all hull traces as BLUE arrows (background layer)
+	if hullTraces and #hullTraces > 0 then
+		for _, trace in ipairs(hullTraces) do
+			if trace.startPos and trace.endPos then
+				draw.Color(0, 50, 255, 255) -- Blue for hull traces
+				Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+			end
+		end
+	end
+	
+	-- Draw all line traces as white lines (middle layer)
 	if lineTraces and #lineTraces > 0 then
 		for _, trace in ipairs(lineTraces) do
 			if trace.startPos and trace.endPos then
@@ -62,13 +74,15 @@ function PathValidator.DrawDebugTraces()
 		end
 	end
 	
-	-- Draw all hull traces as BLUE arrows (like A_standstillDummy)
-	if hullTraces and #hullTraces > 0 then
-		for _, trace in ipairs(hullTraces) do
-			if trace.startPos and trace.endPos then
-				draw.Color(0, 50, 255, 255) -- Blue for hull traces
-				Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+	-- Draw ALL validation result arrows LAST (foreground layer - GREEN = walkable, RED = blocked)
+	for _, validation in ipairs(validationResults) do
+		if validation.startPos and validation.endPos then
+			if validation.result then
+				draw.Color(0, 255, 0, 255) -- Green for walkable
+			else
+				draw.Color(255, 0, 0, 255) -- Red for blocked
 			end
+			Common.DrawArrowLine(validation.startPos, validation.endPos, 10, 20, false)
 		end
 	end
 end
@@ -88,6 +102,7 @@ end
 function PathValidator.ClearDebugTraces()
 	hullTraces = {}
 	lineTraces = {}
+	validationResults = {}
 end
 
 local function shouldHitEntity(entity)
@@ -106,11 +121,12 @@ local function performTraceHull(startPos, endPos)
 		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
 	
 	local currentTime = globals.RealTime()
+	local expireTime = getTraceExpireTime()
 	
-	-- Before adding new trace, remove old ones (older than one tick interval)
+	-- Before adding new trace, remove old ones (older than 4 ticks)
 	local i = 1
 	while i <= #hullTraces do
-		if (currentTime - hullTraces[i].time) > TRACE_EXPIRE_TIME then
+		if (currentTime - hullTraces[i].time) > expireTime then
 			table.remove(hullTraces, i)
 		else
 			i = i + 1
@@ -148,10 +164,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 	-- Don't clear traces - accumulate them over time
 	-- Old traces are removed in DrawDebugTraces based on timestamp
 	
-	-- Save start/end for main result arrow visualization
-	lastCheckStart = startPos
-	lastCheckEnd = goalPos
-	lastCheckTime = globals.RealTime() -- Record when check happened
+	local checkTime = globals.RealTime() -- Record when check happened
 
 	if DEBUG_TRACES then
 		print(
@@ -204,7 +217,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local altWallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, alternativePos + STEP_HEIGHT_Vector)
 
 			if altWallTrace.fraction == 0 then
-				lastCheckResult = false
+				-- Store validation result BEFORE returning
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = false, 
+					time = checkTime 
+				})
 				return false -- Still blocked after smaller step - truly unwalkable
 			else
 				currentPos = altWallTrace.endpos -- Use the smaller step that worked
@@ -224,7 +243,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local groundTrace = performTraceHull(segmentTop, segmentBottom)
 
 			if groundTrace.fraction == 1 then
-				lastCheckResult = false
+				-- Store validation result BEFORE returning
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = false, 
+					time = checkTime 
+				})
 				return false -- No ground beneath; path is unwalkable
 			end
 
@@ -239,15 +264,33 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
 		if currentDistance > MaxDistance then --if target is unreachable
-			lastCheckResult = false
+			-- Store validation result BEFORE returning
+			table.insert(validationResults, { 
+				startPos = startPos, 
+				endPos = goalPos, 
+				result = false, 
+				time = checkTime 
+			})
 			return false
 		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
 			if verticalDist < 24 then --within vertical range
-				lastCheckResult = true
+				-- Store validation result BEFORE returning (SUCCESS)
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = true, 
+					time = checkTime 
+				})
 				return true -- Goal is within reach; path is walkable
 			else --unreachable
-				lastCheckResult = false
+				-- Store validation result BEFORE returning
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = false, 
+					time = checkTime 
+				})
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
@@ -257,7 +300,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		lastDirection = direction
 	end
 
-	lastCheckResult = false
+	-- Store validation result BEFORE returning (max iterations)
+	table.insert(validationResults, { 
+		startPos = startPos, 
+		endPos = goalPos, 
+		result = false, 
+		time = checkTime 
+	})
 	return false -- Max iterations reached without finding a path
 end
 

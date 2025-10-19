@@ -3077,27 +3077,39 @@ local DEBUG_TRACES = true -- ENABLED FOR DEBUGGING NODE SKIP WALL ISSUES
 -- Traces tables for debugging (MUST be declared before DrawDebugTraces function)
 local hullTraces = {}
 local lineTraces = {}
-local lastCheckStart = nil
-local lastCheckEnd = nil
-local lastCheckResult = false
-local lastCheckTime = 0 -- Time when last check was performed
-local TRACE_EXPIRE_TIME = 0.015 -- Traces expire after 15ms
+local validationResults = {} -- Store multiple validation results (start, end, result, time)
 
--- Debug visualization function for trace hulls (EXACTLY like A_standstillDummy)
+-- Calculate tick interval at runtime
+local function getTraceExpireTime()
+	return globals.TickInterval() * 4 -- Keep traces for 4 ticks
+end
+
+-- Debug visualization function for trace hulls
 function PathValidator.DrawDebugTraces()
 	local currentTime = globals.RealTime()
+	local expireTime = getTraceExpireTime()
 	
-	-- Draw main result arrow first (GREEN = walkable, RED = blocked)
-	if lastCheckStart and lastCheckEnd and (currentTime - lastCheckTime) <= TRACE_EXPIRE_TIME then
-		if lastCheckResult then
-			draw.Color(0, 255, 0, 255) -- Green for walkable
+	-- Remove expired validation results
+	local i = 1
+	while i <= #validationResults do
+		if (currentTime - validationResults[i].time) > expireTime then
+			table.remove(validationResults, i)
 		else
-			draw.Color(255, 0, 0, 255) -- Red for blocked
+			i = i + 1
 		end
-		Common.DrawArrowLine(lastCheckStart, lastCheckEnd, 10, 20, false)
 	end
 	
-	-- Draw all line traces as white lines
+	-- Draw all hull traces as BLUE arrows (background layer)
+	if hullTraces and #hullTraces > 0 then
+		for _, trace in ipairs(hullTraces) do
+			if trace.startPos and trace.endPos then
+				draw.Color(0, 50, 255, 255) -- Blue for hull traces
+				Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+			end
+		end
+	end
+	
+	-- Draw all line traces as white lines (middle layer)
 	if lineTraces and #lineTraces > 0 then
 		for _, trace in ipairs(lineTraces) do
 			if trace.startPos and trace.endPos then
@@ -3111,13 +3123,15 @@ function PathValidator.DrawDebugTraces()
 		end
 	end
 	
-	-- Draw all hull traces as BLUE arrows (like A_standstillDummy)
-	if hullTraces and #hullTraces > 0 then
-		for _, trace in ipairs(hullTraces) do
-			if trace.startPos and trace.endPos then
-				draw.Color(0, 50, 255, 255) -- Blue for hull traces
-				Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+	-- Draw ALL validation result arrows LAST (foreground layer - GREEN = walkable, RED = blocked)
+	for _, validation in ipairs(validationResults) do
+		if validation.startPos and validation.endPos then
+			if validation.result then
+				draw.Color(0, 255, 0, 255) -- Green for walkable
+			else
+				draw.Color(255, 0, 0, 255) -- Red for blocked
 			end
+			Common.DrawArrowLine(validation.startPos, validation.endPos, 10, 20, false)
 		end
 	end
 end
@@ -3137,6 +3151,7 @@ end
 function PathValidator.ClearDebugTraces()
 	hullTraces = {}
 	lineTraces = {}
+	validationResults = {}
 end
 
 local function shouldHitEntity(entity)
@@ -3155,11 +3170,12 @@ local function performTraceHull(startPos, endPos)
 		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
 	
 	local currentTime = globals.RealTime()
+	local expireTime = getTraceExpireTime()
 	
-	-- Before adding new trace, remove old ones (older than one tick interval)
+	-- Before adding new trace, remove old ones (older than 4 ticks)
 	local i = 1
 	while i <= #hullTraces do
-		if (currentTime - hullTraces[i].time) > TRACE_EXPIRE_TIME then
+		if (currentTime - hullTraces[i].time) > expireTime then
 			table.remove(hullTraces, i)
 		else
 			i = i + 1
@@ -3197,10 +3213,7 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 	-- Don't clear traces - accumulate them over time
 	-- Old traces are removed in DrawDebugTraces based on timestamp
 	
-	-- Save start/end for main result arrow visualization
-	lastCheckStart = startPos
-	lastCheckEnd = goalPos
-	lastCheckTime = globals.RealTime() -- Record when check happened
+	local checkTime = globals.RealTime() -- Record when check happened
 
 	if DEBUG_TRACES then
 		print(
@@ -3253,7 +3266,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local altWallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, alternativePos + STEP_HEIGHT_Vector)
 
 			if altWallTrace.fraction == 0 then
-				lastCheckResult = false
+				-- Store validation result BEFORE returning
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = false, 
+					time = checkTime 
+				})
 				return false -- Still blocked after smaller step - truly unwalkable
 			else
 				currentPos = altWallTrace.endpos -- Use the smaller step that worked
@@ -3273,7 +3292,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local groundTrace = performTraceHull(segmentTop, segmentBottom)
 
 			if groundTrace.fraction == 1 then
-				lastCheckResult = false
+				-- Store validation result BEFORE returning
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = false, 
+					time = checkTime 
+				})
 				return false -- No ground beneath; path is unwalkable
 			end
 
@@ -3288,15 +3313,33 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
 		if currentDistance > MaxDistance then --if target is unreachable
-			lastCheckResult = false
+			-- Store validation result BEFORE returning
+			table.insert(validationResults, { 
+				startPos = startPos, 
+				endPos = goalPos, 
+				result = false, 
+				time = checkTime 
+			})
 			return false
 		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
 			if verticalDist < 24 then --within vertical range
-				lastCheckResult = true
+				-- Store validation result BEFORE returning (SUCCESS)
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = true, 
+					time = checkTime 
+				})
 				return true -- Goal is within reach; path is walkable
 			else --unreachable
-				lastCheckResult = false
+				-- Store validation result BEFORE returning
+				table.insert(validationResults, { 
+					startPos = startPos, 
+					endPos = goalPos, 
+					result = false, 
+					time = checkTime 
+				})
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
@@ -3306,7 +3349,13 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		lastDirection = direction
 	end
 
-	lastCheckResult = false
+	-- Store validation result BEFORE returning (max iterations)
+	table.insert(validationResults, { 
+		startPos = startPos, 
+		endPos = goalPos, 
+		result = false, 
+		time = checkTime 
+	})
 	return false -- Max iterations reached without finding a path
 end
 
@@ -5913,7 +5962,8 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 			Navigation.RemoveCurrentNode()
 		end)
 		if skipped then
-			reachedTarget = false -- Don't double-advance
+			-- Skip was validated - don't do reach-based advancement on same tick
+			reachedTarget = false
 		end
 	end
 
@@ -5975,6 +6025,22 @@ function MovementDecisions.advanceNode()
 
 	if G.Menu.Navigation.Skip_Nodes then
 		print("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
+		
+		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
+		if #G.Navigation.path >= 2 then
+			local PathValidator = require("MedBot.Navigation.PathValidator")
+			local nextNode = G.Navigation.path[2]
+			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
+			
+			if not canReachNext then
+				Log:Debug("BLOCKED: Wall between current and next node - triggering repath")
+				Navigation.ClearPath()
+				G.currentState = G.States.IDLE
+				G.lastPathfindingTick = 0
+				return false -- Force repath
+			end
+		end
+		
 		Log:Debug("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()
@@ -6157,6 +6223,8 @@ local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local PathValidator = require("MedBot.Navigation.PathValidator")
 
+local Log = Common.Log.new("NodeSkipper")
+
 local NodeSkipper = {}
 
 -- ============================================================================
@@ -6174,68 +6242,88 @@ end
 function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
 	-- Respect Skip_Nodes menu setting
 	if not G.Menu.Navigation.Skip_Nodes then
-		print("NodeSkipper: Skip_Nodes is disabled")
+		Log:Debug("Skip_Nodes is disabled")
 		return false
 	end
-	
-	print("NodeSkipper: Skip_Nodes is ENABLED, checking conditions...")
+
+	Log:Debug("Skip_Nodes is ENABLED, checking conditions...")
 
 	local path = G.Navigation.path
 	if not path then
-		print("NodeSkipper: ABORT - No path exists")
-		return false
-	end
-	
-	if #path < 2 then
-		print(string.format("NodeSkipper: ABORT - Path too short (length=%d)", #path))
+		Log:Debug("ABORT - No path exists")
 		return false
 	end
 
-	local currentNode = path[1]
-	local nextNode = path[2]
-
-	if not currentNode or not nextNode then
-		print("NodeSkipper: ABORT - Missing nodes")
+	-- Path goes player → goal (normal order)
+	-- path[1] = behind us (last node)
+	-- path[2] = next immediate node (walking toward)
+	-- path[3] = skip target (validate if we can reach this directly)
+	if #path < 3 then
+		Log:Debug("ABORT - Path too short (length=%d, need 3+)", #path)
 		return false
 	end
-	
-	if not currentNode.pos or not nextNode.pos then
-		print("NodeSkipper: ABORT - Missing node positions")
+
+	local currentNode = path[1] -- Behind us
+	local nextNode = path[2] -- Next immediate
+	local skipToNode = path[3] -- Skip target
+
+	if not currentNode or not nextNode or not skipToNode then
+		Log:Debug("ABORT - Missing nodes")
 		return false
 	end
-	
-	print(string.format("NodeSkipper: Path valid, checking distances (path length=%d)", #path))
-	print(string.format("NodeSkipper: Current node ID=%s, Next node ID=%s", tostring(currentNode.id or "nil"), tostring(nextNode.id or "nil")))
 
-	local distPlayerToNext = Common.Distance3D(currentPos, nextNode.pos)
-	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-	
-	print(string.format("NodeSkipper: Player pos=(%.0f,%.0f,%.0f)", currentPos.x, currentPos.y, currentPos.z))
-	print(string.format("NodeSkipper: Current node pos=(%.0f,%.0f,%.0f)", currentNode.pos.x, currentNode.pos.y, currentNode.pos.z))
-	print(string.format("NodeSkipper: Next node pos=(%.0f,%.0f,%.0f)", nextNode.pos.x, nextNode.pos.y, nextNode.pos.z))
+	if not currentNode.pos or not nextNode.pos or not skipToNode.pos then
+		Log:Debug("ABORT - Missing node positions")
+		return false
+	end
 
-	-- User spec: Only skip if player is closer to next node than current node is to next node
-	if distPlayerToNext >= distCurrentToNext then
-		print(string.format("NodeSkipper: ABORT - Not closer (player=%.0f >= current=%.0f)", distPlayerToNext, distCurrentToNext))
+	Log:Debug("Path valid, checking distances (path length=%d)", #path)
+	Log:Debug(
+		"path[1]=%s (behind), path[2]=%s (next), path[3]=%s (skip target)",
+		tostring(currentNode.id or "nil"),
+		tostring(nextNode.id or "nil"),
+		tostring(skipToNode.id or "nil")
+	)
+
+	local distPlayerToSkip = Common.Distance3D(currentPos, skipToNode.pos)
+	local distNextToSkip = Common.Distance3D(nextNode.pos, skipToNode.pos)
+
+	Log:Debug("Player pos=(%.0f,%.0f,%.0f)", currentPos.x, currentPos.y, currentPos.z)
+	Log:Debug("path[1] (behind) pos=(%.0f,%.0f,%.0f)", currentNode.pos.x, currentNode.pos.y, currentNode.pos.z)
+	Log:Debug("path[2] (next) pos=(%.0f,%.0f,%.0f)", nextNode.pos.x, nextNode.pos.y, nextNode.pos.z)
+	Log:Debug("path[3] (skip target) pos=(%.0f,%.0f,%.0f)", skipToNode.pos.x, skipToNode.pos.y, skipToNode.pos.z)
+
+	-- Only skip if player is closer to skip target than next node is to skip target
+	if distPlayerToSkip >= distNextToSkip then
+		Log:Debug("ABORT - Not closer (player=%.0f >= next=%.0f)", distPlayerToSkip, distNextToSkip)
 		return false -- Don't skip if we're not moving forward
 	end
-	
-	print(string.format("NodeSkipper: Distance check PASSED (player=%.0f < current=%.0f)", distPlayerToNext, distCurrentToNext))
 
-	-- Validate player can walk DIRECTLY to next node (if yes, we don't need current node!)
-	print(string.format("NodeSkipper: === CALLING PathValidator ==="))
-	print(string.format("NodeSkipper: FROM PLAYER(%.0f,%.0f,%.0f) TO NEXT_NODE(%.0f,%.0f,%.0f)", 
-		currentPos.x, currentPos.y, currentPos.z, 
-		nextNode.pos.x, nextNode.pos.y, nextNode.pos.z))
-	
-	local isWalkable = PathValidator.Path(currentPos, nextNode.pos)
-	
-	print(string.format("NodeSkipper: === PathValidator RETURNED %s ===", tostring(isWalkable)))
-	
+	Log:Debug("Distance check PASSED (player=%.0f < next=%.0f)", distPlayerToSkip, distNextToSkip)
+
+	-- VALIDATION: Check if we can walk DIRECTLY to skip target (path[3])
+	Log:Debug("=== Validate path to SKIP TARGET (path[3]) ===")
+	Log:Debug(
+		"FROM PLAYER(%.0f,%.0f,%.0f) TO SKIP_TARGET(%.0f,%.0f,%.0f)",
+		currentPos.x,
+		currentPos.y,
+		currentPos.z,
+		skipToNode.pos.x,
+		skipToNode.pos.y,
+		skipToNode.pos.z
+	)
+
+	local isWalkable = PathValidator.Path(currentPos, skipToNode.pos)
+	Log:Debug("Can reach skip target directly: %s", tostring(isWalkable))
+
 	-- Debug logging (respects G.Menu.Main.Debug)
-	local Log = require("MedBot.Core.Common").Log.new("NodeSkipper")
-	Log:Debug("Skip check: playerDist=%.0f currentDist=%.0f walkable=%s", distPlayerToNext, distCurrentToNext, tostring(isWalkable))
-	
+	Log:Debug(
+		"Skip check: playerDist=%.0f nextDist=%.0f walkable=%s",
+		distPlayerToSkip,
+		distNextToSkip,
+		tostring(isWalkable)
+	)
+
 	if not isWalkable then
 		Log:Debug("Skip blocked: path not walkable (wall detected)")
 		return false -- Don't skip if path has walls/obstacles
