@@ -7284,6 +7284,40 @@ function Navigation.Setup()
 end
 
 -- ========================================================================
+-- NODE QUERIES
+-- ========================================================================
+
+-- Get a node by ID
+---@param nodeId integer
+---@return table|nil
+function Navigation.GetNode(nodeId)
+	if not nodeId then
+		Log:Warn("GetNode: nodeId is nil")
+		return nil
+	end
+
+	return Node.GetNodeByID(nodeId)
+end
+
+-- Get adjacent nodes for a given node ID
+---@param nodeId integer
+---@return integer[]
+function Navigation.GetAdjacentNodes(nodeId)
+	if not nodeId then
+		Log:Warn("GetAdjacentNodes: nodeId is nil")
+		return {}
+	end
+
+	local node = Node.GetNodeByID(nodeId)
+	if not node then
+		Log:Warn("GetAdjacentNodes: node %d not found", nodeId)
+		return {}
+	end
+
+	return Node.GetAdjacentNodesSimple(node)
+end
+
+-- ========================================================================
 -- PATH QUERIES
 -- ========================================================================
 
@@ -7371,8 +7405,11 @@ end
 -- Check if next node is walkable from current position
 function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		Log:Debug("CheckNextNodeWalkable: Invalid node data - currentNode=%s, nextNode=%s", 
-			tostring(currentNode and currentNode.id), tostring(nextNode and nextNode.id))
+		Log:Debug(
+			"CheckNextNodeWalkable: Invalid node data - currentNode=%s, nextNode=%s",
+			tostring(currentNode and currentNode.id),
+			tostring(nextNode and nextNode.id)
+		)
 		return false
 	end
 
@@ -7392,8 +7429,11 @@ end
 -- Check if next node is closer than current node
 function Navigation.CheckNextNodeCloser(currentPos, currentNode, nextNode)
 	if not currentNode or not nextNode or not currentNode.pos or not nextNode.pos then
-		Log:Debug("CheckNextNodeCloser: Invalid node data - currentNode=%s, nextNode=%s", 
-			tostring(currentNode and currentNode.id), tostring(nextNode and nextNode.id))
+		Log:Debug(
+			"CheckNextNodeCloser: Invalid node data - currentNode=%s, nextNode=%s",
+			tostring(currentNode and currentNode.id),
+			tostring(nextNode and nextNode.id)
+		)
 		return false
 	end
 
@@ -7462,7 +7502,7 @@ function Navigation.BuildDoorWaypointsFromPath()
 					kind = "door",
 					fromId = currentNode.id,
 					toId = nextNode.id,
-					pos = currentNode.pos,  -- Move to current door position first
+					pos = currentNode.pos, -- Move to current door position first
 				})
 				table.insert(G.Navigation.waypoints, {
 					pos = nextNode.pos,
