@@ -56,6 +56,9 @@ local G = require("MedBot.Core.Globals")
 local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 
+--[[ Algorithms ]]
+local Greedy = require("MedBot.Algorithms.Greedy")
+
 --[[ Bot Modules ]]
 local StateHandler = require("MedBot.Bot.StateHandler")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
@@ -75,6 +78,9 @@ local Lib = Common.Lib
 local Notify, WPlayer = Lib.UI.Notify, Lib.TF2.WPlayer
 local Log = Common.Log.new("MedBot")
 Log.Level = 0
+
+-- Make algorithms globally accessible
+G.Greedy = Greedy
 
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
@@ -5387,6 +5393,7 @@ local TestState = {
 	-- Visual data
 	hullTraces = {},
 	lineTraces = {},
+	greedyNodes = {}, -- Store greedy path nodes for cyan visualization
 }
 
 -- Constants
@@ -5473,12 +5480,25 @@ local function IsWalkable(startPos, goalPos)
 	-- Clear trace tables for debugging
 	TestState.hullTraces = {}
 	TestState.lineTraces = {}
+	TestState.greedyNodes = {}
 	local blocked = false
+
+	-- Get greedy path for visualization
+	local greedyPath = G.Greedy.FindPathFast(startPos, goalPos, 20)
+
+	-- Store greedy node positions for cyan visualization
+	for _, nodeId in ipairs(greedyPath) do
+		local node = G.Navigation.GetNode(nodeId)
+		if node then
+			table.insert(TestState.greedyNodes, Vector3(node.x, node.y, node.z))
+		end
+	end
 
 	local currentPos = startPos
 
 	-- Adjust start position to ground level
 	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
+
 	currentPos = startGroundTrace.endpos
 
 	-- Initial direction towards goal, adjusted for ground normal
@@ -5499,7 +5519,7 @@ local function IsWalkable(startPos, goalPos)
 		currentPos = wallTrace.endpos
 
 		if wallTrace.fraction == 0 then
-			blocked = true
+			blocked = true -- Path is blocked by a wall
 		end
 
 		-- Ground collision with segmentation
@@ -5515,10 +5535,11 @@ local function IsWalkable(startPos, goalPos)
 			local groundTrace = performTraceHull(segmentTop, segmentBottom)
 
 			if groundTrace.fraction == 1 then
-				return false
+				return false -- No ground beneath; path is unwalkable
 			end
 
 			if groundTrace.fraction > STEP_FRACTION or seg == numSegments then
+				-- Adjust position to ground
 				direction = adjustDirectionToSurface(direction, groundTrace.plane)
 				currentPos = groundTrace.endpos
 				blocked = false
@@ -5526,23 +5547,25 @@ local function IsWalkable(startPos, goalPos)
 			end
 		end
 
+		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
-		if blocked or currentDistance > MaxDistance then
+		if blocked or currentDistance > MaxDistance then --if target is unreachable
 			return false
-		elseif currentDistance < 24 then
+		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
-			if verticalDist < 24 then
-				return true
-			else
-				return false
+			if verticalDist < 24 then --within vertical range
+				return true -- Goal is within reach; path is walkable
+			else --unreachable
+				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
 
+		-- Prepare for the next iteration
 		lastPos = currentPos
 		lastDirection = direction
 	end
 
-	return false
+	return false -- Max iterations reached without finding a path
 end
 
 -- Visual functions
@@ -5708,7 +5731,14 @@ local function OnDraw()
 	draw.Text(20, 150, string.format("Memory usage: %.2f KB", TestState.averageMemoryUsage))
 	draw.Text(20, 180, string.format("Time usage: %.2f ms", TestState.averageTimeUsage * 1000))
 	draw.Text(20, 210, string.format("Result: %s", TestState.isWalkable and "WALKABLE" or "NOT WALKABLE"))
-	draw.Text(20, 240, "Press SHIFT to set start position")
+	draw.Text(20, 240, string.format("Greedy Nodes: %d", #TestState.greedyNodes))
+	draw.Text(20, 270, "Press SHIFT to set start position")
+
+	-- Draw greedy path nodes (navmesh quads) in cyan
+	for _, nodePos in ipairs(TestState.greedyNodes) do
+		draw.Color(0, 255, 255, 255) -- Cyan for greedy path nodes
+		Draw3DBox(8, nodePos)
+	end
 
 	-- Draw debug traces
 	for _, trace in ipairs(TestState.lineTraces) do
@@ -8914,6 +8944,185 @@ function GoalFinder.findGoal(currentTask)
 end
 
 return GoalFinder
+
+end)
+__bundle_register("MedBot.Algorithms.Greedy", function(require, _LOADED, __bundle_register, __bundle_modules)
+--[[
+    Greedy Best-First Search Algorithm
+    Fastest possible pathfinding using straight-line heuristic
+    Always expands node closest to destination (no cost consideration)
+    Author: titaniummachine1 (github.com/titaniummachine1)
+]]
+
+local G = require("MedBot.Core.Globals")
+local Navigation = require("MedBot.Navigation")
+
+local Greedy = {}
+
+-- Calculate straight-line distance heuristic (Euclidean distance)
+local function heuristic(startPos, goalPos)
+	local dx = startPos.x - goalPos.x
+	local dy = startPos.y - goalPos.y
+	local dz = startPos.z - goalPos.z
+	return math.abs(dx) + math.abs(dy) + math.abs(dz)
+end
+
+-- Main greedy pathfinding function
+function Greedy.FindPath(startPos, goalPos, maxIterations)
+	maxIterations = maxIterations or 500
+
+	local startNode = Navigation.GetClosestNode(startPos)
+	local goalNode = Navigation.GetClosestNode(goalPos)
+
+	if not startNode or not goalNode then
+		return {}
+	end
+
+	if startNode.id == goalNode.id then
+		return { startNode.id }
+	end
+
+	-- Priority queue based on distance to goal (min-heap)
+	local openSet = {}
+	local closedSet = {}
+	local cameFrom = {}
+
+	-- Insert start node with its heuristic value
+	table.insert(openSet, {
+		nodeId = startNode.id,
+		priority = heuristic(startPos, goalPos),
+	})
+
+	local iterations = 0
+
+	while #openSet > 0 and iterations < maxIterations do
+		iterations = iterations + 1
+
+		-- Get node with lowest heuristic value (closest to goal)
+		local current = table.remove(openSet, 1)
+
+		-- Skip if already visited
+		if closedSet[current.nodeId] then
+			goto continue
+		end
+
+		closedSet[current.nodeId] = true
+
+		-- Goal reached
+		if current.nodeId == goalNode.id then
+			-- Reconstruct path
+			local path = {}
+			local node = goalNode.id
+
+			while node do
+				table.insert(path, 1, node)
+				node = cameFrom[node]
+			end
+
+			return path
+		end
+
+		-- Get current node data
+		local currentNode = Navigation.GetNode(current.nodeId)
+		if not currentNode then
+			goto continue
+		end
+
+		-- Explore neighbors
+		local adjacent = Navigation.GetAdjacentNodes(current.nodeId)
+		for _, neighborId in ipairs(adjacent) do
+			if not closedSet[neighborId] then
+				local neighborNode = Navigation.GetNode(neighborId)
+				if neighborNode then
+					-- Calculate heuristic for neighbor
+					local neighborPos = Vector3(neighborNode.x, neighborNode.y, neighborNode.z)
+					local hValue = heuristic(neighborPos, goalPos)
+
+					-- Add to open set
+					table.insert(openSet, {
+						nodeId = neighborId,
+						priority = hValue,
+					})
+
+					-- Track parent
+					if not cameFrom[neighborId] then
+						cameFrom[neighborId] = current.nodeId
+					end
+				end
+			end
+		end
+
+		-- Sort open set by priority (lowest first)
+		table.sort(openSet, function(a, b)
+			return a.priority < b.priority
+		end)
+
+		::continue::
+	end
+
+	-- No path found within iteration limit
+	return {}
+end
+
+-- Simple version with even less overhead for very fast pathfinding
+function Greedy.FindPathFast(startPos, goalPos, maxNodes)
+	maxNodes = maxNodes or 100
+
+	local startNode = Navigation.GetClosestNode(startPos)
+	local goalNode = Navigation.GetClosestNode(goalPos)
+
+	if not startNode or not goalNode then
+		return {}
+	end
+
+	if startNode.id == goalNode.id then
+		return { startNode.id }
+	end
+
+	local path = { startNode.id }
+	local currentId = startNode.id
+	local visited = { [currentId] = true }
+
+	for i = 1, maxNodes do
+		if currentId == goalNode.id then
+			return path
+		end
+
+		local adjacent = Navigation.GetAdjacentNodes(currentId)
+		local bestNeighbor = nil
+		local bestDistance = math.huge
+
+		-- Find neighbor closest to goal
+		for _, neighborId in ipairs(adjacent) do
+			if not visited[neighborId] then
+				local neighborNode = Navigation.GetNode(neighborId)
+				if neighborNode then
+					local neighborPos = Vector3(neighborNode.x, neighborNode.y, neighborNode.z)
+					local distance = heuristic(neighborPos, goalPos)
+
+					if distance < bestDistance then
+						bestDistance = distance
+						bestNeighbor = neighborId
+					end
+				end
+			end
+		end
+
+		if not bestNeighbor then
+			break -- Dead end
+		end
+
+		table.insert(path, bestNeighbor)
+		visited[bestNeighbor] = true
+		currentId = bestNeighbor
+	end
+
+	return path
+end
+
+print("Greedy Best-First Search algorithm loaded")
+
+return Greedy
 
 end)
 return __bundle_require("__root")

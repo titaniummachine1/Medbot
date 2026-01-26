@@ -3,5 +3,5 @@
 set /p LUATITLE=<title.txt
 
 node bundle.js
-copy /Y "%LUATITLE%" "%localappdata%\%LUATITLE%"
+copy /Y "%LUATITLE%" "%localappdata%\lua\%LUATITLE%"
 exit

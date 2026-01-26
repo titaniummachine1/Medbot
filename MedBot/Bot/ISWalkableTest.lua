@@ -24,6 +24,7 @@ local TestState = {
 	-- Visual data
 	hullTraces = {},
 	lineTraces = {},
+	greedyNodes = {}, -- Store greedy path nodes for cyan visualization
 }
 
 -- Constants
@@ -110,12 +111,25 @@ local function IsWalkable(startPos, goalPos)
 	-- Clear trace tables for debugging
 	TestState.hullTraces = {}
 	TestState.lineTraces = {}
+	TestState.greedyNodes = {}
 	local blocked = false
+
+	-- Get greedy path for visualization
+	local greedyPath = G.Greedy.FindPathFast(startPos, goalPos, 20)
+
+	-- Store greedy node positions for cyan visualization
+	for _, nodeId in ipairs(greedyPath) do
+		local node = G.Navigation.GetNode(nodeId)
+		if node then
+			table.insert(TestState.greedyNodes, Vector3(node.x, node.y, node.z))
+		end
+	end
 
 	local currentPos = startPos
 
 	-- Adjust start position to ground level
 	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
+
 	currentPos = startGroundTrace.endpos
 
 	-- Initial direction towards goal, adjusted for ground normal
@@ -136,7 +150,7 @@ local function IsWalkable(startPos, goalPos)
 		currentPos = wallTrace.endpos
 
 		if wallTrace.fraction == 0 then
-			blocked = true
+			blocked = true -- Path is blocked by a wall
 		end
 
 		-- Ground collision with segmentation
@@ -152,10 +166,11 @@ local function IsWalkable(startPos, goalPos)
 			local groundTrace = performTraceHull(segmentTop, segmentBottom)
 
 			if groundTrace.fraction == 1 then
-				return false
+				return false -- No ground beneath; path is unwalkable
 			end
 
 			if groundTrace.fraction > STEP_FRACTION or seg == numSegments then
+				-- Adjust position to ground
 				direction = adjustDirectionToSurface(direction, groundTrace.plane)
 				currentPos = groundTrace.endpos
 				blocked = false
@@ -163,23 +178,25 @@ local function IsWalkable(startPos, goalPos)
 			end
 		end
 
+		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
-		if blocked or currentDistance > MaxDistance then
+		if blocked or currentDistance > MaxDistance then --if target is unreachable
 			return false
-		elseif currentDistance < 24 then
+		elseif currentDistance < 24 then --within range
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
-			if verticalDist < 24 then
-				return true
-			else
-				return false
+			if verticalDist < 24 then --within vertical range
+				return true -- Goal is within reach; path is walkable
+			else --unreachable
+				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
 
+		-- Prepare for the next iteration
 		lastPos = currentPos
 		lastDirection = direction
 	end
 
-	return false
+	return false -- Max iterations reached without finding a path
 end
 
 -- Visual functions
@@ -345,7 +362,14 @@ local function OnDraw()
 	draw.Text(20, 150, string.format("Memory usage: %.2f KB", TestState.averageMemoryUsage))
 	draw.Text(20, 180, string.format("Time usage: %.2f ms", TestState.averageTimeUsage * 1000))
 	draw.Text(20, 210, string.format("Result: %s", TestState.isWalkable and "WALKABLE" or "NOT WALKABLE"))
-	draw.Text(20, 240, "Press SHIFT to set start position")
+	draw.Text(20, 240, string.format("Greedy Nodes: %d", #TestState.greedyNodes))
+	draw.Text(20, 270, "Press SHIFT to set start position")
+
+	-- Draw greedy path nodes (navmesh quads) in cyan
+	for _, nodePos in ipairs(TestState.greedyNodes) do
+		draw.Color(0, 255, 255, 255) -- Cyan for greedy path nodes
+		Draw3DBox(8, nodePos)
+	end
 
 	-- Draw debug traces
 	for _, trace in ipairs(TestState.lineTraces) do

@@ -13,6 +13,9 @@ local G = require("MedBot.Core.Globals")
 local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 
+--[[ Algorithms ]]
+local Greedy = require("MedBot.Algorithms.Greedy")
+
 --[[ Bot Modules ]]
 local StateHandler = require("MedBot.Bot.StateHandler")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
@@ -32,6 +35,9 @@ local Lib = Common.Lib
 local Notify, WPlayer = Lib.UI.Notify, Lib.TF2.WPlayer
 local Log = Common.Log.new("MedBot")
 Log.Level = 0
+
+-- Make algorithms globally accessible
+G.Greedy = Greedy
 
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
