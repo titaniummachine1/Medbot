@@ -260,6 +260,22 @@ local function OnDrawMenu()
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()
+		TimMenu.NextLine()
+
+		-- Optimized ISWalkable Test Section
+		TimMenu.BeginSector("Optimized ISWalkable Test")
+
+		-- Initialize OptimizedISWalkableTest menu variables
+		if G.Menu.Visuals.OptimizedISWalkableTest == nil then
+			G.Menu.Visuals.OptimizedISWalkableTest = false
+		end
+
+		G.Menu.Visuals.OptimizedISWalkableTest =
+			TimMenu.Checkbox("Optimized ISWalkable Test", G.Menu.Visuals.OptimizedISWalkableTest)
+		TimMenu.Tooltip("EXPERIMENTAL: Navmesh-optimized ISWalkable (hold F to test)")
+		TimMenu.NextLine()
+
+		TimMenu.EndSector()
 	end
 
 	-- Always end the menu if we began it

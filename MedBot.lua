@@ -616,6 +616,22 @@ local function OnDrawMenu()
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()
+		TimMenu.NextLine()
+
+		-- Optimized ISWalkable Test Section
+		TimMenu.BeginSector("Optimized ISWalkable Test")
+
+		-- Initialize OptimizedISWalkableTest menu variables
+		if G.Menu.Visuals.OptimizedISWalkableTest == nil then
+			G.Menu.Visuals.OptimizedISWalkableTest = false
+		end
+
+		G.Menu.Visuals.OptimizedISWalkableTest =
+			TimMenu.Checkbox("Optimized ISWalkable Test", G.Menu.Visuals.OptimizedISWalkableTest)
+		TimMenu.Tooltip("EXPERIMENTAL: Navmesh-optimized ISWalkable (hold F to test)")
+		TimMenu.NextLine()
+
+		TimMenu.EndSector()
 	end
 
 	-- Always end the menu if we began it
@@ -5394,8 +5410,6 @@ local TestState = {
 	-- Visual data
 	hullTraces = {},
 	lineTraces = {},
-	greedyNodes = {}, -- Store greedy path nodes for cyan visualization
-	samplePoints = {}, -- Store navmesh sample points for yellow visualization
 }
 
 -- Constants
@@ -5502,66 +5516,80 @@ local function IsWalkable(startPos, goalPos)
 	-- Clear trace tables for debugging
 	TestState.hullTraces = {}
 	TestState.lineTraces = {}
-	TestState.greedyNodes = {}
-	TestState.samplePoints = {}
 	local blocked = false
 
-	-- Get greedy path for navmesh-based ground validation
-	local greedyPath = G.Greedy.FindPathFast(startPos, goalPos, 20)
+	local currentPos = startPos
 
-	-- Store greedy node positions for cyan visualization
-	local pathNodes = {}
-	for _, nodeId in ipairs(greedyPath) do
-		local node = G.Navigation.GetNode(nodeId)
-		if node then
-			local nodePos = Vector3(node.x, node.y, node.z)
-			table.insert(TestState.greedyNodes, nodePos)
-			table.insert(pathNodes, node)
-		end
-	end
+	-- Adjust start position to ground level
+	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
 
-	-- OPTIMIZED: Simple quad-to-quad boundary checks (no iteration)
-	if #pathNodes < 2 then
-		return false -- Need at least 2 nodes to check
-	end
+	currentPos = startGroundTrace.endpos
 
-	-- Check wall collision between each adjacent quad pair
-	for i = 1, #pathNodes - 1 do
-		local nodeA = pathNodes[i]
-		local nodeB = pathNodes[i + 1]
+	-- Initial direction towards goal, adjusted for ground normal
+	local lastPos = currentPos
+	local lastDirection = adjustDirectionToSurface(goalPos - currentPos, startGroundTrace.plane)
 
-		local posA = Vector3(nodeA.x, nodeA.y, nodeA.z)
-		local posB = Vector3(nodeB.x, nodeB.y, nodeB.z)
+	local MaxDistance = getHorizontalManhattanDistance(startPos, goalPos)
 
-		-- Store sample points for visualization
-		table.insert(TestState.samplePoints, posA)
-		table.insert(TestState.samplePoints, posB)
+	-- Main loop to iterate towards the goal
+	for iteration = 1, MAX_ITERATIONS do
+		local distanceToGoal = (currentPos - goalPos):Length()
+		local direction = lastDirection
 
-		-- One wall trace per quad boundary at step height
-		local wallTrace = performTraceHull(posA + STEP_HEIGHT_Vector, posB + STEP_HEIGHT_Vector)
+		local NextPos = lastPos + direction * distanceToGoal
+
+		-- Forward collision check
+		local wallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, NextPos + STEP_HEIGHT_Vector)
+		currentPos = wallTrace.endpos
 
 		if wallTrace.fraction == 0 then
-			return false -- Path blocked at this boundary
+			blocked = true -- Path is blocked by a wall
 		end
+
+		-- Ground collision with segmentation
+		local totalDistance = (currentPos - lastPos):Length()
+		local numSegments = math.max(1, math.floor(totalDistance / MIN_STEP_SIZE))
+
+		for seg = 1, numSegments do
+			local t = seg / numSegments
+			local segmentPos = lastPos + (currentPos - lastPos) * t
+			local segmentTop = segmentPos + STEP_HEIGHT_Vector
+			local segmentBottom = segmentPos - MAX_FALL_DISTANCE_Vector
+
+			local groundTrace = performTraceHull(segmentTop, segmentBottom)
+
+			if groundTrace.fraction == 1 then
+				return false -- No ground beneath; path is unwalkable
+			end
+
+			if groundTrace.fraction > STEP_FRACTION or seg == numSegments then
+				-- Adjust position to ground
+				direction = adjustDirectionToSurface(direction, groundTrace.plane)
+				currentPos = groundTrace.endpos
+				blocked = false
+				break
+			end
+		end
+
+		-- Calculate current horizontal distance to goal
+		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
+		if blocked or currentDistance > MaxDistance then --if target is unreachable
+			return false
+		elseif currentDistance < 24 then --within range
+			local verticalDist = math.abs(goalPos.z - currentPos.z)
+			if verticalDist < 24 then --within vertical range
+				return true -- Goal is within reach; path is walkable
+			else --unreachable
+				return false -- Goal is too far vertically; path is unwalkable
+			end
+		end
+
+		-- Prepare for the next iteration
+		lastPos = currentPos
+		lastDirection = direction
 	end
 
-	-- Check final segment from last node to goal
-	local lastNode = pathNodes[#pathNodes]
-	local lastPos = Vector3(lastNode.x, lastNode.y, lastNode.z)
-
-	-- Check if goal is reasonable distance from path
-	local distToGoal = (lastPos - goalPos):Length()
-	if distToGoal > 500 then
-		return false -- Goal too far from navmesh path
-	end
-
-	-- Final wall check to goal
-	local finalTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, goalPos + STEP_HEIGHT_Vector)
-	if finalTrace.fraction == 0 then
-		return false -- Final segment blocked
-	end
-
-	return true -- Path is walkable
+	return false -- Max iterations reached without finding a path
 end
 
 -- Visual functions
@@ -5732,28 +5760,7 @@ local function OnDraw()
 	draw.Text(20, 150, string.format("Memory usage: %.2f KB", TestState.averageMemoryUsage))
 	draw.Text(20, 180, string.format("Time usage: %.2f ms", TestState.averageTimeUsage * 1000))
 	draw.Text(20, 210, string.format("Result: %s", TestState.isWalkable and "WALKABLE" or "NOT WALKABLE"))
-	draw.Text(20, 240, string.format("Greedy Nodes: %d", #TestState.greedyNodes))
-	draw.Text(20, 270, string.format("Sample Points: %d", #TestState.samplePoints))
-	draw.Text(20, 300, "Press SHIFT to set start | Hold F to test")
-
-	-- Draw greedy path nodes (navmesh quads) in cyan
-	if #TestState.greedyNodes > 0 then
-		draw.Color(0, 255, 255, 255) -- Cyan for greedy path nodes
-		for _, nodePos in ipairs(TestState.greedyNodes) do
-			Draw3DBox(8, nodePos)
-		end
-	else
-		draw.Color(255, 255, 255, 255)
-		draw.Text(20, 300, "No greedy path nodes found")
-	end
-
-	-- Draw navmesh sample points in yellow
-	if #TestState.samplePoints > 0 then
-		draw.Color(255, 255, 0, 255) -- Yellow for sample points
-		for _, samplePos in ipairs(TestState.samplePoints) do
-			Draw3DBox(4, samplePos)
-		end
-	end
+	draw.Text(20, 240, "Press SHIFT to set start | Hold F to test")
 
 	-- Draw debug traces
 	for _, trace in ipairs(TestState.lineTraces) do

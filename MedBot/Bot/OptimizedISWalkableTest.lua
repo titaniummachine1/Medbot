@@ -1,7 +1,6 @@
 --[[
-    ISWalkable Test Suite
-    Standalone testing module for ISWalkable optimization
-    Mimics the visual toggle system from A_standstillDummy.lua
+    Optimized ISWalkable Test Suite
+    EXPERIMENTAL - Navmesh-based optimization using Greedy pathfinding
     Author: titaniummachine1 (github.com/titaniummachine1)
 ]]
 
@@ -24,6 +23,8 @@ local TestState = {
 	-- Visual data
 	hullTraces = {},
 	lineTraces = {},
+	greedyNodes = {}, -- Store greedy path nodes for cyan visualization
+	samplePoints = {}, -- Store navmesh sample points for yellow visualization
 }
 
 -- Constants
@@ -72,7 +73,7 @@ local function BenchmarkStop(startTime, startMemory)
 	TestState.averageMemoryUsage = totalMemory / #TestState.benchmarkRecords
 end
 
--- ISWalkable implementation (optimized version from dummy)
+-- Helper functions
 local function shouldHitEntity(entity)
 	local pLocal = entities.GetLocalPlayer()
 	return entity ~= pLocal
@@ -82,10 +83,6 @@ local function Normalize(vec)
 	return vec / vec:Length()
 end
 
-local function getHorizontalManhattanDistance(point1, point2)
-	return math.abs(point1.x - point2.x) + math.abs(point1.y - point2.y)
-end
-
 local function performTraceHull(startPos, endPos)
 	local result =
 		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
@@ -93,117 +90,70 @@ local function performTraceHull(startPos, endPos)
 	return result
 end
 
-local function adjustDirectionToSurface(direction, surfaceNormal)
-	direction = Normalize(direction)
-	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
-
-	if angle > MAX_SURFACE_ANGLE then
-		return direction
-	end
-
-	local dotProduct = direction:Dot(surfaceNormal)
-	direction.z = direction.z - surfaceNormal.z * dotProduct
-	return Normalize(direction)
-end
-
--- Helper: Find closest navmesh node to a 2D position
-local function getClosestNavmeshNode(pos, pathNodes)
-	local closestNode = nil
-	local closestDist = math.huge
-
-	for _, node in ipairs(pathNodes) do
-		local nodePos = Vector3(node.x, node.y, node.z)
-		local dx = pos.x - nodePos.x
-		local dy = pos.y - nodePos.y
-		local dist2D = math.sqrt(dx * dx + dy * dy)
-
-		if dist2D < closestDist then
-			closestDist = dist2D
-			closestNode = node
-		end
-	end
-
-	return closestNode, closestDist
-end
-
+-- OPTIMIZED ISWalkable using Greedy pathfinding
 local function IsWalkable(startPos, goalPos)
 	-- Clear trace tables for debugging
 	TestState.hullTraces = {}
 	TestState.lineTraces = {}
-	local blocked = false
+	TestState.greedyNodes = {}
+	TestState.samplePoints = {}
 
-	local currentPos = startPos
+	-- Get greedy path for navmesh-based validation
+	local greedyPath = G.Greedy.FindPathFast(startPos, goalPos, 20)
 
-	-- Adjust start position to ground level
-	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
-
-	currentPos = startGroundTrace.endpos
-
-	-- Initial direction towards goal, adjusted for ground normal
-	local lastPos = currentPos
-	local lastDirection = adjustDirectionToSurface(goalPos - currentPos, startGroundTrace.plane)
-
-	local MaxDistance = getHorizontalManhattanDistance(startPos, goalPos)
-
-	-- Main loop to iterate towards the goal
-	for iteration = 1, MAX_ITERATIONS do
-		local distanceToGoal = (currentPos - goalPos):Length()
-		local direction = lastDirection
-
-		local NextPos = lastPos + direction * distanceToGoal
-
-		-- Forward collision check
-		local wallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, NextPos + STEP_HEIGHT_Vector)
-		currentPos = wallTrace.endpos
-
-		if wallTrace.fraction == 0 then
-			blocked = true -- Path is blocked by a wall
+	-- Store greedy node positions for cyan visualization
+	local pathNodes = {}
+	for _, nodeId in ipairs(greedyPath) do
+		local node = G.Navigation.GetNode(nodeId)
+		if node then
+			local nodePos = Vector3(node.x, node.y, node.z)
+			table.insert(TestState.greedyNodes, nodePos)
+			table.insert(pathNodes, node)
 		end
-
-		-- Ground collision with segmentation
-		local totalDistance = (currentPos - lastPos):Length()
-		local numSegments = math.max(1, math.floor(totalDistance / MIN_STEP_SIZE))
-
-		for seg = 1, numSegments do
-			local t = seg / numSegments
-			local segmentPos = lastPos + (currentPos - lastPos) * t
-			local segmentTop = segmentPos + STEP_HEIGHT_Vector
-			local segmentBottom = segmentPos - MAX_FALL_DISTANCE_Vector
-
-			local groundTrace = performTraceHull(segmentTop, segmentBottom)
-
-			if groundTrace.fraction == 1 then
-				return false -- No ground beneath; path is unwalkable
-			end
-
-			if groundTrace.fraction > STEP_FRACTION or seg == numSegments then
-				-- Adjust position to ground
-				direction = adjustDirectionToSurface(direction, groundTrace.plane)
-				currentPos = groundTrace.endpos
-				blocked = false
-				break
-			end
-		end
-
-		-- Calculate current horizontal distance to goal
-		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
-		if blocked or currentDistance > MaxDistance then --if target is unreachable
-			return false
-		elseif currentDistance < 24 then --within range
-			local verticalDist = math.abs(goalPos.z - currentPos.z)
-			if verticalDist < 24 then --within vertical range
-				return true -- Goal is within reach; path is walkable
-			else --unreachable
-				return false -- Goal is too far vertically; path is unwalkable
-			end
-		end
-
-		-- Prepare for the next iteration
-		lastPos = currentPos
-		lastDirection = direction
 	end
 
-	return false -- Max iterations reached without finding a path
+	-- OPTIMIZED: Simple quad-to-quad boundary checks (no iteration)
+	if #pathNodes < 2 then
+		return false -- Need at least 2 nodes to check
+	end
+
+	-- Check wall collision between each adjacent quad pair
+	for i = 1, #pathNodes - 1 do
+		local nodeA = pathNodes[i]
+		local nodeB = pathNodes[i + 1]
+
+		local posA = Vector3(nodeA.x, nodeA.y, nodeA.z)
+		local posB = Vector3(nodeB.x, nodeB.y, nodeB.z)
+
+		-- Store sample points for visualization
+		table.insert(TestState.samplePoints, posA)
+		table.insert(TestState.samplePoints, posB)
+
+		-- One wall trace per quad boundary at step height
+		local wallTrace = performTraceHull(posA + STEP_HEIGHT_Vector, posB + STEP_HEIGHT_Vector)
+
+		if wallTrace.fraction == 0 then
+			return false -- Path blocked at this boundary
+		end
+	end
+
+	-- Check final segment from last node to goal
+	local lastNode = pathNodes[#pathNodes]
+	local lastPos = Vector3(lastNode.x, lastNode.y, lastNode.z)
+
+	-- Check if goal is reasonable distance from path
+	local distToGoal = (lastPos - goalPos):Length()
+	if distToGoal > 500 then
+		return false -- Goal too far from navmesh path
+	end
+
+	-- Final wall check to goal
+	local finalTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, goalPos + STEP_HEIGHT_Vector)
+	if finalTrace.fraction == 0 then
+		return false -- Final segment blocked
+	end
+
+	return true -- Path is walkable
 end
 
 -- Visual functions
@@ -294,7 +244,7 @@ end
 -- Main test functions
 local function OnCreateMove(Cmd)
 	-- Check menu state
-	if not G.Menu.Visuals.ISWalkableTest then
+	if not G.Menu.Visuals.OptimizedISWalkableTest then
 		TestState.enabled = false
 		return
 	end
@@ -341,7 +291,7 @@ end
 
 local function OnDraw()
 	-- Check menu state first
-	if not G.Menu.Visuals.ISWalkableTest then
+	if not G.Menu.Visuals.OptimizedISWalkableTest then
 		return
 	end
 
@@ -370,11 +320,36 @@ local function OnDraw()
 
 	-- Draw benchmark info
 	draw.Color(255, 255, 255, 255)
-	draw.Text(20, 120, string.format("ISWalkable Test: %s", G.Menu.Visuals.ISWalkableTest and "ON" or "OFF"))
+	draw.Text(
+		20,
+		120,
+		string.format("Optimized ISWalkable Test: %s", G.Menu.Visuals.OptimizedISWalkableTest and "ON" or "OFF")
+	)
 	draw.Text(20, 150, string.format("Memory usage: %.2f KB", TestState.averageMemoryUsage))
 	draw.Text(20, 180, string.format("Time usage: %.2f ms", TestState.averageTimeUsage * 1000))
 	draw.Text(20, 210, string.format("Result: %s", TestState.isWalkable and "WALKABLE" or "NOT WALKABLE"))
-	draw.Text(20, 240, "Press SHIFT to set start | Hold F to test")
+	draw.Text(20, 240, string.format("Greedy Nodes: %d", #TestState.greedyNodes))
+	draw.Text(20, 270, string.format("Sample Points: %d", #TestState.samplePoints))
+	draw.Text(20, 300, "Press SHIFT to set start | Hold F to test")
+
+	-- Draw greedy path nodes (navmesh quads) in cyan
+	if #TestState.greedyNodes > 0 then
+		draw.Color(0, 255, 255, 255) -- Cyan for greedy path nodes
+		for _, nodePos in ipairs(TestState.greedyNodes) do
+			Draw3DBox(8, nodePos)
+		end
+	else
+		draw.Color(255, 255, 255, 255)
+		draw.Text(20, 330, "No greedy path nodes found")
+	end
+
+	-- Draw navmesh sample points in yellow
+	if #TestState.samplePoints > 0 then
+		draw.Color(255, 255, 0, 255) -- Yellow for sample points
+		for _, samplePos in ipairs(TestState.samplePoints) do
+			Draw3DBox(4, samplePos)
+		end
+	end
 
 	-- Draw debug traces
 	for _, trace in ipairs(TestState.lineTraces) do
@@ -399,16 +374,16 @@ local function ToggleTest()
 		if pLocal and pLocal:IsAlive() then
 			TestState.startPos = pLocal:GetAbsOrigin()
 		end
-		print("ISWalkable Test Suite: ENABLED")
+		print("Optimized ISWalkable Test Suite: ENABLED")
 		client.Command('play "ui/buttonclick"', true)
 	else
-		print("ISWalkable Test Suite: DISABLED")
+		print("Optimized ISWalkable Test Suite: DISABLED")
 		client.Command('play "ui/buttonclick_release"', true)
 	end
 end
 
 -- Public API
-local ISWalkableTest = {
+local OptimizedISWalkableTest = {
 	Toggle = ToggleTest,
 	IsEnabled = function()
 		return TestState.enabled
@@ -419,12 +394,12 @@ local ISWalkableTest = {
 }
 
 -- Auto-register callbacks
-callbacks.Register("CreateMove", "ISWalkableTest_CreateMove", OnCreateMove)
-callbacks.Register("Draw", "ISWalkableTest_Draw", OnDraw)
+callbacks.Register("CreateMove", "OptimizedISWalkableTest_CreateMove", OnCreateMove)
+callbacks.Register("Draw", "OptimizedISWalkableTest_Draw", OnDraw)
 
 -- Add to global for easy access
-G.ISWalkableTest = ISWalkableTest
+G.OptimizedISWalkableTest = OptimizedISWalkableTest
 
-print("ISWalkable Test Suite loaded. Use G.ISWalkableTest.Toggle() to enable/disable.")
+print("Optimized ISWalkable Test Suite loaded. Use G.OptimizedISWalkableTest.Toggle() to enable/disable.")
 
-return ISWalkableTest
+return OptimizedISWalkableTest
