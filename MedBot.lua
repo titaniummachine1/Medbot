@@ -7300,7 +7300,7 @@ function Navigation.GetNode(nodeId)
 	return Node.GetNodeByID(nodeId)
 end
 
--- Get adjacent nodes for a given node ID
+-- Get adjacent nodes for a given node ID (areas only, no doors)
 ---@param nodeId integer
 ---@return integer[]
 function Navigation.GetAdjacentNodes(nodeId)
@@ -7315,7 +7315,18 @@ function Navigation.GetAdjacentNodes(nodeId)
 		return {}
 	end
 
-	return Node.GetAdjacentNodesSimple(node)
+	-- Get adjacent nodes with the nodes table
+	local neighbors = Node.GetAdjacentNodesSimple(node, G.Navigation.nodes)
+
+	-- Extract node IDs
+	local adjacentIds = {}
+	for _, neighbor in ipairs(neighbors) do
+		if neighbor.node and neighbor.node.id then
+			table.insert(adjacentIds, neighbor.node.id)
+		end
+	end
+
+	return adjacentIds
 end
 
 -- ========================================================================
