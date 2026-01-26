@@ -79,8 +79,9 @@ local Notify, WPlayer = Lib.UI.Notify, Lib.TF2.WPlayer
 local Log = Common.Log.new("MedBot")
 Log.Level = 0
 
--- Make algorithms globally accessible
+-- Make modules globally accessible
 G.Greedy = Greedy
+G.Navigation = Navigation
 
 -- Constants for timing and performance
 local DISTANCE_CHECK_COOLDOWN = 3 -- ticks (~50ms) between distance calculations
