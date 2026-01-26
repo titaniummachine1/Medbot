@@ -195,9 +195,9 @@ local function OnDrawMenu()
 
 		-- Display Section
 		TimMenu.BeginSector("Display Options")
-		
+
 		-- Multi-selection combo for all visual elements
-		local visualElements = {"Areas", "Doors", "Wall Corners", "Connections", "D2D Connections"}
+		local visualElements = { "Areas", "Doors", "Wall Corners", "Connections", "D2D Connections" }
 		local visualSelections = {
 			G.Menu.Visuals.showAreas or false,
 			G.Menu.Visuals.showDoors or false,
@@ -238,10 +238,25 @@ local function OnDrawMenu()
 
 		-- SmartJump Visualization Section
 		TimMenu.BeginSector("SmartJump Visuals")
-		
+
 		G.Menu.Visuals.showSmartJump = G.Menu.Visuals.showSmartJump or false
 		G.Menu.Visuals.showSmartJump = TimMenu.Checkbox("Show SmartJump", G.Menu.Visuals.showSmartJump)
 		TimMenu.Tooltip("Display SmartJump simulation path and landing prediction")
+		TimMenu.NextLine()
+
+		TimMenu.EndSector()
+		TimMenu.NextLine()
+
+		-- ISWalkable Test Section
+		TimMenu.BeginSector("ISWalkable Test")
+
+		-- Initialize ISWalkableTest menu variables
+		if G.Menu.Visuals.ISWalkableTest == nil then
+			G.Menu.Visuals.ISWalkableTest = false
+		end
+
+		G.Menu.Visuals.ISWalkableTest = TimMenu.Checkbox("ISWalkable Test", G.Menu.Visuals.ISWalkableTest)
+		TimMenu.Tooltip("Enable ISWalkable testing suite (hold SHIFT to set target position)")
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()

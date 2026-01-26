@@ -22,6 +22,7 @@ local HealthLogic = require("MedBot.Bot.HealthLogic")
 
 --[[ Additional Systems ]]
 local SmartJump = require("MedBot.Bot.SmartJump")
+require("MedBot.Bot.ISWalkableTest")
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")

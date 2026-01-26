@@ -59,7 +59,7 @@ function Logger:Debug(msg, ...)
 	if not (G.Menu.Visuals and G.Menu.Visuals.Debug_Mode) then
 		return -- Skip debug output when debug is disabled
 	end
-	
+
 	local success, formatted = pcall(string.format, "[Debug %s] %s: " .. msg, os.date("%H:%M:%S"), self.moduleName, ...)
 	if success then
 		safePrint(formatted)
@@ -154,7 +154,7 @@ function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_wi
 	-- Calculate direction from start to end
 	local direction = end_pos - start_pos
 	local direction_length = direction:Length()
-	
+
 	-- Skip drawing if positions are identical (valid case when waypoints overlap)
 	if direction_length == 0 then
 		return
