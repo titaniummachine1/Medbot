@@ -37,6 +37,7 @@ defaultconfig = {
 		showNodeIds = false, -- Show node ID numbers for debugging
 		showAgentBoxes = false, -- Show agent boxes
 		showSmartJump = false, -- Show SmartJump hitbox and trajectory visualization
+		ISWalkableTest = false, -- ISWalkable test suite toggle
 		Debug_Mode = false, -- Master debug toggle for visuals and debug logging
 	},
 	Movement = {

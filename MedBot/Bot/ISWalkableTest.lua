@@ -275,7 +275,14 @@ local function OnCreateMove(Cmd)
 		return
 	end
 
-	TestState.enabled = true
+	-- Set enabled and initialize startPos if needed
+	if not TestState.enabled then
+		TestState.enabled = true
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal and pLocal:IsAlive() and not TestState.startPos then
+			TestState.startPos = pLocal:GetAbsOrigin()
+		end
+	end
 
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
