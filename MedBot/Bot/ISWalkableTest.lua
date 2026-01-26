@@ -107,6 +107,26 @@ local function adjustDirectionToSurface(direction, surfaceNormal)
 	return Normalize(direction)
 end
 
+-- Helper: Find closest navmesh node to a 2D position
+local function getClosestNavmeshNode(pos, pathNodes)
+	local closestNode = nil
+	local closestDist = math.huge
+
+	for _, node in ipairs(pathNodes) do
+		local nodePos = Vector3(node.x, node.y, node.z)
+		local dx = pos.x - nodePos.x
+		local dy = pos.y - nodePos.y
+		local dist2D = math.sqrt(dx * dx + dy * dy)
+
+		if dist2D < closestDist then
+			closestDist = dist2D
+			closestNode = node
+		end
+	end
+
+	return closestNode, closestDist
+end
+
 local function IsWalkable(startPos, goalPos)
 	-- Clear trace tables for debugging
 	TestState.hullTraces = {}
@@ -114,22 +134,24 @@ local function IsWalkable(startPos, goalPos)
 	TestState.greedyNodes = {}
 	local blocked = false
 
-	-- Get greedy path for visualization
+	-- Get greedy path for navmesh-based ground validation
 	local greedyPath = G.Greedy.FindPathFast(startPos, goalPos, 20)
 
 	-- Store greedy node positions for cyan visualization
+	local pathNodes = {}
 	for _, nodeId in ipairs(greedyPath) do
 		local node = G.Navigation.GetNode(nodeId)
 		if node then
-			table.insert(TestState.greedyNodes, Vector3(node.x, node.y, node.z))
+			local nodePos = Vector3(node.x, node.y, node.z)
+			table.insert(TestState.greedyNodes, nodePos)
+			table.insert(pathNodes, node)
 		end
 	end
 
 	local currentPos = startPos
 
-	-- Adjust start position to ground level
+	-- Adjust start position to ground level (ORIGINAL LOGIC)
 	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
-
 	currentPos = startGroundTrace.endpos
 
 	-- Initial direction towards goal, adjusted for ground normal
@@ -138,14 +160,14 @@ local function IsWalkable(startPos, goalPos)
 
 	local MaxDistance = getHorizontalManhattanDistance(startPos, goalPos)
 
-	-- Main loop to iterate towards the goal
+	-- Main loop to iterate towards the goal (ORIGINAL FORWARD LOGIC)
 	for iteration = 1, MAX_ITERATIONS do
 		local distanceToGoal = (currentPos - goalPos):Length()
 		local direction = lastDirection
 
 		local NextPos = lastPos + direction * distanceToGoal
 
-		-- Forward collision check
+		-- Forward collision check (UNCHANGED)
 		local wallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, NextPos + STEP_HEIGHT_Vector)
 		currentPos = wallTrace.endpos
 
@@ -153,41 +175,27 @@ local function IsWalkable(startPos, goalPos)
 			blocked = true -- Path is blocked by a wall
 		end
 
-		-- Ground collision with segmentation
-		local totalDistance = (currentPos - lastPos):Length()
-		local numSegments = math.max(1, math.floor(totalDistance / MIN_STEP_SIZE))
-
-		for seg = 1, numSegments do
-			local t = seg / numSegments
-			local segmentPos = lastPos + (currentPos - lastPos) * t
-			local segmentTop = segmentPos + STEP_HEIGHT_Vector
-			local segmentBottom = segmentPos - MAX_FALL_DISTANCE_Vector
-
-			local groundTrace = performTraceHull(segmentTop, segmentBottom)
-
-			if groundTrace.fraction == 1 then
-				return false -- No ground beneath; path is unwalkable
-			end
-
-			if groundTrace.fraction > STEP_FRACTION or seg == numSegments then
-				-- Adjust position to ground
-				direction = adjustDirectionToSurface(direction, groundTrace.plane)
-				currentPos = groundTrace.endpos
-				blocked = false
-				break
-			end
+		-- REPLACED: Ground validation using navmesh instead of trace hulls
+		local closestNode, distToNode = getClosestNavmeshNode(currentPos, pathNodes)
+		if closestNode then
+			-- Use navmesh height instead of ground trace
+			currentPos = Vector3(currentPos.x, currentPos.y, closestNode.z)
+			blocked = false
+		else
+			-- No navmesh node nearby - path is unwalkable
+			return false
 		end
 
 		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
-		if blocked or currentDistance > MaxDistance then --if target is unreachable
+		if blocked or currentDistance > MaxDistance then
 			return false
-		elseif currentDistance < 24 then --within range
+		elseif currentDistance < 24 then
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
-			if verticalDist < 24 then --within vertical range
+			if verticalDist < 24 then
 				return true -- Goal is within reach; path is walkable
-			else --unreachable
-				return false -- Goal is too far vertically; path is unwalkable
+			else
+				return false -- Goal is too far vertically
 			end
 		end
 
