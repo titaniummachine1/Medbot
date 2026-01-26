@@ -175,15 +175,19 @@ local function IsWalkable(startPos, goalPos)
 			blocked = true -- Path is blocked by a wall
 		end
 
-		-- REPLACED: Ground validation using navmesh instead of trace hulls
-		local closestNode, distToNode = getClosestNavmeshNode(currentPos, pathNodes)
-		if closestNode then
-			-- Use navmesh height instead of ground trace
-			currentPos = Vector3(currentPos.x, currentPos.y, closestNode.z)
+		-- OPTIMIZED: Ground validation using navmesh boundary crossing
+		-- Find which navmesh area we're currently in
+		local currentNode, currentDist = getClosestNavmeshNode(currentPos, pathNodes)
+
+		if currentNode and currentDist < 200 then
+			-- Only adjust height when we're within a navmesh area
+			currentPos = Vector3(currentPos.x, currentPos.y, currentNode.z)
+
+			-- Adjust direction to surface angle like original ground trace did
+			local surfaceNormal = UP_VECTOR -- Assume flat for now, could calculate from node
+			direction = adjustDirectionToSurface(direction, surfaceNormal)
+
 			blocked = false
-		else
-			-- No navmesh node nearby - path is unwalkable
-			return false
 		end
 
 		-- Calculate current horizontal distance to goal
@@ -374,9 +378,14 @@ local function OnDraw()
 	draw.Text(20, 270, "Press SHIFT to set start position")
 
 	-- Draw greedy path nodes (navmesh quads) in cyan
-	for _, nodePos in ipairs(TestState.greedyNodes) do
+	if #TestState.greedyNodes > 0 then
 		draw.Color(0, 255, 255, 255) -- Cyan for greedy path nodes
-		Draw3DBox(8, nodePos)
+		for _, nodePos in ipairs(TestState.greedyNodes) do
+			Draw3DBox(8, nodePos)
+		end
+	else
+		draw.Color(255, 255, 255, 255)
+		draw.Text(20, 300, "No greedy path nodes found")
 	end
 
 	-- Draw debug traces
