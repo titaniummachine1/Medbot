@@ -25,6 +25,7 @@ local TestState = {
 	hullTraces = {},
 	lineTraces = {},
 	greedyNodes = {}, -- Store greedy path nodes for cyan visualization
+	samplePoints = {}, -- Store navmesh sample points for yellow visualization
 }
 
 -- Constants
@@ -132,6 +133,7 @@ local function IsWalkable(startPos, goalPos)
 	TestState.hullTraces = {}
 	TestState.lineTraces = {}
 	TestState.greedyNodes = {}
+	TestState.samplePoints = {}
 	local blocked = false
 
 	-- Get greedy path for navmesh-based ground validation
@@ -148,67 +150,48 @@ local function IsWalkable(startPos, goalPos)
 		end
 	end
 
-	local currentPos = startPos
-
-	-- Adjust start position to ground level (ORIGINAL LOGIC)
-	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
-	currentPos = startGroundTrace.endpos
-
-	-- Initial direction towards goal, adjusted for ground normal
-	local lastPos = currentPos
-	local lastDirection = adjustDirectionToSurface(goalPos - currentPos, startGroundTrace.plane)
-
-	local MaxDistance = getHorizontalManhattanDistance(startPos, goalPos)
-
-	-- Main loop to iterate towards the goal (ORIGINAL FORWARD LOGIC)
-	for iteration = 1, MAX_ITERATIONS do
-		local distanceToGoal = (currentPos - goalPos):Length()
-		local direction = lastDirection
-
-		local NextPos = lastPos + direction * distanceToGoal
-
-		-- Forward collision check (UNCHANGED)
-		local wallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, NextPos + STEP_HEIGHT_Vector)
-		currentPos = wallTrace.endpos
-
-		if wallTrace.fraction == 0 then
-			blocked = true -- Path is blocked by a wall
-		end
-
-		-- OPTIMIZED: Ground validation using navmesh boundary crossing
-		-- Find which navmesh area we're currently in
-		local currentNode, currentDist = getClosestNavmeshNode(currentPos, pathNodes)
-
-		if currentNode and currentDist < 200 then
-			-- Only adjust height when we're within a navmesh area
-			currentPos = Vector3(currentPos.x, currentPos.y, currentNode.z)
-
-			-- Adjust direction to surface angle like original ground trace did
-			local surfaceNormal = UP_VECTOR -- Assume flat for now, could calculate from node
-			direction = adjustDirectionToSurface(direction, surfaceNormal)
-
-			blocked = false
-		end
-
-		-- Calculate current horizontal distance to goal
-		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
-		if blocked or currentDistance > MaxDistance then
-			return false
-		elseif currentDistance < 24 then
-			local verticalDist = math.abs(goalPos.z - currentPos.z)
-			if verticalDist < 24 then
-				return true -- Goal is within reach; path is walkable
-			else
-				return false -- Goal is too far vertically
-			end
-		end
-
-		-- Prepare for the next iteration
-		lastPos = currentPos
-		lastDirection = direction
+	-- OPTIMIZED: Simple quad-to-quad boundary checks (no iteration)
+	if #pathNodes < 2 then
+		return false -- Need at least 2 nodes to check
 	end
 
-	return false -- Max iterations reached without finding a path
+	-- Check wall collision between each adjacent quad pair
+	for i = 1, #pathNodes - 1 do
+		local nodeA = pathNodes[i]
+		local nodeB = pathNodes[i + 1]
+
+		local posA = Vector3(nodeA.x, nodeA.y, nodeA.z)
+		local posB = Vector3(nodeB.x, nodeB.y, nodeB.z)
+
+		-- Store sample points for visualization
+		table.insert(TestState.samplePoints, posA)
+		table.insert(TestState.samplePoints, posB)
+
+		-- One wall trace per quad boundary at step height
+		local wallTrace = performTraceHull(posA + STEP_HEIGHT_Vector, posB + STEP_HEIGHT_Vector)
+
+		if wallTrace.fraction == 0 then
+			return false -- Path blocked at this boundary
+		end
+	end
+
+	-- Check final segment from last node to goal
+	local lastNode = pathNodes[#pathNodes]
+	local lastPos = Vector3(lastNode.x, lastNode.y, lastNode.z)
+
+	-- Check if goal is reasonable distance from path
+	local distToGoal = (lastPos - goalPos):Length()
+	if distToGoal > 500 then
+		return false -- Goal too far from navmesh path
+	end
+
+	-- Final wall check to goal
+	local finalTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, goalPos + STEP_HEIGHT_Vector)
+	if finalTrace.fraction == 0 then
+		return false -- Final segment blocked
+	end
+
+	return true -- Path is walkable
 end
 
 -- Visual functions
@@ -331,6 +314,11 @@ local function OnCreateMove(Cmd)
 		return
 	end
 
+	-- Only run test when F key is held
+	if not input.IsButtonDown(KEY_F) then
+		return
+	end
+
 	-- Only run test if we have both positions and they're far enough apart
 	if TestState.startPos and (TestState.currentPos - TestState.startPos):Length() > 10 then
 		local startTime, startMemory = BenchmarkStart()
@@ -375,7 +363,8 @@ local function OnDraw()
 	draw.Text(20, 180, string.format("Time usage: %.2f ms", TestState.averageTimeUsage * 1000))
 	draw.Text(20, 210, string.format("Result: %s", TestState.isWalkable and "WALKABLE" or "NOT WALKABLE"))
 	draw.Text(20, 240, string.format("Greedy Nodes: %d", #TestState.greedyNodes))
-	draw.Text(20, 270, "Press SHIFT to set start position")
+	draw.Text(20, 270, string.format("Sample Points: %d", #TestState.samplePoints))
+	draw.Text(20, 300, "Press SHIFT to set start | Hold F to test")
 
 	-- Draw greedy path nodes (navmesh quads) in cyan
 	if #TestState.greedyNodes > 0 then
@@ -386,6 +375,14 @@ local function OnDraw()
 	else
 		draw.Color(255, 255, 255, 255)
 		draw.Text(20, 300, "No greedy path nodes found")
+	end
+
+	-- Draw navmesh sample points in yellow
+	if #TestState.samplePoints > 0 then
+		draw.Color(255, 255, 0, 255) -- Yellow for sample points
+		for _, samplePos in ipairs(TestState.samplePoints) do
+			Draw3DBox(4, samplePos)
+		end
 	end
 
 	-- Draw debug traces
