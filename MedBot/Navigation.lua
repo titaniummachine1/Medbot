@@ -222,7 +222,7 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 	end
 
 	-- Use the existing walkability check from the Node module or PathValidator
-	local PathValidator = require("MedBot.Navigation.PathValidator")
+	local PathValidator = require("MedBot.Navigation.IsWalkable")
 	local isWalkable = PathValidator.IsWalkable(currentPos, nextNode.pos)
 
 	if isWalkable then

@@ -9,7 +9,7 @@ local Navigation = require("MedBot.Navigation")
 local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
-local PathValidator = require("MedBot.Navigation.PathValidator")
+local PathValidator = require("MedBot.Navigation.IsWalkable")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -119,13 +119,13 @@ function MovementDecisions.advanceNode()
 
 	if G.Menu.Navigation.Skip_Nodes then
 		Log:Debug("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
-		
+
 		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
 		if #G.Navigation.path >= 2 then
-			local PathValidator = require("MedBot.Navigation.PathValidator")
+			local PathValidator = require("MedBot.Navigation.IsWalkable")
 			local nextNode = G.Navigation.path[2]
 			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
-			
+
 			if not canReachNext then
 				Log:Debug("BLOCKED: Wall between current and next node - triggering repath")
 				Navigation.ClearPath()
@@ -134,7 +134,7 @@ function MovementDecisions.advanceNode()
 				return false -- Force repath
 			end
 		end
-		
+
 		Log:Debug("Removing current node (Skip Nodes enabled)")
 		Navigation.RemoveCurrentNode()
 		Navigation.ResetTickTimer()

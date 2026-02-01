@@ -9,7 +9,7 @@ Logic:
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local WorkManager = require("MedBot.WorkManager")
-local PathValidator = require("MedBot.Navigation.PathValidator")
+local PathValidator = require("MedBot.Navigation.IsWalkable")
 
 local Log = Common.Log.new("NodeSkipper")
 
@@ -77,13 +77,17 @@ function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
 	-- If player is far from path[1], we haven't reached it yet (e.g., fell and need to climb back)
 	local distPlayerToCurrent = Common.Distance3D(currentPos, currentNode.pos)
 	local REACH_THRESHOLD = 60 -- Same as MovementDecisions reach distance
-	
+
 	if distPlayerToCurrent > REACH_THRESHOLD then
-		Log:Debug("ABORT - Haven't reached path[1] yet (dist=%.0f > threshold=%d)", distPlayerToCurrent, REACH_THRESHOLD)
+		Log:Debug(
+			"ABORT - Haven't reached path[1] yet (dist=%.0f > threshold=%d)",
+			distPlayerToCurrent,
+			REACH_THRESHOLD
+		)
 		Log:Debug("Path[1] might be above/behind us after falling - don't skip until we reach it")
 		return false
 	end
-	
+
 	local distPlayerToSkip = Common.Distance3D(currentPos, skipToNode.pos)
 	local distNextToSkip = Common.Distance3D(nextNode.pos, skipToNode.pos)
 

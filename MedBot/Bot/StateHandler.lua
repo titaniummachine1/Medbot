@@ -9,7 +9,7 @@ local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local PathValidator = require("MedBot.Navigation.PathValidator")
+local PathValidator = require("MedBot.Navigation.IsWalkable")
 local SmartJump = require("MedBot.Bot.SmartJump")
 
 local StateHandler = {}
@@ -118,7 +118,9 @@ function StateHandler.handleIdleState()
 					end
 				end
 			end
-			if isNeighbor then break end
+			if isNeighbor then
+				break
+			end
 		end
 	end
 
@@ -136,7 +138,12 @@ function StateHandler.handleIdleState()
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
 				G.currentState = G.States.FOLLOWING
 				G.Navigation.followingDistance = dist
-				Log:Debug("Within stop radius (%.0f/%.0f) - entering FOLLOWING state %s", dist, stopRadius, isNeighbor and "(neighbor)" or "(same node)")
+				Log:Debug(
+					"Within stop radius (%.0f/%.0f) - entering FOLLOWING state %s",
+					dist,
+					stopRadius,
+					isNeighbor and "(neighbor)" or "(same node)"
+				)
 			else
 				-- Too far - move closer (still direct movement, not pathfinding)
 				G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
@@ -245,7 +252,7 @@ function StateHandler.handleStuckState(userCmd)
 	-- Reset stuck detection if moving normally
 	G.Navigation.unwalkableCount = 0
 	G.Navigation.stuckStartTick = nil
-	
+
 	-- Reset node skipping cooldown to 1 tick when unstuck
 	WorkManager.setWorkCooldown("node_skipping", 1)
 end
