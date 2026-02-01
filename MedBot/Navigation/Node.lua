@@ -5,6 +5,7 @@
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local SetupOrchestrator = require("MedBot.Navigation.Setup.SetupOrchestrator")
+local Phase3_KDTree = require("MedBot.Navigation.Setup.Phase3_KDTree")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 local ConnectionBuilder = require("MedBot.Navigation.ConnectionBuilder")
 
@@ -52,19 +53,17 @@ function Node.GetNodeByID(id)
 end
 
 -- Check if position is within area's horizontal bounds (X/Y) with height limit
+-- Uses precomputed bounds from Phase2_Normalize for speed
 local function isWithinAreaBounds(pos, node)
-	if not node.nw or not node.se or not node.pos then
+	if not node._minX or not node.pos then
 		return false
 	end
 
-	-- Get horizontal bounds from corners
-	local minX = math.min(node.nw.x, node.ne.x, node.sw.x, node.se.x)
-	local maxX = math.max(node.nw.x, node.ne.x, node.sw.x, node.se.x)
-	local minY = math.min(node.nw.y, node.ne.y, node.sw.y, node.se.y)
-	local maxY = math.max(node.nw.y, node.ne.y, node.sw.y, node.se.y)
-
-	-- Check horizontal bounds
-	local inHorizontalBounds = pos.x >= minX and pos.x <= maxX and pos.y >= minY and pos.y <= maxY
+	-- Fast horizontal bounds check using precomputed values (>= for border inclusion)
+	local inHorizontalBounds = pos.x >= node._minX
+		and pos.x <= node._maxX
+		and pos.y >= node._minY
+		and pos.y <= node._maxY
 	if not inHorizontalBounds then
 		return false
 	end
@@ -83,7 +82,15 @@ function Node.GetClosestNode(pos)
 		return nil
 	end
 
-	-- Step 1: Find closest area by center distance (3D)
+	-- Pure KD-tree search for maximum speed - just return closest by center
+	if G.Navigation.kdTree then
+		local nearest = Phase3_KDTree.FindNearest(G.Navigation.kdTree, pos)
+		if nearest then
+			return nearest.node
+		end
+	end
+
+	-- Fallback: Brute force scan
 	local closestNode, closestDist = nil, math.huge
 	for _, node in pairs(G.Navigation.nodes) do
 		if not node.isDoor then
@@ -94,67 +101,7 @@ function Node.GetClosestNode(pos)
 		end
 	end
 
-	if not closestNode then
-		return nil
-	end
-
-	-- Step 1.5: Check if closest area contains position (fast path)
-	if isWithinAreaBounds(pos, closestNode) then
-		Log:Debug("GetClosestNode: Position within starting area %s (no flood fill needed)", closestNode.id)
-		return closestNode
-	end
-
-	-- Step 2: Flood fill from closest node to depth 4 (traverse all connections like visuals)
-	local candidates = {} -- List of candidate nodes
-	local visited = {} -- Track visited nodes
-	local queue = { { node = closestNode, depth = 0 } }
-	visited[closestNode.id] = true
-	candidates[1] = closestNode
-	local candidateCount = 1
-
-	local queueStart = 1
-	while queueStart <= #queue do
-		local current = queue[queueStart]
-		queueStart = queueStart + 1
-
-		if current.depth < 4 then
-			-- Get all adjacent nodes (areas AND doors like visuals do)
-			local adjacent = Node.GetAdjacentNodesOnly(current.node, G.Navigation.nodes)
-			for _, adjNode in ipairs(adjacent) do
-				if not visited[adjNode.id] then
-					visited[adjNode.id] = true
-					table.insert(queue, { node = adjNode, depth = current.depth + 1 })
-
-					-- Only add areas to candidates (skip doors)
-					if not adjNode.isDoor then
-						candidateCount = candidateCount + 1
-						candidates[candidateCount] = adjNode
-					end
-				end
-			end
-		end
-	end
-
-	-- Step 3: Check which candidate contains the target (horizontal bounds check)
-	for i = 1, candidateCount do
-		if isWithinAreaBounds(pos, candidates[i]) then
-			Log:Debug("Found containing area: %s", candidates[i].id)
-			return candidates[i]
-		end
-	end
-
-	-- Step 4: No area contains target - sort by distance and pick closest
-	-- List is already roughly sorted by BFS order, final sort is faster
-	for i = 1, candidateCount do
-		candidates[i]._dist = (candidates[i].pos - pos):Length()
-	end
-
-	table.sort(candidates, function(a, b)
-		return a._dist < b._dist
-	end)
-
-	Log:Debug("No containing area found, using closest from %d candidates", candidateCount)
-	return candidates[1]
+	return closestNode
 end
 
 -- Get minimum distance from position to area (checks center + all 4 corners)
@@ -174,95 +121,50 @@ local function getMinDistanceToArea(pos, node)
 	return math.min(distCenter, distNW, distNE, distSW, distSE)
 end
 
--- Get area at position - more precise than GetClosestNode
--- Uses flood fill + multi-point distance check (center + corners)
+-- Get area at position - accurate containment check
+-- Uses KD-tree to find nearest candidates, checks up to 10 for containment
 function Node.GetAreaAtPosition(pos)
 	if not G.Navigation.nodes then
 		return nil
 	end
 
-	-- Step 1: Find closest area by center distance (initial seed)
-	local closestNode, closestDist = nil, math.huge
+	-- Use KD-tree for efficient nearest neighbor search
+	if G.Navigation.kdTree then
+		-- Get 10 nearest candidates by center distance
+		local nearest = Phase3_KDTree.FindKNearest(G.Navigation.kdTree, pos, 10)
+
+		-- Check each candidate for containment using precomputed bounds
+		for _, candidate in ipairs(nearest) do
+			if isWithinAreaBounds(pos, candidate.node) then
+				Log:Debug("GetAreaAtPosition: Found containing area %s", candidate.id)
+				return candidate.node
+			end
+		end
+
+		-- No containing area found in top 10, return closest by center
+		if nearest[1] then
+			Log:Debug("GetAreaAtPosition: No containing area in top 10, using closest %s", nearest[1].id)
+			return nearest[1].node
+		end
+	end
+
+	-- Fallback: Brute force scan with multi-point distance
+	local closestNode, closestMinDist = nil, math.huge
 	for _, node in pairs(G.Navigation.nodes) do
 		if not node.isDoor then
-			local dist = (node.pos - pos):Length()
-			if dist < closestDist then
-				closestNode, closestDist = node, dist
+			-- Check containment first
+			if isWithinAreaBounds(pos, node) then
+				return node
+			end
+			-- Track closest for fallback
+			local minDist = getMinDistanceToArea(pos, node)
+			if minDist < closestMinDist then
+				closestNode, closestMinDist = node, minDist
 			end
 		end
 	end
 
-	if not closestNode then
-		return nil
-	end
-
-	-- Step 1.5: Check if closest area contains position (fast path)
-	if isWithinAreaBounds(pos, closestNode) then
-		Log:Debug("GetAreaAtPosition: Position within starting area %s (no flood fill needed)", closestNode.id)
-		return closestNode
-	end
-
-	-- Step 2: Flood fill from closest node to depth 7 (traverse all connections like visuals)
-	local candidates = {}
-	local visited = {}
-	local queue = { { node = closestNode, depth = 0 } }
-	visited[closestNode.id] = true
-	candidates[1] = closestNode
-	local candidateCount = 1
-
-	local queueStart = 1
-	while queueStart <= #queue do
-		local current = queue[queueStart]
-		queueStart = queueStart + 1
-
-		if current.depth < 7 then
-			-- Get all adjacent nodes (areas AND doors like visuals do)
-			local adjacent = Node.GetAdjacentNodesOnly(current.node, G.Navigation.nodes)
-			for _, adjNode in ipairs(adjacent) do
-				if not visited[adjNode.id] then
-					visited[adjNode.id] = true
-					table.insert(queue, { node = adjNode, depth = current.depth + 1 })
-
-					-- Only add areas to candidates (skip doors)
-					if not adjNode.isDoor then
-						candidateCount = candidateCount + 1
-						candidates[candidateCount] = adjNode
-					end
-				end
-			end
-		end
-	end
-
-	-- Step 3: Calculate distances for all candidates
-	for i = 1, candidateCount do
-		candidates[i]._minDist = getMinDistanceToArea(pos, candidates[i])
-	end
-
-	-- Step 4: Sort ALL candidates by distance (closest first)
-	table.sort(candidates, function(a, b)
-		return a._minDist < b._minDist
-	end)
-
-	-- Step 5: Check sorted list for first area that contains position horizontally
-	for i = 1, candidateCount do
-		if isWithinAreaBounds(pos, candidates[i]) then
-			Log:Debug(
-				"GetAreaAtPosition: Picked area %s at position %d (minDist=%.1f)",
-				candidates[i].id,
-				i,
-				candidates[i]._minDist
-			)
-			return candidates[i]
-		end
-	end
-
-	-- Step 6: No containing area - return closest by distance (first in sorted list)
-	Log:Debug(
-		"GetAreaAtPosition: No containing area, using closest from %d candidates (minDist=%.1f)",
-		candidateCount,
-		candidates[1]._minDist
-	)
-	return candidates[1]
+	return closestNode
 end
 
 -- Connection utilities
