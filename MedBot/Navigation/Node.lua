@@ -4,7 +4,7 @@
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
-local NavLoader = require("MedBot.Navigation.NavLoader")
+local SetupOrchestrator = require("MedBot.Navigation.Setup.SetupOrchestrator")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 local ConnectionBuilder = require("MedBot.Navigation.ConnectionBuilder")
 
@@ -14,27 +14,15 @@ Log.Level = 0
 local Node = {}
 Node.DIR = { N = 1, S = 2, E = 4, W = 8 }
 
--- Setup and loading
+-- Setup and loading - uses explicit phase orchestration
 function Node.Setup()
 	if G.Navigation.navMeshUpdated then
 		Log:Debug("Navigation already set up, skipping")
 		return
 	end
 
-	NavLoader.LoadNavFile()
-	ConnectionBuilder.NormalizeConnections()
-
-	-- CRITICAL: Detect wall corners BEFORE building doors so clamping can work!
-	local WallCornerGenerator = require("MedBot.Navigation.WallCornerGenerator")
-	assert(WallCornerGenerator, "Node.Setup: WallCornerGenerator module failed to load")
-	WallCornerGenerator.DetectWallCorners()
-	local nodeCount = G.Navigation.nodes and #G.Navigation.nodes or 0
-	Log:Info("Wall corners detected: " .. nodeCount .. " nodes processed")
-
-	ConnectionBuilder.BuildDoorsForConnections()
-	Log:Info("Doors built with wall corner clamping applied")
-
-	Log:Info("Navigation setup complete - wall corners and doors processed")
+	-- Explicit flow: Phase1 → Phase2 → SET GLOBAL → Phase3 → Phase4
+	SetupOrchestrator.ExecuteFullSetup()
 end
 
 function Node.ResetSetup()
@@ -43,11 +31,11 @@ function Node.ResetSetup()
 end
 
 function Node.LoadNavFile()
-	return NavLoader.LoadNavFile()
+	return SetupOrchestrator.ExecuteFullSetup()
 end
 
 function Node.LoadFile(navFile)
-	return NavLoader.LoadFile(navFile)
+	return SetupOrchestrator.ExecuteFullSetup(navFile)
 end
 
 -- Node management

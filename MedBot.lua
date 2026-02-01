@@ -3494,7 +3494,7 @@ __bundle_register("MedBot.Navigation.Node", function(require, _LOADED, __bundle_
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
-local NavLoader = require("MedBot.Navigation.NavLoader")
+local SetupOrchestrator = require("MedBot.Navigation.Setup.SetupOrchestrator")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 local ConnectionBuilder = require("MedBot.Navigation.ConnectionBuilder")
 
@@ -3504,27 +3504,15 @@ Log.Level = 0
 local Node = {}
 Node.DIR = { N = 1, S = 2, E = 4, W = 8 }
 
--- Setup and loading
+-- Setup and loading - uses explicit phase orchestration
 function Node.Setup()
 	if G.Navigation.navMeshUpdated then
 		Log:Debug("Navigation already set up, skipping")
 		return
 	end
 
-	NavLoader.LoadNavFile()
-	ConnectionBuilder.NormalizeConnections()
-
-	-- CRITICAL: Detect wall corners BEFORE building doors so clamping can work!
-	local WallCornerGenerator = require("MedBot.Navigation.WallCornerGenerator")
-	assert(WallCornerGenerator, "Node.Setup: WallCornerGenerator module failed to load")
-	WallCornerGenerator.DetectWallCorners()
-	local nodeCount = G.Navigation.nodes and #G.Navigation.nodes or 0
-	Log:Info("Wall corners detected: " .. nodeCount .. " nodes processed")
-
-	ConnectionBuilder.BuildDoorsForConnections()
-	Log:Info("Doors built with wall corner clamping applied")
-
-	Log:Info("Navigation setup complete - wall corners and doors processed")
+	-- Explicit flow: Phase1 → Phase2 → SET GLOBAL → Phase3 → Phase4
+	SetupOrchestrator.ExecuteFullSetup()
 end
 
 function Node.ResetSetup()
@@ -3533,11 +3521,11 @@ function Node.ResetSetup()
 end
 
 function Node.LoadNavFile()
-	return NavLoader.LoadNavFile()
+	return SetupOrchestrator.ExecuteFullSetup()
 end
 
 function Node.LoadFile(navFile)
-	return NavLoader.LoadFile(navFile)
+	return SetupOrchestrator.ExecuteFullSetup(navFile)
 end
 
 -- Node management
@@ -3890,317 +3878,6 @@ function Node.BuildDoorsForConnections()
 end
 
 return Node
-
-end)
-__bundle_register("MedBot.Navigation.WallCornerGenerator", function(require, _LOADED, __bundle_register, __bundle_modules)
---##########################################################################
---  WallCornerGenerator.lua · Detects wall corners for door clamping
---##########################################################################
-
-local Common = require("MedBot.Core.Common")
-local G = require("MedBot.Core.Globals")
-
-local WallCornerGenerator = {}
-
-local Log = Common.Log.new("WallCornerGenerator")
-
--- Group neighbors by 4 directions for an area using existing dirId from connections
--- Source Engine nav format: connectionData[4] in NESW order (North, East, South, West)
-local DIR_NAMES = { "north", "east", "south", "west" } -- dirId 1-4 maps to NESW
-
-local function groupNeighborsByDirection(area, nodes)
-	local neighbors = {
-		north = {}, -- dirId = 1
-		east = {},  -- dirId = 2
-		south = {}, -- dirId = 3
-		west = {},  -- dirId = 4
-	}
-
-	if not area.c then
-		Log:Debug("groupNeighborsByDirection: area.c is nil for area %s", tostring(area.id))
-		return neighbors
-	end
-
-	-- Use dirId to directly index direction name
-	for dirId, dir in pairs(area.c) do
-		if dir.connections then
-			local dirName = DIR_NAMES[dirId]
-			if dirName then
-				for _, connection in ipairs(dir.connections) do
-					local targetId = (type(connection) == "table") and connection.node or connection
-					local neighbor = nodes[targetId]
-					if neighbor then
-						table.insert(neighbors[dirName], neighbor)
-					end
-				end
-			end
-		end
-	end
-
-	return neighbors
-end
-
--- Check if point lies on neighbor's facing boundary using shared axis
--- Returns: proximity score (0.99 if at edge, 1.0 if perfectly within), and the neighbor
-local function checkPointOnNeighborBoundary(point, neighbor, direction)
-	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
-		return 0, nil
-	end
-
-	local tolerance = 2.0 -- Increased to handle minor nav mesh misalignments
-
-	-- Determine shared axis and get neighbor's facing edge bounds
-	local axis, corner1, corner2
-	if direction == "north" then
-		axis = "x"
-		corner1, corner2 = neighbor.sw, neighbor.se -- Neighbor's south boundary
-	elseif direction == "south" then
-		axis = "x"
-		corner1, corner2 = neighbor.nw, neighbor.ne -- Neighbor's north boundary
-	elseif direction == "east" then
-		axis = "y"
-		corner1, corner2 = neighbor.sw, neighbor.nw -- Neighbor's west boundary
-	elseif direction == "west" then
-		axis = "y"
-		corner1, corner2 = neighbor.se, neighbor.ne -- Neighbor's east boundary
-	else
-		return 0, nil
-	end
-
-	-- Get bounds on shared axis
-	local minCoord = math.min(corner1[axis], corner2[axis])
-	local maxCoord = math.max(corner1[axis], corner2[axis])
-	local pointCoord = point[axis]
-
-	-- Outside bounds entirely
-	if pointCoord < minCoord - tolerance or pointCoord > maxCoord + tolerance then
-		return 0, nil
-	end
-
-	-- Check if at edge (near min or max boundary)
-	local distFromMin = math.abs(pointCoord - minCoord)
-	local distFromMax = math.abs(pointCoord - maxCoord)
-
-	if distFromMin < tolerance or distFromMax < tolerance then
-		return 0.99, neighbor -- At edge
-	else
-		return 1.0, neighbor -- Perfectly within
-	end
-end
-
--- Get corner type and its two adjacent directions
--- Returns: dir1, dir2 (the two directions adjacent to this corner)
-local function getCornerDirections(area, corner)
-	if corner == area.nw then
-		return "north", "west"
-	elseif corner == area.ne then
-		return "north", "east"
-	elseif corner == area.se then
-		return "south", "east"
-	elseif corner == area.sw then
-		return "south", "west"
-	end
-	return nil, nil
-end
-
--- Get diagonal direction from two adjacent directions
-local function getDiagonalDirection(dir1, dir2)
-	if (dir1 == "north" and dir2 == "east") or (dir1 == "east" and dir2 == "north") then
-		return "north", "east" -- NE diagonal
-	elseif (dir1 == "north" and dir2 == "west") or (dir1 == "west" and dir2 == "north") then
-		return "north", "west" -- NW diagonal
-	elseif (dir1 == "south" and dir2 == "east") or (dir1 == "east" and dir2 == "south") then
-		return "south", "east" -- SE diagonal
-	elseif (dir1 == "south" and dir2 == "west") or (dir1 == "west" and dir2 == "south") then
-		return "south", "west" -- SW diagonal
-	end
-	return nil, nil
-end
-
-function WallCornerGenerator.DetectWallCorners()
-	local nodes = G.Navigation.nodes
-	if not nodes then
-		Log:Warn("No nodes available for wall corner detection")
-		return
-	end
-
-	local wallCornerCount = 0
-	local allCornerCount = 0
-	local nodeCount = 0
-
-	for nodeId, area in pairs(nodes) do
-		nodeCount = nodeCount + 1
-		if area.nw and area.ne and area.se and area.sw then
-			-- Initialize wall corner storage on node
-			area.wallCorners = {}
-			area.allCorners = {}
-
-			local neighbors = groupNeighborsByDirection(area, nodes)
-
-			-- Debug: log neighbor counts for first few nodes
-			if nodeCount <= 3 then
-				local totalNeighbors = #neighbors.north + #neighbors.south + #neighbors.east + #neighbors.west
-				Log:Debug(
-					"Node %s has %d neighbors (N:%d S:%d E:%d W:%d)",
-					tostring(nodeId),
-					totalNeighbors,
-					#neighbors.north,
-					#neighbors.south,
-					#neighbors.east,
-					#neighbors.west
-				)
-			end
-
-			-- Check all 4 corners individually
-			local corners = { area.nw, area.ne, area.se, area.sw }
-			for _, corner in ipairs(corners) do
-				table.insert(area.allCorners, corner)
-				allCornerCount = allCornerCount + 1
-
-				-- Get the two adjacent directions for this corner
-				local dir1, dir2 = getCornerDirections(area, corner)
-				if not dir1 or not dir2 then
-					goto continue_corner
-				end
-
-				-- FAST PATH: Check if either adjacent direction is empty
-				local hasDir1 = neighbors[dir1] and #neighbors[dir1] > 0
-				local hasDir2 = neighbors[dir2] and #neighbors[dir2] > 0
-
-				if not hasDir1 or not hasDir2 then
-					-- Corner is exposed (no neighbors on at least one side)
-					table.insert(area.wallCorners, corner)
-					wallCornerCount = wallCornerCount + 1
-					goto continue_corner
-				end
-
-				-- COMPLEX PATH: Both directions have neighbors
-				-- Calculate proximity score from neighbors on both adjacent sides
-				local proximityScore = 0
-				local neighborDir1 = nil -- Track which neighbor contributed from dir1
-				local neighborDir2 = nil -- Track which neighbor contributed from dir2
-
-				-- Check dir1 neighbors
-				for _, neighbor in ipairs(neighbors[dir1]) do
-					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir1)
-					if score > 0 then
-						proximityScore = proximityScore + score
-						if not neighborDir1 then
-							neighborDir1 = contrib -- Track first contributor
-						end
-					end
-				end
-
-				-- Check dir2 neighbors
-				for _, neighbor in ipairs(neighbors[dir2]) do
-					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir2)
-					if score > 0 then
-						proximityScore = proximityScore + score
-						if not neighborDir2 then
-							neighborDir2 = contrib -- Track first contributor
-						end
-					end
-				end
-
-				-- Classification based on proximity score:
-				-- >= 2.0: Definitely inner corner (surrounded)
-				-- 1.99: Need validation (might be concave)
-				-- 1.98: Concave corner - do diagonal validation
-				-- < 1.98: Wall corner
-
-				local isWallCorner = false
-				local reason = ""
-
-				if proximityScore >= 2.0 then
-					-- Perfectly surrounded, definitely inner corner
-					isWallCorner = false
-					reason = "surrounded"
-				elseif proximityScore >= 1.99 then
-					-- Very close to surrounded, assume inner corner
-					isWallCorner = false
-					reason = "almost_surrounded"
-				elseif proximityScore == 1.98 then
-					-- Concave corner case - do diagonal validation
-					-- Check if diagonal neighbor exists and covers this corner
-					local diagonalFound = false
-
-					if neighborDir1 and neighborDir1.c and neighborDir2 then
-						-- Get neighbors of neighborDir1 in dir2 direction
-						local diagDir1, diagDir2 = getDiagonalDirection(dir1, dir2)
-						if diagDir1 and diagDir2 then
-							-- Check neighborDir1's connections in dir2 direction
-							for dirId, dirData in pairs(neighborDir1.c) do
-								if dirData.connections then
-									for _, conn in ipairs(dirData.connections) do
-										local connId = (type(conn) == "table") and conn.node or conn
-										local diagNeighbor = nodes[connId]
-										if diagNeighbor then
-											-- Check if our corner lies on this diagonal neighbor
-											local score1 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir1)
-											local score2 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir2)
-											if score1 > 0 or score2 > 0 then
-												diagonalFound = true
-												break
-											end
-										end
-									end
-								end
-								if diagonalFound then
-									break
-								end
-							end
-						end
-					end
-
-					if diagonalFound then
-						isWallCorner = false -- Part of diagonal group, inner corner
-						reason = "diagonal_group"
-					else
-						isWallCorner = true -- Concave wall corner
-						reason = "concave"
-					end
-				else
-					-- Score < 1.98, definitely a wall corner
-					isWallCorner = true
-					reason = "low_score"
-				end
-
-				if isWallCorner then
-					table.insert(area.wallCorners, corner)
-					wallCornerCount = wallCornerCount + 1
-				end
-
-				::continue_corner::
-			end
-		end
-	end
-
-	Log:Info(
-		"Processed %d nodes, detected %d wall corners out of %d total corners",
-		nodeCount,
-		wallCornerCount,
-		allCornerCount
-	)
-
-	-- Console output for immediate visibility
-	print("WallCornerGenerator: " .. wallCornerCount .. " wall corners found")
-
-	-- Debug: log first few nodes with wall corners
-	local debugCount = 0
-	for nodeId, area in pairs(nodes) do
-		if area.wallCorners and #area.wallCorners > 0 then
-			debugCount = debugCount + 1
-			if debugCount <= 3 then
-				Log:Debug("Node %s has %d wall corners", tostring(nodeId), #area.wallCorners)
-				for i, corner in ipairs(area.wallCorners) do
-					Log:Debug("  Wall corner %d: (%.1f,%.1f,%.1f)", i, corner.x, corner.y, corner.z)
-				end
-			end
-		end
-	end
-end
-
-return WallCornerGenerator
 
 end)
 __bundle_register("MedBot.Navigation.ConnectionBuilder", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -5082,99 +4759,809 @@ end
 return ConnectionUtils
 
 end)
-__bundle_register("MedBot.Navigation.NavLoader", function(require, _LOADED, __bundle_register, __bundle_modules)
+__bundle_register("MedBot.Navigation.Setup.SetupOrchestrator", function(require, _LOADED, __bundle_register, __bundle_modules)
 --##########################################################################
---  NavLoader.lua  ·  Navigation file loading and parsing
+--  SetupOrchestrator.lua  ·  Coordinates all setup phases explicitly
+--##########################################################################
+--
+--  Flow:
+--    Phase1: Load raw nav file → nodes
+--    Phase2: Normalize connections → nodes (enriched)
+--    [SET G.Navigation.nodes = nodes]  <- BASIC SETUP COMPLETE
+--    Phase3: Build KD-tree spatial index (uses global nodes)
+--    Phase4: Wall corners + Door generation (uses global nodes)
+--
 --##########################################################################
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
-local SourceNav = require("MedBot.Utils.SourceNav")
 
-local Log = Common.Log.new("NavLoader")
-Log.Level = 0
+local Phase1_NavLoad = require("MedBot.Navigation.Setup.Phase1_NavLoad")
+local Phase2_Normalize = require("MedBot.Navigation.Setup.Phase2_Normalize")
+local Phase3_KDTree = require("MedBot.Navigation.Setup.Phase3_KDTree")
+local Phase4_Doors = require("MedBot.Navigation.Setup.Phase4_Doors")
 
-local NavLoader = {}
+local SetupOrchestrator = {}
 
-local function tryLoadNavFile(navFilePath)
-	local file = io.open(navFilePath, "rb")
-	if not file then
-		return nil, "File not found"
-	end
-	local content = file:read("*a")
-	file:close()
-	local navData = SourceNav.parse(content)
-	if not navData or #navData.areas == 0 then
-		return nil, "Failed to parse nav file or no areas found."
-	end
-	return navData
-end
+local Log = Common.Log.new("SetupOrchestrator")
 
-local function generateNavFile()
-	client.RemoveConVarProtection("sv_cheats")
-	client.RemoveConVarProtection("nav_generate")
-	client.SetConVar("sv_cheats", "1")
-	client.Command("nav_generate", true)
-	Log:Info("Generating nav file. Please wait...")
-	local delay = 10
-	local startTime = os.time()
-	repeat
-	until os.time() - startTime > delay
-end
+--##########################################################################
+--  PUBLIC API
+--##########################################################################
 
-function NavLoader.LoadFile(navFile)
-	local full = "tf/" .. navFile
-	local navData, err = tryLoadNavFile(full)
-	if not navData and err == "File not found" then
-		Log:Warning("Nav file not found: " .. full .. ", attempting to generate it")
-		generateNavFile()
-		return false
-	end
-	if not navData then
-		Log:Error("Failed to load nav file: " .. (err or "Unknown error"))
-		return false
+--- Execute full navigation setup with explicit data flow
+--- @param navFilePath string|nil Optional nav file path, or auto-detect from map
+--- @return boolean success
+function SetupOrchestrator.ExecuteFullSetup(navFilePath)
+	if G.Navigation.navMeshUpdated then
+		Log:Debug("Navigation already set up, skipping")
+		return true
 	end
 
-	local navNodes = NavLoader.ProcessNavData(navData)
-	G.Navigation.nodes = navNodes
+	-- Auto-detect nav file if not provided
+	if not navFilePath then
+		local mapName = engine.GetMapName()
+		if not mapName or mapName == "" then
+			Log:Error("No map name available and no nav file path provided")
+			return false
+		end
+		navFilePath = "tf/" .. string.gsub(mapName, ".bsp", ".nav")
+	end
+
+	Log:Info("=== Starting Navigation Setup ===")
+	Log:Info("Target: %s", navFilePath)
+
+	-- ========================================================================
+	-- PHASE 1: Load raw nav data
+	-- ========================================================================
+	local nodes, err = Phase1_NavLoad.Execute(navFilePath)
+	if not nodes then
+		Log:Error("Phase 1 failed: %s", err or "unknown error")
+
+		-- Auto-generate if file not found
+		if err == "File not found" then
+			Log:Warning("Nav file not found, attempting generation...")
+			local generated = SetupOrchestrator.TryGenerateNavFile()
+			if generated then
+				-- Retry once after generation
+				nodes, err = Phase1_NavLoad.Execute(navFilePath)
+			end
+		end
+
+		if not nodes then
+			return false
+		end
+	end
+
+	-- ========================================================================
+	-- PHASE 2: Normalize connections (basic enrichment)
+	-- ========================================================================
+	nodes = Phase2_Normalize.Execute(nodes)
+
+	-- ========================================================================
+	-- BASIC SETUP COMPLETE - Set global for advanced phases
+	-- ========================================================================
+	G.Navigation.nodes = nodes
+	Log:Info("Basic setup complete: %d nodes ready", #nodes)
+
+	-- ========================================================================
+	-- PHASE 3: Build KD-tree spatial index
+	-- ========================================================================
+	local kdTree = Phase3_KDTree.Execute(nodes)
+	if kdTree then
+		G.Navigation.kdTree = kdTree
+	end
+
+	-- ========================================================================
+	-- PHASE 4: Advanced parsing (doors, wall corners)
+	-- ========================================================================
+	local success = Phase4_Doors.Execute()
+	if not success then
+		Log:Error("Phase 4 (advanced parsing) failed")
+		-- Still mark as updated since basic setup worked
+	end
+
 	G.Navigation.navMeshUpdated = true
-	Log:Info("Navigation loaded: " .. #navData.areas .. " areas")
+	Log:Info("=== Navigation Setup Complete ===")
 	return true
 end
 
-function NavLoader.LoadNavFile()
-	local mf = engine.GetMapName()
-	if mf and mf ~= "" then
-		return NavLoader.LoadFile(string.gsub(mf, ".bsp", ".nav"))
-	else
-		Log:Error("No map name available")
+--- Try to generate nav file using game commands
+--- @return boolean success
+function SetupOrchestrator.TryGenerateNavFile()
+	local ok = pcall(function()
+		client.RemoveConVarProtection("sv_cheats")
+		client.RemoveConVarProtection("nav_generate")
+		client.SetConVar("sv_cheats", "1")
+		client.Command("nav_generate", true)
+	end)
+
+	if not ok then
+		Log:Error("Failed to initiate nav generation")
 		return false
 	end
+
+	Log:Info("Nav generation initiated, waiting...")
+
+	-- Wait for generation (10 seconds)
+	local startTime = os.time()
+	repeat
+	until os.time() - startTime > 10
+
+	return true
 end
 
-function NavLoader.ProcessNavData(navData)
-	local navNodes = {}
-	for _, area in pairs(navData.areas) do
-		local cX = (area.north_west.x + area.south_east.x) / 2
-		local cY = (area.north_west.y + area.south_east.y) / 2
-		local cZ = (area.north_west.z + area.south_east.z) / 2
-
-		-- Ensure diagonal z-coordinates have valid values (fallback to adjacent corners)
-		local ne_z = area.north_east_z or area.north_west.z
-		local sw_z = area.south_west_z or area.south_east.z
-
-		local nw = Vector3(area.north_west.x, area.north_west.y, area.north_west.z)
-		local se = Vector3(area.south_east.x, area.south_east.y, area.south_east.z)
-		local ne = Vector3(area.south_east.x, area.north_west.y, ne_z)
-		local sw = Vector3(area.north_west.x, area.south_east.y, sw_z)
-
-		navNodes[area.id] =
-			{ pos = Vector3(cX, cY, cZ), id = area.id, c = area.connections, nw = nw, se = se, ne = ne, sw = sw }
+--- Execute ONLY basic setup (Phases 1-2), no doors/KD-tree
+--- Useful for testing or when advanced features not needed
+--- @param navFilePath string|nil Optional nav file path
+--- @return table|nil nodes
+function SetupOrchestrator.ExecuteBasicSetup(navFilePath)
+	if not navFilePath then
+		local mapName = engine.GetMapName()
+		if not mapName or mapName == "" then
+			Log:Error("No map name available")
+			return nil
+		end
+		navFilePath = "tf/" .. string.gsub(mapName, ".bsp", ".nav")
 	end
-	return navNodes
+
+	Log:Info("=== Starting Basic Navigation Setup ===")
+
+	local nodes, err = Phase1_NavLoad.Execute(navFilePath)
+	if not nodes then
+		Log:Error("Phase 1 failed: %s", err or "unknown error")
+		return nil
+	end
+
+	nodes = Phase2_Normalize.Execute(nodes)
+
+	G.Navigation.nodes = nodes
+	G.Navigation.navMeshUpdated = true
+
+	Log:Info("Basic setup complete: %d nodes", #nodes)
+	return nodes
 end
 
-return NavLoader
+return SetupOrchestrator
+
+end)
+__bundle_register("MedBot.Navigation.Setup.Phase4_Doors", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  Phase4_Doors.lua  ·  Door generation, wall corners, and advanced connections
+--##########################################################################
+
+local Common = require("MedBot.Core.Common")
+local WallCornerGenerator = require("MedBot.Navigation.WallCornerGenerator")
+local DoorBuilder = require("MedBot.Navigation.Doors.DoorBuilder")
+
+local Phase4_Doors = {}
+
+local Log = Common.Log.new("Phase4_Doors")
+
+--##########################################################################
+--  PUBLIC API
+--##########################################################################
+
+--- Execute advanced parsing: wall corners and door generation
+--- Assumes nodes are already in G.Navigation.nodes (basic setup complete)
+--- @return boolean success
+function Phase4_Doors.Execute()
+    Log:Info("Starting Phase 4: Advanced parsing (doors + wall corners)")
+
+    -- Step 1: Detect wall corners (uses G.Navigation.nodes internally)
+    local success = pcall(function()
+        WallCornerGenerator.DetectWallCorners()
+    end)
+
+    if not success then
+        Log:Error("Wall corner detection failed")
+        -- Continue anyway - doors can work without corners
+    else
+        Log:Info("Wall corners detected")
+    end
+
+    -- Step 2: Build doors for connections (modifies G.Navigation.nodes)
+    success = pcall(function()
+        DoorBuilder.BuildDoorsForConnections()
+    end)
+
+    if not success then
+        Log:Error("Door building failed")
+        return false
+    end
+
+    Log:Info("Phase 4 complete: Doors and connections built")
+    return true
+end
+
+return Phase4_Doors
+
+end)
+__bundle_register("MedBot.Navigation.WallCornerGenerator", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  WallCornerGenerator.lua · Detects wall corners for door clamping
+--##########################################################################
+
+local Common = require("MedBot.Core.Common")
+local G = require("MedBot.Core.Globals")
+
+local WallCornerGenerator = {}
+
+local Log = Common.Log.new("WallCornerGenerator")
+
+-- Group neighbors by 4 directions for an area using existing dirId from connections
+-- Source Engine nav format: connectionData[4] in NESW order (North, East, South, West)
+local DIR_NAMES = { "north", "east", "south", "west" } -- dirId 1-4 maps to NESW
+
+local function groupNeighborsByDirection(area, nodes)
+	local neighbors = {
+		north = {}, -- dirId = 1
+		east = {},  -- dirId = 2
+		south = {}, -- dirId = 3
+		west = {},  -- dirId = 4
+	}
+
+	if not area.c then
+		Log:Debug("groupNeighborsByDirection: area.c is nil for area %s", tostring(area.id))
+		return neighbors
+	end
+
+	-- Use dirId to directly index direction name
+	for dirId, dir in pairs(area.c) do
+		if dir.connections then
+			local dirName = DIR_NAMES[dirId]
+			if dirName then
+				for _, connection in ipairs(dir.connections) do
+					local targetId = (type(connection) == "table") and connection.node or connection
+					local neighbor = nodes[targetId]
+					if neighbor then
+						table.insert(neighbors[dirName], neighbor)
+					end
+				end
+			end
+		end
+	end
+
+	return neighbors
+end
+
+-- Check if point lies on neighbor's facing boundary using shared axis
+-- Returns: proximity score (0.99 if at edge, 1.0 if perfectly within), and the neighbor
+local function checkPointOnNeighborBoundary(point, neighbor, direction)
+	if not (neighbor.nw and neighbor.ne and neighbor.se and neighbor.sw) then
+		return 0, nil
+	end
+
+	local tolerance = 2.0 -- Increased to handle minor nav mesh misalignments
+
+	-- Determine shared axis and get neighbor's facing edge bounds
+	local axis, corner1, corner2
+	if direction == "north" then
+		axis = "x"
+		corner1, corner2 = neighbor.sw, neighbor.se -- Neighbor's south boundary
+	elseif direction == "south" then
+		axis = "x"
+		corner1, corner2 = neighbor.nw, neighbor.ne -- Neighbor's north boundary
+	elseif direction == "east" then
+		axis = "y"
+		corner1, corner2 = neighbor.sw, neighbor.nw -- Neighbor's west boundary
+	elseif direction == "west" then
+		axis = "y"
+		corner1, corner2 = neighbor.se, neighbor.ne -- Neighbor's east boundary
+	else
+		return 0, nil
+	end
+
+	-- Get bounds on shared axis
+	local minCoord = math.min(corner1[axis], corner2[axis])
+	local maxCoord = math.max(corner1[axis], corner2[axis])
+	local pointCoord = point[axis]
+
+	-- Outside bounds entirely
+	if pointCoord < minCoord - tolerance or pointCoord > maxCoord + tolerance then
+		return 0, nil
+	end
+
+	-- Check if at edge (near min or max boundary)
+	local distFromMin = math.abs(pointCoord - minCoord)
+	local distFromMax = math.abs(pointCoord - maxCoord)
+
+	if distFromMin < tolerance or distFromMax < tolerance then
+		return 0.99, neighbor -- At edge
+	else
+		return 1.0, neighbor -- Perfectly within
+	end
+end
+
+-- Get corner type and its two adjacent directions
+-- Returns: dir1, dir2 (the two directions adjacent to this corner)
+local function getCornerDirections(area, corner)
+	if corner == area.nw then
+		return "north", "west"
+	elseif corner == area.ne then
+		return "north", "east"
+	elseif corner == area.se then
+		return "south", "east"
+	elseif corner == area.sw then
+		return "south", "west"
+	end
+	return nil, nil
+end
+
+-- Get diagonal direction from two adjacent directions
+local function getDiagonalDirection(dir1, dir2)
+	if (dir1 == "north" and dir2 == "east") or (dir1 == "east" and dir2 == "north") then
+		return "north", "east" -- NE diagonal
+	elseif (dir1 == "north" and dir2 == "west") or (dir1 == "west" and dir2 == "north") then
+		return "north", "west" -- NW diagonal
+	elseif (dir1 == "south" and dir2 == "east") or (dir1 == "east" and dir2 == "south") then
+		return "south", "east" -- SE diagonal
+	elseif (dir1 == "south" and dir2 == "west") or (dir1 == "west" and dir2 == "south") then
+		return "south", "west" -- SW diagonal
+	end
+	return nil, nil
+end
+
+function WallCornerGenerator.DetectWallCorners()
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		Log:Warn("No nodes available for wall corner detection")
+		return
+	end
+
+	local wallCornerCount = 0
+	local allCornerCount = 0
+	local nodeCount = 0
+
+	for nodeId, area in pairs(nodes) do
+		nodeCount = nodeCount + 1
+		if area.nw and area.ne and area.se and area.sw then
+			-- Initialize wall corner storage on node
+			area.wallCorners = {}
+			area.allCorners = {}
+
+			local neighbors = groupNeighborsByDirection(area, nodes)
+
+			-- Debug: log neighbor counts for first few nodes
+			if nodeCount <= 3 then
+				local totalNeighbors = #neighbors.north + #neighbors.south + #neighbors.east + #neighbors.west
+				Log:Debug(
+					"Node %s has %d neighbors (N:%d S:%d E:%d W:%d)",
+					tostring(nodeId),
+					totalNeighbors,
+					#neighbors.north,
+					#neighbors.south,
+					#neighbors.east,
+					#neighbors.west
+				)
+			end
+
+			-- Check all 4 corners individually
+			local corners = { area.nw, area.ne, area.se, area.sw }
+			for _, corner in ipairs(corners) do
+				table.insert(area.allCorners, corner)
+				allCornerCount = allCornerCount + 1
+
+				-- Get the two adjacent directions for this corner
+				local dir1, dir2 = getCornerDirections(area, corner)
+				if not dir1 or not dir2 then
+					goto continue_corner
+				end
+
+				-- FAST PATH: Check if either adjacent direction is empty
+				local hasDir1 = neighbors[dir1] and #neighbors[dir1] > 0
+				local hasDir2 = neighbors[dir2] and #neighbors[dir2] > 0
+
+				if not hasDir1 or not hasDir2 then
+					-- Corner is exposed (no neighbors on at least one side)
+					table.insert(area.wallCorners, corner)
+					wallCornerCount = wallCornerCount + 1
+					goto continue_corner
+				end
+
+				-- COMPLEX PATH: Both directions have neighbors
+				-- Calculate proximity score from neighbors on both adjacent sides
+				local proximityScore = 0
+				local neighborDir1 = nil -- Track which neighbor contributed from dir1
+				local neighborDir2 = nil -- Track which neighbor contributed from dir2
+
+				-- Check dir1 neighbors
+				for _, neighbor in ipairs(neighbors[dir1]) do
+					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir1)
+					if score > 0 then
+						proximityScore = proximityScore + score
+						if not neighborDir1 then
+							neighborDir1 = contrib -- Track first contributor
+						end
+					end
+				end
+
+				-- Check dir2 neighbors
+				for _, neighbor in ipairs(neighbors[dir2]) do
+					local score, contrib = checkPointOnNeighborBoundary(corner, neighbor, dir2)
+					if score > 0 then
+						proximityScore = proximityScore + score
+						if not neighborDir2 then
+							neighborDir2 = contrib -- Track first contributor
+						end
+					end
+				end
+
+				-- Classification based on proximity score:
+				-- >= 2.0: Definitely inner corner (surrounded)
+				-- 1.99: Need validation (might be concave)
+				-- 1.98: Concave corner - do diagonal validation
+				-- < 1.98: Wall corner
+
+				local isWallCorner = false
+				local reason = ""
+
+				if proximityScore >= 2.0 then
+					-- Perfectly surrounded, definitely inner corner
+					isWallCorner = false
+					reason = "surrounded"
+				elseif proximityScore >= 1.99 then
+					-- Very close to surrounded, assume inner corner
+					isWallCorner = false
+					reason = "almost_surrounded"
+				elseif proximityScore == 1.98 then
+					-- Concave corner case - do diagonal validation
+					-- Check if diagonal neighbor exists and covers this corner
+					local diagonalFound = false
+
+					if neighborDir1 and neighborDir1.c and neighborDir2 then
+						-- Get neighbors of neighborDir1 in dir2 direction
+						local diagDir1, diagDir2 = getDiagonalDirection(dir1, dir2)
+						if diagDir1 and diagDir2 then
+							-- Check neighborDir1's connections in dir2 direction
+							for dirId, dirData in pairs(neighborDir1.c) do
+								if dirData.connections then
+									for _, conn in ipairs(dirData.connections) do
+										local connId = (type(conn) == "table") and conn.node or conn
+										local diagNeighbor = nodes[connId]
+										if diagNeighbor then
+											-- Check if our corner lies on this diagonal neighbor
+											local score1 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir1)
+											local score2 = checkPointOnNeighborBoundary(corner, diagNeighbor, dir2)
+											if score1 > 0 or score2 > 0 then
+												diagonalFound = true
+												break
+											end
+										end
+									end
+								end
+								if diagonalFound then
+									break
+								end
+							end
+						end
+					end
+
+					if diagonalFound then
+						isWallCorner = false -- Part of diagonal group, inner corner
+						reason = "diagonal_group"
+					else
+						isWallCorner = true -- Concave wall corner
+						reason = "concave"
+					end
+				else
+					-- Score < 1.98, definitely a wall corner
+					isWallCorner = true
+					reason = "low_score"
+				end
+
+				if isWallCorner then
+					table.insert(area.wallCorners, corner)
+					wallCornerCount = wallCornerCount + 1
+				end
+
+				::continue_corner::
+			end
+		end
+	end
+
+	Log:Info(
+		"Processed %d nodes, detected %d wall corners out of %d total corners",
+		nodeCount,
+		wallCornerCount,
+		allCornerCount
+	)
+
+	-- Console output for immediate visibility
+	print("WallCornerGenerator: " .. wallCornerCount .. " wall corners found")
+
+	-- Debug: log first few nodes with wall corners
+	local debugCount = 0
+	for nodeId, area in pairs(nodes) do
+		if area.wallCorners and #area.wallCorners > 0 then
+			debugCount = debugCount + 1
+			if debugCount <= 3 then
+				Log:Debug("Node %s has %d wall corners", tostring(nodeId), #area.wallCorners)
+				for i, corner in ipairs(area.wallCorners) do
+					Log:Debug("  Wall corner %d: (%.1f,%.1f,%.1f)", i, corner.x, corner.y, corner.z)
+				end
+			end
+		end
+	end
+end
+
+return WallCornerGenerator
+
+end)
+__bundle_register("MedBot.Navigation.Setup.Phase3_KDTree", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  Phase3_KDTree.lua  ·  Build spatial index for fast nearest-neighbor queries
+--##########################################################################
+
+local Common = require("MedBot.Core.Common")
+
+local Phase3_KDTree = {}
+
+local Log = Common.Log.new("Phase3_KDTree")
+
+--##########################################################################
+--  LOCAL HELPERS
+--##########################################################################
+
+-- Simple 3D KD-tree implementation for fast nearest-neighbor search
+-- Builds from nodes in G.Navigation.nodes (called after basic setup complete)
+
+local function buildKDTree(nodes)
+    -- Collect all non-door nodes into array
+    local points = {}
+    for id, node in pairs(nodes) do
+        if not node.isDoor and node.pos then
+            table.insert(points, {
+                pos = node.pos,
+                id = id,
+                node = node,
+            })
+        end
+    end
+
+    if #points == 0 then
+        Log:Warn("No valid nodes for KD-tree")
+        return nil
+    end
+
+    -- Build tree recursively
+    local function build(pointList, depth)
+        if #pointList == 0 then
+            return nil
+        end
+
+        -- Axis cycling: 0=x, 1=y, 2=z
+        local axis = depth % 3
+        local axisName = (axis == 0) and "x" or (axis == 1) and "y" or "z"
+
+        -- Sort by current axis
+        table.sort(pointList, function(a, b)
+            return a.pos[axisName] < b.pos[axisName]
+        end)
+
+        local medianIdx = math.floor(#pointList / 2) + 1
+        local median = pointList[medianIdx]
+
+        -- Split into left/right
+        local leftPoints = {}
+        local rightPoints = {}
+        for i = 1, #pointList do
+            if i < medianIdx then
+                table.insert(leftPoints, pointList[i])
+            elseif i > medianIdx then
+                table.insert(rightPoints, pointList[i])
+            end
+        end
+
+        return {
+            point = median,
+            axis = axis,
+            left = build(leftPoints, depth + 1),
+            right = build(rightPoints, depth + 1),
+        }
+    end
+
+    return build(points, 0)
+end
+
+--##########################################################################
+--  PUBLIC API
+--##########################################################################
+
+--- Build KD-tree spatial index for all area nodes
+--- Called after basic setup (nodes in global) but before door generation
+--- @return table KD-tree root node
+function Phase3_KDTree.Execute(nodes)
+    assert(type(nodes) == "table", "Phase3_KDTree.Execute: nodes must be table")
+
+    Log:Info("Building KD-tree spatial index")
+
+    local tree = buildKDTree(nodes)
+    if tree then
+        Log:Info("Phase 3 complete: KD-tree built")
+    else
+        Log:Warn("Phase 3: KD-tree build failed")
+    end
+
+    return tree
+end
+
+--- Find nearest neighbor using KD-tree
+--- @param tree table KD-tree root
+--- @param pos Vector3 query position
+--- @return table|nil nearest point {pos, id, node}
+function Phase3_KDTree.FindNearest(tree, pos)
+    if not tree or not pos then
+        return nil
+    end
+
+    local bestDistSq = math.huge
+    local best = nil
+
+    local function search(node, depth)
+        if not node then
+            return
+        end
+
+        local axis = node.axis
+        local axisName = (axis == 0) and "x" or (axis == 1) and "y" or "z"
+        local diff = pos[axisName] - node.point.pos[axisName]
+        local distSq = (node.point.pos - pos):LengthSqr()
+
+        if distSq < bestDistSq then
+            bestDistSq = distSq
+            best = node.point
+        end
+
+        -- Choose branch
+        local first, second
+        if diff < 0 then
+            first, second = node.left, node.right
+        else
+            first, second = node.right, node.left
+        end
+
+        search(first, depth + 1)
+
+        -- Check if we need to search other side
+        if diff * diff < bestDistSq then
+            search(second, depth + 1)
+        end
+    end
+
+    search(tree, 0)
+    return best
+end
+
+return Phase3_KDTree
+
+end)
+__bundle_register("MedBot.Navigation.Setup.Phase2_Normalize", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  Phase2_Normalize.lua  ·  Normalize and enrich connection data
+--##########################################################################
+
+local Common = require("MedBot.Core.Common")
+local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
+
+local Phase2_Normalize = {}
+
+local Log = Common.Log.new("Phase2_Normalize")
+
+--##########################################################################
+--  PUBLIC API
+--##########################################################################
+
+--- Normalize all connections in the node graph
+--- @param nodes table areaId -> node mapping
+--- @return table nodes (same table, modified in place)
+function Phase2_Normalize.Execute(nodes)
+    assert(type(nodes) == "table", "Phase2_Normalize.Execute: nodes must be table")
+
+    Log:Info("Normalizing connections for %d nodes", #nodes)
+
+    local connectionCount = 0
+    for nodeId, node in pairs(nodes) do
+        if node.c then
+            for dirId, dir in pairs(node.c) do
+                if dir.connections then
+                    for i, connection in ipairs(dir.connections) do
+                        dir.connections[i] = ConnectionUtils.NormalizeEntry(connection)
+                        connectionCount = connectionCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    Log:Info("Phase 2 complete: %d connections normalized", connectionCount)
+    return nodes
+end
+
+return Phase2_Normalize
+
+end)
+__bundle_register("MedBot.Navigation.Setup.Phase1_NavLoad", function(require, _LOADED, __bundle_register, __bundle_modules)
+--##########################################################################
+--  Phase1_NavLoad.lua  ·  Load raw nav file and convert to node format
+--##########################################################################
+
+local Common = require("MedBot.Core.Common")
+local SourceNav = require("MedBot.Utils.SourceNav")
+
+local Phase1_NavLoad = {}
+
+local Log = Common.Log.new("Phase1_NavLoad")
+
+--##########################################################################
+--  LOCAL HELPERS (NOT exported)
+--##########################################################################
+
+local function tryLoadNavFile(navFilePath)
+    local file = io.open(navFilePath, "rb")
+    if not file then
+        return nil, "File not found"
+    end
+    local content = file:read("*a")
+    file:close()
+    local navData = SourceNav.parse(content)
+    if not navData or #navData.areas == 0 then
+        return nil, "Failed to parse nav file or no areas found."
+    end
+    return navData
+end
+
+local function processNavData(navData)
+    local navNodes = {}
+    for _, area in pairs(navData.areas) do
+        local cX = (area.north_west.x + area.south_east.x) / 2
+        local cY = (area.north_west.y + area.south_east.y) / 2
+        local cZ = (area.north_west.z + area.south_east.z) / 2
+
+        local ne_z = area.north_east_z or area.north_west.z
+        local sw_z = area.south_west_z or area.south_east.z
+
+        local nw = Vector3(area.north_west.x, area.north_west.y, area.north_west.z)
+        local se = Vector3(area.south_east.x, area.south_east.y, area.south_east.z)
+        local ne = Vector3(area.south_east.x, area.north_west.y, ne_z)
+        local sw = Vector3(area.north_west.x, area.south_east.y, sw_z)
+
+        navNodes[area.id] = {
+            pos = Vector3(cX, cY, cZ),
+            id = area.id,
+            c = area.connections,
+            nw = nw,
+            se = se,
+            ne = ne,
+            sw = sw,
+        }
+    end
+    return navNodes
+end
+
+--##########################################################################
+--  PUBLIC API
+--##########################################################################
+
+--- Load nav file and convert to internal node format
+--- Returns: nodes table (areaId -> node) or nil, error
+function Phase1_NavLoad.Execute(navFilePath)
+    assert(type(navFilePath) == "string", "Phase1_NavLoad.Execute: navFilePath must be string")
+
+    Log:Info("Loading nav file: %s", navFilePath)
+
+    local navData, err = tryLoadNavFile(navFilePath)
+    if not navData then
+        return nil, err
+    end
+
+    local nodes = processNavData(navData)
+    Log:Info("Phase 1 complete: %d areas loaded", #navData.areas)
+
+    return nodes
+end
+
+return Phase1_NavLoad
 
 end)
 __bundle_register("MedBot.Utils.SourceNav", function(require, _LOADED, __bundle_register, __bundle_modules)
