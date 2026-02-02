@@ -209,21 +209,41 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			return false
 		end
 
-		-- Find neighbor node
-		local neighborNode = getNodeAtPosition(exitPoint)
-		if not neighborNode or neighborNode.id == currentNode.id then
-			-- Try slightly inside neighbor
-			local probePos = exitPoint + dir * 2
-			neighborNode = getNodeAtPosition(probePos)
+		-- Get neighbor directly from connection data
+		local neighborNode = nil
+
+		if currentNode.c and currentNode.c[exitDir] then
+			local dirData = currentNode.c[exitDir]
+			if dirData.connections and #dirData.connections > 0 then
+				-- Get first connection (typically only one in each direction)
+				local conn = dirData.connections[1]
+				local neighborId = type(conn) == "table" and conn.node or conn
+
+				-- Look up the actual node
+				local nodes = G.Navigation and G.Navigation.nodes
+				if nodes then
+					neighborNode = nodes[neighborId]
+				end
+
+				if DEBUG_TRACES and neighborNode then
+					print(
+						string.format(
+							"[IsNavigable] Found neighbor node %d via exitDir %d connection",
+							neighborId,
+							exitDir
+						)
+					)
+				end
+			end
 		end
 
 		if not neighborNode then
 			if DEBUG_TRACES then
 				print(
 					string.format(
-						"[IsNavigable] FAIL: No neighbor found at exit (%.1f, %.1f)",
-						exitPoint.x,
-						exitPoint.y
+						"[IsNavigable] FAIL: No neighbor connection in exitDir %d from node %d",
+						exitDir,
+						currentNode.id
 					)
 				)
 			end
@@ -247,23 +267,68 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				entryDir = DIR_EAST
 			end
 
-			-- Check exit door on current node
+			-- Check exit connection on current node
 			if currentNode.c and currentNode.c[exitDir] then
 				local dirData = currentNode.c[exitDir]
-				if dirData.connections and dirData.door then
+				if DEBUG_TRACES then
+					print(
+						string.format(
+							"[DEBUG] EXIT side: node=%d dir=%d hasConns=%s hasDoor=%s",
+							currentNode.id,
+							exitDir,
+							tostring(dirData.connections ~= nil),
+							tostring(dirData.door ~= nil)
+						)
+					)
+				end
+
+				if dirData.connections then
+					-- Check if connection to neighbor exists
 					for _, conn in ipairs(dirData.connections) do
 						local targetId = type(conn) == "table" and conn.node or conn
 						if targetId == neighborNode.id then
-							local door = dirData.door
-							if
-								exitPoint.x >= door.minX
-								and exitPoint.x <= door.maxX
-								and exitPoint.y >= door.minY
-								and exitPoint.y <= door.maxY
-							then
+							-- Connection exists - check if there's a door
+							if dirData.door then
+								local door = dirData.door
+								if DEBUG_TRACES then
+									print(
+										string.format(
+											"[DEBUG] EXIT door bounds: (%.1f,%.1f)-(%.1f,%.1f)",
+											door.minX,
+											door.minY,
+											door.maxX,
+											door.maxY
+										)
+									)
+								end
+								-- Must be within door bounds
+								if
+									exitPoint.x >= door.minX
+									and exitPoint.x <= door.maxX
+									and exitPoint.y >= door.minY
+									and exitPoint.y <= door.maxY
+								then
+									foundPortal = true
+									if DEBUG_TRACES then
+										print(
+											string.format(
+												"[IsNavigable] Portal found at EXIT with door in dir %d",
+												exitDir
+											)
+										)
+									end
+									break
+								end
+							else
+								-- No door = open connection, allow it
 								foundPortal = true
 								if DEBUG_TRACES then
-									print(string.format("[IsNavigable] Portal found at EXIT in direction %d", exitDir))
+									print(
+										string.format(
+											"[IsNavigable] Open connection at EXIT (no door) in dir %d",
+											exitDir
+										)
+									)
 								end
 								break
 							end
@@ -272,24 +337,79 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				end
 			end
 
-			-- If no exit door, check entry door on neighbor node
+			-- If no exit connection, check entry connection on neighbor node
 			if not foundPortal and neighborNode.c and neighborNode.c[entryDir] then
 				local dirData = neighborNode.c[entryDir]
-				if dirData.connections and dirData.door then
+				if DEBUG_TRACES then
+					print(
+						string.format(
+							"[DEBUG] ENTRY side: node=%d dir=%d hasConns=%s hasDoor=%s",
+							neighborNode.id,
+							entryDir,
+							tostring(dirData.connections ~= nil),
+							tostring(dirData.door ~= nil)
+						)
+					)
+				end
+
+				if dirData.connections then
+					-- Check if connection to current node exists
+					if DEBUG_TRACES then
+						print(string.format("[DEBUG] ENTRY has %d connections", #dirData.connections))
+					end
 					for _, conn in ipairs(dirData.connections) do
 						local targetId = type(conn) == "table" and conn.node or conn
+						if DEBUG_TRACES then
+							print(
+								string.format(
+									"[DEBUG] ENTRY conn target=%s, looking for=%d",
+									tostring(targetId),
+									currentNode.id
+								)
+							)
+						end
 						if targetId == currentNode.id then
-							local door = dirData.door
-							if
-								exitPoint.x >= door.minX
-								and exitPoint.x <= door.maxX
-								and exitPoint.y >= door.minY
-								and exitPoint.y <= door.maxY
-							then
+							-- Connection exists - check if there's a door
+							if dirData.door then
+								local door = dirData.door
+								if DEBUG_TRACES then
+									print(
+										string.format(
+											"[DEBUG] ENTRY door bounds: (%.1f,%.1f)-(%.1f,%.1f)",
+											door.minX,
+											door.minY,
+											door.maxX,
+											door.maxY
+										)
+									)
+								end
+								-- Must be within door bounds
+								if
+									exitPoint.x >= door.minX
+									and exitPoint.x <= door.maxX
+									and exitPoint.y >= door.minY
+									and exitPoint.y <= door.maxY
+								then
+									foundPortal = true
+									if DEBUG_TRACES then
+										print(
+											string.format(
+												"[IsNavigable] Portal found at ENTRY with door in dir %d",
+												entryDir
+											)
+										)
+									end
+									break
+								end
+							else
+								-- No door = open connection, allow it
 								foundPortal = true
 								if DEBUG_TRACES then
 									print(
-										string.format("[IsNavigable] Portal found at ENTRY in direction %d", entryDir)
+										string.format(
+											"[IsNavigable] Open connection at ENTRY (no door) in dir %d",
+											entryDir
+										)
 									)
 								end
 								break
