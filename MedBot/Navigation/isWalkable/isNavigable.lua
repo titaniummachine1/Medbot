@@ -5,6 +5,7 @@
 local Navigable = {}
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
+local Common = require("MedBot.Core.Common")
 
 -- Constants
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
@@ -313,7 +314,6 @@ function Navigable.DrawDebugTraces()
 	for _, trace in ipairs(hullTraces) do
 		if trace.startPos and trace.endPos then
 			draw.Color(0, 50, 255, 255)
-			local Common = require("MedBot.Core.Common")
 			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 		end
 	end

@@ -5727,6 +5727,7 @@ __bundle_register("MedBot.Bot.IsNavigableTest", function(require, _LOADED, __bun
 ]]
 
 local G = require("MedBot.Core.Globals")
+local Node = require("MedBot.Navigation.Node")
 
 -- Test state variables
 local TestState = {
@@ -5844,9 +5845,18 @@ local function Draw3DBox(size, pos)
 	}
 
 	local linesToDraw = {
-		{ 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 },
-		{ 5, 6 }, { 6, 7 }, { 7, 8 }, { 8, 5 },
-		{ 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },
+		{ 1, 2 },
+		{ 2, 3 },
+		{ 3, 4 },
+		{ 4, 1 },
+		{ 5, 6 },
+		{ 6, 7 },
+		{ 7, 8 },
+		{ 8, 5 },
+		{ 1, 5 },
+		{ 2, 6 },
+		{ 3, 7 },
+		{ 4, 8 },
 	}
 
 	local screenPositions = {}
@@ -5908,7 +5918,6 @@ local function OnCreateMove(Cmd)
 	-- Only run test if we have both positions and they're far enough apart
 	if TestState.startPos and (TestState.currentPos - TestState.startPos):Length() > 10 then
 		-- Get current node for start position
-		local Node = require("MedBot.Navigation.Node")
 		local startNode = Node.GetAreaAtPosition(TestState.currentPos)
 
 		if startNode then
@@ -6009,6 +6018,7 @@ __bundle_register("MedBot.Navigation.isWalkable.isNavigable", function(require, 
 local Navigable = {}
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
+local Common = require("MedBot.Core.Common")
 
 -- Constants
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
@@ -6317,7 +6327,6 @@ function Navigable.DrawDebugTraces()
 	for _, trace in ipairs(hullTraces) do
 		if trace.startPos and trace.endPos then
 			draw.Color(0, 50, 255, 255)
-			local Common = require("MedBot.Core.Common")
 			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 		end
 	end
@@ -7801,6 +7810,7 @@ local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
 local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -7842,7 +7852,6 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 
 	-- Node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
 	if WorkManager.attemptWork(1, "node_skipping") then
-		local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 		local skipped = NodeSkipper.TrySkipNode(LocalOrigin, function()
 			Navigation.RemoveCurrentNode()
 		end)
@@ -7913,7 +7922,6 @@ function MovementDecisions.advanceNode()
 
 		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
 		if #G.Navigation.path >= 2 then
-			local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 			local nextNode = G.Navigation.path[2]
 			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
 
@@ -8606,6 +8614,8 @@ local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local AStar = require("MedBot.Algorithms.A-Star")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
+local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -8735,7 +8745,6 @@ function Navigation.ClearPath()
 	-- Clear path traversal history used by stuck analysis
 	G.Navigation.pathHistory = {}
 	-- Reset node skipping state
-	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 	NodeSkipper.Reset()
 end
 
@@ -8788,7 +8797,6 @@ function Navigation.ResetTickTimer()
 end
 
 function Navigation.ResetNodeSkipping()
-	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 	NodeSkipper.Reset()
 end
 
@@ -8807,8 +8815,7 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 		return false
 	end
 
-	-- Use the existing walkability check from the Node module or PathValidator
-	local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+	-- Use the existing walkability check from the PathValidator module
 	local isWalkable = PathValidator.IsWalkable(currentPos, nextNode.pos)
 
 	if isWalkable then
@@ -9726,6 +9733,7 @@ local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
 local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local SmartJump = require("MedBot.Bot.SmartJump")
+local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
@@ -10012,8 +10020,6 @@ end
 
 -- Force immediate repath (with cooldown to prevent spam)
 function StateHandler.forceRepath(reason)
-	local WorkManager = require("MedBot.WorkManager")
-
 	-- Prevent repath spam with 33 tick cooldown
 	if not WorkManager.attemptWork(33, "force_repath_cooldown") then
 		return -- Still on cooldown, ignore repath request
@@ -10045,7 +10051,6 @@ function StateHandler.handleFollowingState(userCmd)
 
 	if currentTick - G.Navigation.lastFollowUpdateTick < 5 then
 		-- Use MovementDecisions to continue moving to current target
-		local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 		if G.Navigation.path and #G.Navigation.path > 0 then
 			MovementDecisions.handleMovingState(userCmd)
 		end
@@ -10098,7 +10103,6 @@ function StateHandler.handleFollowingState(userCmd)
 	end
 
 	-- Continue moving to target
-	local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 	if G.Navigation.path and #G.Navigation.path > 0 then
 		MovementDecisions.handleMovingState(userCmd)
 	end

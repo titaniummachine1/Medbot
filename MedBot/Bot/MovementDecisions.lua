@@ -10,6 +10,7 @@ local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
 local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -51,7 +52,6 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 
 	-- Node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
 	if WorkManager.attemptWork(1, "node_skipping") then
-		local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 		local skipped = NodeSkipper.TrySkipNode(LocalOrigin, function()
 			Navigation.RemoveCurrentNode()
 		end)
@@ -122,7 +122,6 @@ function MovementDecisions.advanceNode()
 
 		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
 		if #G.Navigation.path >= 2 then
-			local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 			local nextNode = G.Navigation.path[2]
 			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
 

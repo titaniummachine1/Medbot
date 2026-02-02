@@ -20,6 +20,8 @@ local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local AStar = require("MedBot.Algorithms.A-Star")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
+local NodeSkipper = require("MedBot.Bot.NodeSkipper")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -149,7 +151,6 @@ function Navigation.ClearPath()
 	-- Clear path traversal history used by stuck analysis
 	G.Navigation.pathHistory = {}
 	-- Reset node skipping state
-	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 	NodeSkipper.Reset()
 end
 
@@ -202,7 +203,6 @@ function Navigation.ResetTickTimer()
 end
 
 function Navigation.ResetNodeSkipping()
-	local NodeSkipper = require("MedBot.Bot.NodeSkipper")
 	NodeSkipper.Reset()
 end
 
@@ -221,8 +221,7 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 		return false
 	end
 
-	-- Use the existing walkability check from the Node module or PathValidator
-	local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+	-- Use the existing walkability check from the PathValidator module
 	local isWalkable = PathValidator.IsWalkable(currentPos, nextNode.pos)
 
 	if isWalkable then

@@ -5,6 +5,7 @@
 ]]
 
 local G = require("MedBot.Core.Globals")
+local Node = require("MedBot.Navigation.Node")
 
 -- Test state variables
 local TestState = {
@@ -122,9 +123,18 @@ local function Draw3DBox(size, pos)
 	}
 
 	local linesToDraw = {
-		{ 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 },
-		{ 5, 6 }, { 6, 7 }, { 7, 8 }, { 8, 5 },
-		{ 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },
+		{ 1, 2 },
+		{ 2, 3 },
+		{ 3, 4 },
+		{ 4, 1 },
+		{ 5, 6 },
+		{ 6, 7 },
+		{ 7, 8 },
+		{ 8, 5 },
+		{ 1, 5 },
+		{ 2, 6 },
+		{ 3, 7 },
+		{ 4, 8 },
 	}
 
 	local screenPositions = {}
@@ -186,7 +196,6 @@ local function OnCreateMove(Cmd)
 	-- Only run test if we have both positions and they're far enough apart
 	if TestState.startPos and (TestState.currentPos - TestState.startPos):Length() > 10 then
 		-- Get current node for start position
-		local Node = require("MedBot.Navigation.Node")
 		local startNode = Node.GetAreaAtPosition(TestState.currentPos)
 
 		if startNode then

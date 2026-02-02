@@ -11,6 +11,7 @@ local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
 local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local SmartJump = require("MedBot.Bot.SmartJump")
+local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 
 local StateHandler = {}
 local Log = Common.Log.new("StateHandler")
@@ -297,8 +298,6 @@ end
 
 -- Force immediate repath (with cooldown to prevent spam)
 function StateHandler.forceRepath(reason)
-	local WorkManager = require("MedBot.WorkManager")
-
 	-- Prevent repath spam with 33 tick cooldown
 	if not WorkManager.attemptWork(33, "force_repath_cooldown") then
 		return -- Still on cooldown, ignore repath request
@@ -330,7 +329,6 @@ function StateHandler.handleFollowingState(userCmd)
 
 	if currentTick - G.Navigation.lastFollowUpdateTick < 5 then
 		-- Use MovementDecisions to continue moving to current target
-		local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 		if G.Navigation.path and #G.Navigation.path > 0 then
 			MovementDecisions.handleMovingState(userCmd)
 		end
@@ -383,7 +381,6 @@ function StateHandler.handleFollowingState(userCmd)
 	end
 
 	-- Continue moving to target
-	local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 	if G.Navigation.path and #G.Navigation.path > 0 then
 		MovementDecisions.handleMovingState(userCmd)
 	end
