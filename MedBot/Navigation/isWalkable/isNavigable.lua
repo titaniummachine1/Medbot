@@ -1,6 +1,6 @@
 --[[
-    Lightweight Node-Based Path Validator
-    Steps through portals/doors in greedy direction with minimal traces
+    Grid Traversal Path Validator (Amanatides & Woo adapted for NavMesh)
+    Steps through nodes mathematically, checking only boundaries
 ]]
 local Navigable = {}
 local G = require("MedBot.Core.Globals")
@@ -9,193 +9,259 @@ local G = require("MedBot.Core.Globals")
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
 local STEP_HEIGHT = 18
 local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
-local UP_VECTOR = Vector3(0, 0, 1)
-local MAX_NODES_TO_CHECK = 15
+local MAX_ITERATIONS = 15
+
+-- Direction mappings
+local DIR = { N = 1, S = 2, E = 3, W = 4 }
 
 -- Debug
-local DEBUG_TRACES = false
+local DEBUG_TRACES = true
 local hullTraces = {}
 local currentTickLogged = -1
 
 local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter)
-    local currentTick = globals.TickCount()
-    if currentTick > currentTickLogged then
-        hullTraces = {}
-        currentTickLogged = currentTick
-    end
-    local result = engine.TraceHull(startPos, endPos, minHull, maxHull, mask, filter)
-    if DEBUG_TRACES then
-        table.insert(hullTraces, { startPos = startPos, endPos = result.endpos })
-    end
-    return result
+	local currentTick = globals.TickCount()
+	if currentTick > currentTickLogged then
+		hullTraces = {}
+		currentTickLogged = currentTick
+	end
+	local result = engine.TraceHull(startPos, endPos, minHull, maxHull, mask, filter)
+	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos })
+	return result
 end
 
-local TraceHull = engine.TraceHull
+local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
 
--- Filter
 local function shouldHitEntity(entity)
-    local pLocal = G.pLocal and G.pLocal.entity
-    return entity ~= pLocal
+	local pLocal = G.pLocal and G.pLocal.entity
+	return entity ~= pLocal
 end
 
--- Get directional ID towards goal
-local function getDirectionToGoal(node, goalPos)
-    local dx = goalPos.x - node.pos.x
-    local dy = goalPos.y - node.pos.y
-    
-    local Node = require("MedBot.Navigation.Node")
-    
-    -- Determine primary direction
-    if math.abs(dx) > math.abs(dy) then
-        return dx > 0 and Node.DIR.E or Node.DIR.W
-    else
-        return dy > 0 and Node.DIR.N or Node.DIR.S
-    end
+-- Find which wall of node the ray hits first
+-- Returns: distance (t), intersectPos, dirId (1=N, 2=S, 3=E, 4=W)
+local function getNodeExit(startPos, dir, node)
+	local tMin = math.huge
+	local exitDir = nil
+	local tolerance = 2 -- Small tolerance for bounds checks
+
+	-- Check X planes (West/East walls)
+	if dir.x ~= 0 then
+		local wallX = (dir.x > 0) and node._maxX or node._minX
+		local tX = (wallX - startPos.x) / dir.x
+
+		if tX > 0.001 and tX < tMin then
+			local hitY = startPos.y + dir.y * tX
+			if hitY >= (node._minY - tolerance) and hitY <= (node._maxY + tolerance) then
+				tMin = tX
+				exitDir = (dir.x > 0) and DIR.E or DIR.W
+			end
+		end
+	end
+
+	-- Check Y planes (South/North walls)
+	if dir.y ~= 0 then
+		local wallY = (dir.y > 0) and node._maxY or node._minY
+		local tY = (wallY - startPos.y) / dir.y
+
+		if tY > 0.001 and tY < tMin then
+			local hitX = startPos.x + dir.x * tY
+			if hitX >= (node._minX - tolerance) and hitX <= (node._maxX + tolerance) then
+				tMin = tY
+				exitDir = (dir.y > 0) and DIR.N or DIR.S
+			end
+		end
+	end
+
+	if tMin == math.huge then
+		return nil, nil, nil
+	end
+
+	local intersectPos = startPos + (dir * tMin)
+	return tMin, intersectPos, exitDir
 end
 
--- Simple point-in-rect check
-local function pointInRect(px, py, minX, maxX, minY, maxY)
-    return px >= minX and px <= maxX and py >= minY and py <= maxY
+-- Check if intersection point lies within neighbor bounds on cross-axis
+local function isInsidePortal(intersectPos, dirId, neighborNode)
+	if dirId == DIR.E or dirId == DIR.W then
+		return intersectPos.y >= neighborNode._minY and intersectPos.y <= neighborNode._maxY
+	else
+		return intersectPos.x >= neighborNode._minX and intersectPos.x <= neighborNode._maxX
+	end
 end
 
--- Main function: Greedy portal stepping
+-- Find neighbor node in given direction
+local function getNeighborInDirection(node, dirId, nodes)
+	if not node.c or not node.c[dirId] then
+		return nil
+	end
+
+	local dirData = node.c[dirId]
+	if not dirData.connections then
+		return nil
+	end
+
+	for _, conn in ipairs(dirData.connections) do
+		local targetId = type(conn) == "table" and conn.node or conn
+		local targetNode = nodes[targetId]
+		if targetNode and not targetNode.isDoor then
+			return targetNode
+		end
+	end
+
+	return nil
+end
+
+-- Check if position is inside node bounds (horizontal only)
+local function isInNode(pos, node)
+	return pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY
+end
+
+-- MAIN FUNCTION
 function Navigable.CanSkip(startPos, goalPos, startNode)
-    assert(startNode, "CanSkip: startNode required")
-    assert(startNode.c, "CanSkip: startNode has no connections")
-    
-    local Node = require("MedBot.Navigation.Node")
-    local nodes = G.Navigation.nodes
-    if not nodes then
-        return false
-    end
-    
-    -- Quick bounds check - if goal is way outside navmesh, early out
-    local goalNode = Node.GetAreaAtPosition and Node.GetAreaAtPosition(goalPos)
-    if not goalNode then
-        -- Try simple bounds check
-        local found = false
-        for _, node in pairs(nodes) do
-            if not node.isDoor and pointInRect(goalPos.x, goalPos.y, node._minX, node._maxX, node._minY, node._maxY) then
-                found = true
-                break
-            end
-        end
-        if not found then
-            return false -- Goal not in any node
-        end
-    end
-    
-    -- Single hull trace from start to goal at step height
-    local traceResult = TraceHull(
-        startPos + STEP_HEIGHT_Vector,
-        goalPos + STEP_HEIGHT_Vector,
-        PLAYER_HULL.Min,
-        PLAYER_HULL.Max,
-        MASK_PLAYERSOLID,
-        shouldHitEntity
-    )
-    
-    if traceResult.fraction > 0.99 then
-        return true -- Direct line clear
-    end
-    
-    -- Greedy stepping through portals
-    local currentNode = startNode
-    local visited = {} -- Prevent cycles
-    
-    for step = 1, MAX_NODES_TO_CHECK do
-        if visited[currentNode.id] then
-            return false -- Cycle detected
-        end
-        visited[currentNode.id] = true
-        
-        -- Check if we're at goal node
-        if pointInRect(goalPos.x, goalPos.y, currentNode._minX, currentNode._maxX, currentNode._minY, currentNode._maxY) then
-            -- Final trace to goal from current position
-            local currentPos = Vector3(currentNode.pos.x, currentNode.pos.y, currentNode.pos.z)
-            local finalTrace = TraceHull(
-                currentPos + STEP_HEIGHT_Vector,
-                goalPos + STEP_HEIGHT_Vector,
-                PLAYER_HULL.Min,
-                PLAYER_HULL.Max,
-                MASK_PLAYERSOLID,
-                shouldHitEntity
-            )
-            return finalTrace.fraction > 0.9
-        end
-        
-        -- Get best direction towards goal
-        local bestDir = getDirectionToGoal(currentNode, goalPos)
-        
-        -- Try connections in priority: best direction first, then others
-        local triedDirs = { [bestDir] = true }
-        local connectionsToTry = {}
-        
-        -- Add best direction first
-        if currentNode.c[bestDir] and currentNode.c[bestDir].connections then
-            table.insert(connectionsToTry, { dir = bestDir, data = currentNode.c[bestDir] })
-        end
-        
-        -- Add other directions
-        for dirId, dirData in pairs(currentNode.c) do
-            if not triedDirs[dirId] and dirData.connections then
-                table.insert(connectionsToTry, { dir = dirId, data = dirData })
-            end
-        end
-        
-        -- Try each connection
-        local foundNext = false
-        for _, connInfo in ipairs(connectionsToTry) do
-            local dirData = connInfo.data
-            
-            for _, conn in ipairs(dirData.connections) do
-                local targetId = type(conn) == "table" and conn.node or conn
-                local targetNode = nodes[targetId]
-                
-                if targetNode and not targetNode.isDoor and not visited[targetId] then
-                    -- Quick direction check - must be towards goal
-                    local toTarget = targetNode.pos - currentNode.pos
-                    local toGoal = goalPos - currentNode.pos
-                    
-                    -- Dot product check: target must be in general direction of goal
-                    if toTarget:Dot(toGoal) > -100 then -- Allow some perpendicular
-                        currentNode = targetNode
-                        foundNext = true
-                        break
-                    end
-                end
-            end
-            
-            if foundNext then
-                break
-            end
-        end
-        
-        if not foundNext then
-            return false -- Dead end
-        end
-    end
-    
-    return false -- Exceeded max steps
+	assert(startNode, "CanSkip: startNode required")
+
+	local nodes = G.Navigation and G.Navigation.nodes
+	if not nodes then
+		return false
+	end
+
+	-- Clamp startPos to be inside node bounds (with small margin)
+	local currentPos = Vector3(
+		math.max(startNode._minX + 1, math.min(startNode._maxX - 1, startPos.x)),
+		math.max(startNode._minY + 1, math.min(startNode._maxY - 1, startPos.y)),
+		startPos.z
+	)
+
+	local currentNode = startNode
+	local toGoal = goalPos - currentPos
+	local totalDist = toGoal:Length()
+
+	if totalDist < 1 then
+		return true
+	end
+
+	local dir = toGoal / totalDist
+	local visited = {}
+
+	for i = 1, MAX_ITERATIONS do
+		if visited[currentNode.id] then
+			return false
+		end
+		visited[currentNode.id] = true
+
+		-- Check if goal is inside current node
+		if isInNode(goalPos, currentNode) then
+			local trace = TraceHull(
+				currentPos + STEP_HEIGHT_Vector,
+				goalPos + STEP_HEIGHT_Vector,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID,
+				shouldHitEntity
+			)
+			return trace.fraction > 0.99
+		end
+
+		-- Get exit point from current node
+		local t, exitPoint, exitDir = getNodeExit(currentPos, dir, currentNode)
+
+		if not t then
+			local distToGoal = (goalPos - currentPos):Length()
+			if distToGoal < totalDist * 0.1 then
+				local trace = TraceHull(
+					currentPos + STEP_HEIGHT_Vector,
+					goalPos + STEP_HEIGHT_Vector,
+					PLAYER_HULL.Min,
+					PLAYER_HULL.Max,
+					MASK_PLAYERSOLID,
+					shouldHitEntity
+				)
+				return trace.fraction > 0.99
+			end
+			return false
+		end
+
+		-- Check if goal is closer than the wall
+		local distToExit = (exitPoint - currentPos):Length()
+		local distToGoal = (goalPos - currentPos):Length()
+
+		if distToExit >= distToGoal then
+			local trace = TraceHull(
+				currentPos + STEP_HEIGHT_Vector,
+				goalPos + STEP_HEIGHT_Vector,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID,
+				shouldHitEntity
+			)
+			return trace.fraction > 0.99
+		end
+
+		-- Trace within node to verify no obstacles
+		local wallTrace = TraceHull(
+			currentPos + STEP_HEIGHT_Vector,
+			exitPoint + STEP_HEIGHT_Vector,
+			PLAYER_HULL.Min,
+			PLAYER_HULL.Max,
+			MASK_PLAYERSOLID,
+			shouldHitEntity
+		)
+
+		if wallTrace.fraction < 0.99 then
+			return false
+		end
+
+		-- Find neighbor
+		local neighborNode = getNeighborInDirection(currentNode, exitDir, nodes)
+
+		if not neighborNode then
+			return false
+		end
+
+		-- Verify portal overlap
+		if not isInsidePortal(exitPoint, exitDir, neighborNode) then
+			return false
+		end
+
+		-- Ground snap
+		local probePos = exitPoint + (dir * 2)
+		local downTrace = TraceHull(
+			probePos + STEP_HEIGHT_Vector,
+			probePos - Vector3(0, 0, 50),
+			PLAYER_HULL.Min,
+			PLAYER_HULL.Max,
+			MASK_PLAYERSOLID,
+			shouldHitEntity
+		)
+
+		if downTrace.fraction == 1 then
+			return false
+		end
+
+		-- Advance
+		currentPos = downTrace.endpos
+		currentNode = neighborNode
+	end
+
+	return false
 end
 
--- Debug visualization
+-- Debug
 function Navigable.DrawDebugTraces()
-    if not DEBUG_TRACES then
-        return
-    end
-    
-    for _, trace in ipairs(hullTraces) do
-        if trace.startPos and trace.endPos then
-            draw.Color(0, 50, 255, 255)
-            local Common = require("MedBot.Core.Common")
-            Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
-        end
-    end
+	if not DEBUG_TRACES then
+		return
+	end
+	for _, trace in ipairs(hullTraces) do
+		if trace.startPos and trace.endPos then
+			draw.Color(0, 50, 255, 255)
+			local Common = require("MedBot.Core.Common")
+			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+		end
+	end
 end
 
 function Navigable.SetDebug(enabled)
-    DEBUG_TRACES = enabled
+	DEBUG_TRACES = enabled
 end
 
 return Navigable
