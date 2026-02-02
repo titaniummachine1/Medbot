@@ -6055,6 +6055,12 @@ local function getNodeAtPosition(pos)
 	return Node.GetAreaAtPosition(pos)
 end
 
+-- Direction constants
+local DIR_NORTH = 1
+local DIR_SOUTH = 2
+local DIR_EAST = 4
+local DIR_WEST = 8
+
 -- Find where ray exits node bounds
 local function findNodeExit(startPos, dir, node)
 	local minX, maxX = node._minX, node._maxX
@@ -6062,6 +6068,7 @@ local function findNodeExit(startPos, dir, node)
 
 	local tMin = math.huge
 	local exitX, exitY
+	local exitDir
 
 	-- Check X boundaries
 	if dir.x > 0 then
@@ -6070,6 +6077,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = maxX
 			exitY = startPos.y + dir.y * t
+			exitDir = DIR_EAST
 		end
 	elseif dir.x < 0 then
 		local t = (minX - startPos.x) / dir.x
@@ -6077,6 +6085,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = minX
 			exitY = startPos.y + dir.y * t
+			exitDir = DIR_WEST
 		end
 	end
 
@@ -6087,6 +6096,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = maxY
+			exitDir = DIR_NORTH
 		end
 	elseif dir.y < 0 then
 		local t = (minY - startPos.y) / dir.y
@@ -6094,6 +6104,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = minY
+			exitDir = DIR_SOUTH
 		end
 	end
 
@@ -6101,7 +6112,7 @@ local function findNodeExit(startPos, dir, node)
 		return nil
 	end
 
-	return Vector3(exitX, exitY, startPos.z), tMin
+	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
 end
 
 -- MAIN FUNCTION - Trace to borders
@@ -6109,7 +6120,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 	assert(startNode, "CanSkip: startNode required")
 
 	if respectPortals == nil then
-		respectPortals = false -- Default: ignore doors
+		respectPortals = true -- Default: respect doors/portals
 	end
 
 	if DEBUG_TRACES then
@@ -6187,7 +6198,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 		end
 
 		-- Find where we exit current node
-		local exitPoint, exitDist = findNodeExit(currentPos, dir, currentNode)
+		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
 		if not exitPoint then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
@@ -6235,32 +6246,29 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 
 		-- Portal checking if enabled
 		if respectPortals then
-			-- Check if exit point is within a door/portal connecting these nodes
+			-- Check the specific exit direction for a door
 			local foundPortal = false
 
-			if currentNode.c then
-				for dirId, dirData in pairs(currentNode.c) do
-					if dirData.connections and dirData.door then
-						-- Check if this door connects to our neighbor
-						for _, conn in ipairs(dirData.connections) do
-							local targetId = type(conn) == "table" and conn.node or conn
-							if targetId == neighborNode.id then
-								-- Check if exit point is within door bounds
-								local door = dirData.door
-								if
-									exitPoint.x >= door.minX
-									and exitPoint.x <= door.maxX
-									and exitPoint.y >= door.minY
-									and exitPoint.y <= door.maxY
-								then
-									foundPortal = true
-									break
-								end
+			if currentNode.c and currentNode.c[exitDir] then
+				local dirData = currentNode.c[exitDir]
+
+				if dirData.connections and dirData.door then
+					-- Check if this direction connects to our neighbor
+					for _, conn in ipairs(dirData.connections) do
+						local targetId = type(conn) == "table" and conn.node or conn
+						if targetId == neighborNode.id then
+							-- Check if exit point is within door bounds
+							local door = dirData.door
+							if
+								exitPoint.x >= door.minX
+								and exitPoint.x <= door.maxX
+								and exitPoint.y >= door.minY
+								and exitPoint.y <= door.maxY
+							then
+								foundPortal = true
+								break
 							end
 						end
-					end
-					if foundPortal then
-						break
 					end
 				end
 			end
@@ -6269,9 +6277,10 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				if DEBUG_TRACES then
 					print(
 						string.format(
-							"[IsNavigable] FAIL: No portal at exit (%.1f, %.1f) to node %d",
+							"[IsNavigable] FAIL: No portal at exit (%.1f, %.1f) in direction %d to node %d",
 							exitPoint.x,
 							exitPoint.y,
+							exitDir,
 							neighborNode.id
 						)
 					)
@@ -6280,7 +6289,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			end
 
 			if DEBUG_TRACES then
-				print(string.format("[IsNavigable] Portal found at exit to node %d", neighborNode.id))
+				print(string.format("[IsNavigable] Portal found in direction %d to node %d", exitDir, neighborNode.id))
 			end
 		end
 
