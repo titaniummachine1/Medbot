@@ -13,6 +13,15 @@ local G = require("MedBot.Core.Globals")
 local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 
+--[[ Profiler Integration ]]
+local profilerLoaded, Profiler = pcall(require, "Profiler")
+if profilerLoaded then
+	Profiler.SetVisible(true)
+	print("[MedBot] Profiler loaded and enabled")
+else
+	print("[MedBot] Profiler not available")
+end
+
 --[[ Algorithms ]]
 local Greedy = require("MedBot.Algorithms.Greedy")
 
@@ -54,6 +63,11 @@ G.currentState = G.States.IDLE
 
 ----@param userCmd UserCmd
 local function onCreateMove(userCmd)
+	-- Profiler context
+	if profilerLoaded then
+		Profiler.SetContext("tick")
+	end
+
 	-- Basic validation
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
@@ -280,16 +294,26 @@ local function onGameEvent(event)
 	end
 end
 
+--[[ Profiler Draw Callback ]]
+local function onDraw()
+	if profilerLoaded then
+		Profiler.SetContext("frame")
+		Profiler.Draw()
+	end
+end
+
 --[[ Initialization ]]
 
 -- Ensure SmartJump callback runs BEFORE MedBot's callback
 callbacks.Unregister("CreateMove", "ZMedBot.CreateMove")
 callbacks.Unregister("DrawModel", "MedBot.DrawModel")
 callbacks.Unregister("FireGameEvent", "MedBot.FireGameEvent")
+callbacks.Unregister("Draw", "MedBot.ProfilerDraw")
 
 callbacks.Register("CreateMove", "ZMedBot.CreateMove", onCreateMove) -- Z prefix ensures it runs after SmartJump
 callbacks.Register("DrawModel", "MedBot.DrawModel", onDrawModel)
 callbacks.Register("FireGameEvent", "MedBot.FireGameEvent", onGameEvent)
+callbacks.Register("Draw", "MedBot.ProfilerDraw", onDraw)
 
 -- Initialize navigation if a valid map is loaded
 Notify.Alert("MedBot loaded!")

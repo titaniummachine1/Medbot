@@ -56,6 +56,15 @@ local G = require("MedBot.Core.Globals")
 local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 
+--[[ Profiler Integration ]]
+local profilerLoaded, Profiler = pcall(require, "Profiler")
+if profilerLoaded then
+	Profiler.SetVisible(true)
+	print("[MedBot] Profiler loaded and enabled")
+else
+	print("[MedBot] Profiler not available")
+end
+
 --[[ Algorithms ]]
 local Greedy = require("MedBot.Algorithms.Greedy")
 
@@ -97,6 +106,11 @@ G.currentState = G.States.IDLE
 
 ----@param userCmd UserCmd
 local function onCreateMove(userCmd)
+	-- Profiler context
+	if profilerLoaded then
+		Profiler.SetContext("tick")
+	end
+
 	-- Basic validation
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsAlive() then
@@ -323,16 +337,26 @@ local function onGameEvent(event)
 	end
 end
 
+--[[ Profiler Draw Callback ]]
+local function onDraw()
+	if profilerLoaded then
+		Profiler.SetContext("frame")
+		Profiler.Draw()
+	end
+end
+
 --[[ Initialization ]]
 
 -- Ensure SmartJump callback runs BEFORE MedBot's callback
 callbacks.Unregister("CreateMove", "ZMedBot.CreateMove")
 callbacks.Unregister("DrawModel", "MedBot.DrawModel")
 callbacks.Unregister("FireGameEvent", "MedBot.FireGameEvent")
+callbacks.Unregister("Draw", "MedBot.ProfilerDraw")
 
 callbacks.Register("CreateMove", "ZMedBot.CreateMove", onCreateMove) -- Z prefix ensures it runs after SmartJump
 callbacks.Register("DrawModel", "MedBot.DrawModel", onDrawModel)
 callbacks.Register("FireGameEvent", "MedBot.FireGameEvent", onGameEvent)
+callbacks.Register("Draw", "MedBot.ProfilerDraw", onDraw)
 
 -- Initialize navigation if a valid map is loaded
 Notify.Alert("MedBot loaded!")
@@ -6018,6 +6042,21 @@ __bundle_register("MedBot.Navigation.isWalkable.isNavigable", function(require, 
 ]]
 local Navigable = {}
 local G = require("MedBot.Core.Globals")
+local Node = require("MedBot.Navigation.Node")
+local Common = require("MedBot.Core.Common")
+
+-- Profiler integration (loaded externally)
+local profilerLoaded, Profiler = pcall(require, "Profiler")
+if not profilerLoaded then
+	-- Profiler not available, create dummy functions
+	Profiler = {
+		Begin = function() end,
+		End = function() end,
+		SetVisible = function() end,
+		SetContext = function() end,
+		Draw = function() end,
+	}
+end
 
 -- Constants
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
@@ -6048,25 +6087,59 @@ local function shouldHitEntity(entity)
 	return entity ~= pLocal
 end
 
--- Get which node contains this position (horizontal only)
-local function getNodeAtPosition(pos, nodes)
-	for _, node in pairs(nodes) do
-		if not node.isDoor then
-			if pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY then
-				return node
-			end
-		end
+-- Get neighbor node in the given direction from current node
+local function getNeighborInDirection(currentNode, exitDir)
+	Profiler.Begin("IsNavigable.getNeighborInDirection")
+
+	if not currentNode.c or not currentNode.c[exitDir] then
+		Profiler.End("IsNavigable.getNeighborInDirection")
+		return nil
 	end
-	return nil
+
+	local dirData = currentNode.c[exitDir]
+	if not dirData.connections or #dirData.connections == 0 then
+		Profiler.End("IsNavigable.getNeighborInDirection")
+		return nil
+	end
+
+	-- Get first connection (typically only one per direction)
+	local conn = dirData.connections[1]
+	local neighborId = type(conn) == "table" and conn.node or conn
+
+	local nodes = G.Navigation and G.Navigation.nodes
+	if not nodes then
+		Profiler.End("IsNavigable.getNeighborInDirection")
+		return nil
+	end
+
+	local neighbor = nodes[neighborId]
+	Profiler.End("IsNavigable.getNeighborInDirection")
+	return neighbor
 end
+
+-- Simple bounds check for goal position
+local function isPositionInNode(pos, node)
+	if not node or node.isDoor then
+		return false
+	end
+	return pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY
+end
+
+-- Direction constants
+local DIR_NORTH = 1
+local DIR_SOUTH = 2
+local DIR_EAST = 4
+local DIR_WEST = 8
 
 -- Find where ray exits node bounds
 local function findNodeExit(startPos, dir, node)
+	Profiler.Begin("IsNavigable.findNodeExit")
 	local minX, maxX = node._minX, node._maxX
 	local minY, maxY = node._minY, node._maxY
 
 	local tMin = math.huge
 	local exitX, exitY
+	local exitDir
 
 	-- Check X boundaries
 	if dir.x > 0 then
@@ -6075,6 +6148,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = maxX
 			exitY = startPos.y + dir.y * t
+			exitDir = DIR_EAST
 		end
 	elseif dir.x < 0 then
 		local t = (minX - startPos.x) / dir.x
@@ -6082,6 +6156,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = minX
 			exitY = startPos.y + dir.y * t
+			exitDir = DIR_WEST
 		end
 	end
 
@@ -6092,6 +6167,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = maxY
+			exitDir = DIR_NORTH
 		end
 	elseif dir.y < 0 then
 		local t = (minY - startPos.y) / dir.y
@@ -6099,18 +6175,23 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = minY
+			exitDir = DIR_SOUTH
 		end
 	end
 
 	if tMin == math.huge then
+		Profiler.End("IsNavigable.findNodeExit")
 		return nil
 	end
 
-	return Vector3(exitX, exitY, startPos.z), tMin
+	Profiler.End("IsNavigable.findNodeExit")
+	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
 end
 
 -- MAIN FUNCTION - Trace to borders
 function Navigable.CanSkip(startPos, goalPos, startNode)
+	Profiler.Begin("IsNavigable.CanSkip")
+
 	assert(startNode, "CanSkip: startNode required")
 	local nodes = G.Navigation and G.Navigation.nodes
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
@@ -6133,16 +6214,21 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 	local MAX_ITERATIONS = 20
 
 	while iteration < MAX_ITERATIONS do
+		Profiler.Begin("IsNavigable.Iteration")
 		iteration = iteration + 1
 
 		-- Direction to goal from current position
+		Profiler.Begin("IsNavigable.CalculateDirection")
 		local toGoal = goalPos - currentPos
 		local distToGoal = toGoal:Length()
+		Profiler.End("IsNavigable.CalculateDirection")
 
 		if distToGoal < 50 then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] SUCCESS: Within 50 units of goal"))
 			end
+			Profiler.End("IsNavigable.Iteration")
+			Profiler.End("IsNavigable.CanSkip")
 			return true
 		end
 
@@ -6162,9 +6248,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		end
 
 		-- Check if goal is in current node
-		local goalNode = getNodeAtPosition(goalPos, nodes)
-		if goalNode and goalNode.id == currentNode.id then
+		Profiler.Begin("IsNavigable.GoalCheck")
+		local goalInCurrentNode = isPositionInNode(goalPos, currentNode)
+		Profiler.End("IsNavigable.GoalCheck")
+
+		if goalInCurrentNode then
 			-- Final trace to goal
+			Profiler.Begin("IsNavigable.FinalTrace")
 			local finalTrace = TraceHull(
 				currentPos + STEP_HEIGHT_Vector,
 				goalPos + STEP_HEIGHT_Vector,
@@ -6173,10 +6263,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 				MASK_PLAYERSOLID,
 				shouldHitEntity
 			)
+			Profiler.End("IsNavigable.FinalTrace")
+
 			if finalTrace.fraction > 0.99 then
 				if DEBUG_TRACES then
 					print("[IsNavigable] SUCCESS: Direct trace to goal in same node")
 				end
+				Profiler.End("IsNavigable.Iteration")
+				Profiler.End("IsNavigable.CanSkip")
 				return true
 			else
 				if DEBUG_TRACES then
@@ -6184,20 +6278,28 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 						string.format("[IsNavigable] FAIL: Blocked at %.2f in same node as goal", finalTrace.fraction)
 					)
 				end
+				Profiler.End("IsNavigable.Iteration")
+				Profiler.End("IsNavigable.CanSkip")
 				return false
 			end
 		end
 
 		-- Find where we exit current node
-		local exitPoint, exitDist = findNodeExit(currentPos, dir, currentNode)
+		Profiler.Begin("IsNavigable.FindExit")
+		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
+		Profiler.End("IsNavigable.FindExit")
+
 		if not exitPoint then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
 			end
+			Profiler.End("IsNavigable.Iteration")
+			Profiler.End("IsNavigable.CanSkip")
 			return false
 		end
 
 		-- Trace to exit point
+		Profiler.Begin("IsNavigable.ExitTrace")
 		local exitTrace = TraceHull(
 			currentPos + STEP_HEIGHT_Vector,
 			exitPoint + STEP_HEIGHT_Vector,
@@ -6206,21 +6308,21 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			MASK_PLAYERSOLID,
 			shouldHitEntity
 		)
+		Profiler.End("IsNavigable.ExitTrace")
 
 		if exitTrace.fraction < 0.99 then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: Hit obstacle at %.2f before border", exitTrace.fraction))
 			end
+			Profiler.End("IsNavigable.Iteration")
+			Profiler.End("IsNavigable.CanSkip")
 			return false
 		end
 
-		-- Find neighbor node
-		local neighborNode = getNodeAtPosition(exitPoint, nodes)
-		if not neighborNode or neighborNode.id == currentNode.id then
-			-- Try slightly inside neighbor
-			local probePos = exitPoint + dir * 2
-			neighborNode = getNodeAtPosition(probePos, nodes)
-		end
+		-- Get neighbor directly from connection list
+		Profiler.Begin("IsNavigable.FindNeighbor")
+		local neighborNode = getNeighborInDirection(currentNode, exitDir)
+		Profiler.End("IsNavigable.FindNeighbor")
 
 		if not neighborNode then
 			if DEBUG_TRACES then
@@ -6232,15 +6334,20 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 					)
 				)
 			end
+			Profiler.End("IsNavigable.Iteration")
+			Profiler.End("IsNavigable.CanSkip")
 			return false
 		end
 
 		-- Entry point is exitPoint clamped to neighbor bounds
+		Profiler.Begin("IsNavigable.EntryClamp")
 		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
 		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
 		local entryPos = Vector3(entryX, entryY, exitPoint.z)
+		Profiler.End("IsNavigable.EntryClamp")
 
 		-- Ground snap at entry
+		Profiler.Begin("IsNavigable.GroundTrace")
 		local groundTrace = TraceHull(
 			entryPos + STEP_HEIGHT_Vector,
 			entryPos - Vector3(0, 0, 100),
@@ -6249,11 +6356,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			MASK_PLAYERSOLID,
 			shouldHitEntity
 		)
+		Profiler.End("IsNavigable.GroundTrace")
 
 		if groundTrace.fraction == 1 then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No ground at entry to node %d", neighborNode.id))
 			end
+			Profiler.End("IsNavigable.Iteration")
+			Profiler.End("IsNavigable.CanSkip")
 			return false
 		end
 
@@ -6263,11 +6373,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		currentPos = groundTrace.endpos
 		currentNode = neighborNode
+		Profiler.End("IsNavigable.Iteration")
 	end
 
 	if DEBUG_TRACES then
 		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
 	end
+	Profiler.End("IsNavigable.CanSkip")
 	return false
 end
 

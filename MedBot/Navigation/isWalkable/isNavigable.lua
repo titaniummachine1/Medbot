@@ -7,14 +7,18 @@ local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local Common = require("MedBot.Core.Common")
 
--- Profiler integration
-local Profiler = require("Profiler")
-Profiler.SetVisible(true)
-
--- Set context for tick-based profiling
-callbacks.Register("CreateMove", "IsNavigableProfilerContext", function(cmd)
-	Profiler.SetContext("tick")
-end)
+-- Profiler integration (loaded externally)
+local profilerLoaded, Profiler = pcall(require, "Profiler")
+if not profilerLoaded then
+	-- Profiler not available, create dummy functions
+	Profiler = {
+		Begin = function() end,
+		End = function() end,
+		SetVisible = function() end,
+		SetContext = function() end,
+		Draw = function() end,
+	}
+end
 
 -- Constants
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
@@ -45,20 +49,49 @@ local function shouldHitEntity(entity)
 	return entity ~= pLocal
 end
 
--- Get which node contains this position (horizontal only)
-local function getNodeAtPosition(pos, nodes)
-	Profiler.Begin("IsNavigable.getNodeAtPosition")
-	for _, node in pairs(nodes) do
-		if not node.isDoor then
-			if pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY then
-				Profiler.End("IsNavigable.getNodeAtPosition")
-				return node
-			end
-		end
+-- Get neighbor node in the given direction from current node
+local function getNeighborInDirection(currentNode, exitDir)
+	Profiler.Begin("IsNavigable.getNeighborInDirection")
+
+	if not currentNode.c or not currentNode.c[exitDir] then
+		Profiler.End("IsNavigable.getNeighborInDirection")
+		return nil
 	end
-	Profiler.End("IsNavigable.getNodeAtPosition")
-	return nil
+
+	local dirData = currentNode.c[exitDir]
+	if not dirData.connections or #dirData.connections == 0 then
+		Profiler.End("IsNavigable.getNeighborInDirection")
+		return nil
+	end
+
+	-- Get first connection (typically only one per direction)
+	local conn = dirData.connections[1]
+	local neighborId = type(conn) == "table" and conn.node or conn
+
+	local nodes = G.Navigation and G.Navigation.nodes
+	if not nodes then
+		Profiler.End("IsNavigable.getNeighborInDirection")
+		return nil
+	end
+
+	local neighbor = nodes[neighborId]
+	Profiler.End("IsNavigable.getNeighborInDirection")
+	return neighbor
 end
+
+-- Simple bounds check for goal position
+local function isPositionInNode(pos, node)
+	if not node or node.isDoor then
+		return false
+	end
+	return pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY
+end
+
+-- Direction constants
+local DIR_NORTH = 1
+local DIR_SOUTH = 2
+local DIR_EAST = 4
+local DIR_WEST = 8
 
 -- Find where ray exits node bounds
 local function findNodeExit(startPos, dir, node)
@@ -68,6 +101,7 @@ local function findNodeExit(startPos, dir, node)
 
 	local tMin = math.huge
 	local exitX, exitY
+	local exitDir
 
 	-- Check X boundaries
 	if dir.x > 0 then
@@ -76,6 +110,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = maxX
 			exitY = startPos.y + dir.y * t
+			exitDir = DIR_EAST
 		end
 	elseif dir.x < 0 then
 		local t = (minX - startPos.x) / dir.x
@@ -83,6 +118,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = minX
 			exitY = startPos.y + dir.y * t
+			exitDir = DIR_WEST
 		end
 	end
 
@@ -93,6 +129,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = maxY
+			exitDir = DIR_NORTH
 		end
 	elseif dir.y < 0 then
 		local t = (minY - startPos.y) / dir.y
@@ -100,6 +137,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = minY
+			exitDir = DIR_SOUTH
 		end
 	end
 
@@ -109,7 +147,7 @@ local function findNodeExit(startPos, dir, node)
 	end
 
 	Profiler.End("IsNavigable.findNodeExit")
-	return Vector3(exitX, exitY, startPos.z), tMin
+	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
 end
 
 -- MAIN FUNCTION - Trace to borders
@@ -173,10 +211,10 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		-- Check if goal is in current node
 		Profiler.Begin("IsNavigable.GoalCheck")
-		local goalNode = getNodeAtPosition(goalPos, nodes)
+		local goalInCurrentNode = isPositionInNode(goalPos, currentNode)
 		Profiler.End("IsNavigable.GoalCheck")
 
-		if goalNode and goalNode.id == currentNode.id then
+		if goalInCurrentNode then
 			-- Final trace to goal
 			Profiler.Begin("IsNavigable.FinalTrace")
 			local finalTrace = TraceHull(
@@ -210,7 +248,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		-- Find where we exit current node
 		Profiler.Begin("IsNavigable.FindExit")
-		local exitPoint, exitDist = findNodeExit(currentPos, dir, currentNode)
+		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
 		Profiler.End("IsNavigable.FindExit")
 
 		if not exitPoint then
@@ -243,14 +281,9 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Find neighbor node
+		-- Get neighbor directly from connection list
 		Profiler.Begin("IsNavigable.FindNeighbor")
-		local neighborNode = getNodeAtPosition(exitPoint, nodes)
-		if not neighborNode or neighborNode.id == currentNode.id then
-			-- Try slightly inside neighbor
-			local probePos = exitPoint + dir * 2
-			neighborNode = getNodeAtPosition(probePos, nodes)
-		end
+		local neighborNode = getNeighborInDirection(currentNode, exitDir)
 		Profiler.End("IsNavigable.FindNeighbor")
 
 		if not neighborNode then
