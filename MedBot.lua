@@ -6137,14 +6137,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 	)
 
 	local currentNode = startNode
-	local toGoal = goalPos - currentPos
-	local totalDist = toGoal:Length()
-
-	if totalDist < 1 then
-		return true
-	end
-
-	local dir = toGoal / totalDist
 	local visited = {}
 
 	for i = 1, MAX_ITERATIONS do
@@ -6152,6 +6144,16 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 		visited[currentNode.id] = true
+
+		-- Recalculate direction from current position to goal
+		local toGoal = goalPos - currentPos
+		local totalDist = toGoal:Length()
+
+		if totalDist < 1 then
+			return true
+		end
+
+		local dir = toGoal / totalDist
 
 		-- Check if goal is inside current node
 		if isInNode(goalPos, currentNode) then
