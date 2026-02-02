@@ -232,18 +232,28 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 
 		-- Portal checking if enabled
 		if respectPortals then
-			-- Check the specific exit direction for a door
+			-- Check for door on EITHER side of the boundary
 			local foundPortal = false
 
+			-- Calculate opposite direction for entry check
+			local entryDir
+			if exitDir == DIR_NORTH then
+				entryDir = DIR_SOUTH
+			elseif exitDir == DIR_SOUTH then
+				entryDir = DIR_NORTH
+			elseif exitDir == DIR_EAST then
+				entryDir = DIR_WEST
+			elseif exitDir == DIR_WEST then
+				entryDir = DIR_EAST
+			end
+
+			-- Check exit door on current node
 			if currentNode.c and currentNode.c[exitDir] then
 				local dirData = currentNode.c[exitDir]
-
 				if dirData.connections and dirData.door then
-					-- Check if this direction connects to our neighbor
 					for _, conn in ipairs(dirData.connections) do
 						local targetId = type(conn) == "table" and conn.node or conn
 						if targetId == neighborNode.id then
-							-- Check if exit point is within door bounds
 							local door = dirData.door
 							if
 								exitPoint.x >= door.minX
@@ -252,6 +262,36 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 								and exitPoint.y <= door.maxY
 							then
 								foundPortal = true
+								if DEBUG_TRACES then
+									print(string.format("[IsNavigable] Portal found at EXIT in direction %d", exitDir))
+								end
+								break
+							end
+						end
+					end
+				end
+			end
+
+			-- If no exit door, check entry door on neighbor node
+			if not foundPortal and neighborNode.c and neighborNode.c[entryDir] then
+				local dirData = neighborNode.c[entryDir]
+				if dirData.connections and dirData.door then
+					for _, conn in ipairs(dirData.connections) do
+						local targetId = type(conn) == "table" and conn.node or conn
+						if targetId == currentNode.id then
+							local door = dirData.door
+							if
+								exitPoint.x >= door.minX
+								and exitPoint.x <= door.maxX
+								and exitPoint.y >= door.minY
+								and exitPoint.y <= door.maxY
+							then
+								foundPortal = true
+								if DEBUG_TRACES then
+									print(
+										string.format("[IsNavigable] Portal found at ENTRY in direction %d", entryDir)
+									)
+								end
 								break
 							end
 						end
@@ -263,19 +303,15 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				if DEBUG_TRACES then
 					print(
 						string.format(
-							"[IsNavigable] FAIL: No portal at exit (%.1f, %.1f) in direction %d to node %d",
+							"[IsNavigable] FAIL: No portal at boundary (%.1f, %.1f) exit_dir=%d entry_dir=%d",
 							exitPoint.x,
 							exitPoint.y,
 							exitDir,
-							neighborNode.id
+							entryDir
 						)
 					)
 				end
 				return false
-			end
-
-			if DEBUG_TRACES then
-				print(string.format("[IsNavigable] Portal found in direction %d to node %d", exitDir, neighborNode.id))
 			end
 		end
 
