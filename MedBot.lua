@@ -6008,6 +6008,7 @@ __bundle_register("MedBot.Navigation.isWalkable.isNavigable", function(require, 
 ]]
 local Navigable = {}
 local G = require("MedBot.Core.Globals")
+local Node = require("MedBot.Navigation.Node")
 
 -- Constants
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
@@ -6040,7 +6041,6 @@ end
 
 -- Get which node contains this position using spatial query
 local function getNodeAtPosition(pos)
-	local Node = require("MedBot.Navigation.Node")
 	return Node.GetAreaAtPosition(pos)
 end
 
