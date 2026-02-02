@@ -70,6 +70,7 @@ local HealthLogic = require("MedBot.Bot.HealthLogic")
 local SmartJump = require("MedBot.Bot.SmartJump")
 require("MedBot.Bot.ISWalkableTest")
 require("MedBot.Bot.OptimizedISWalkableTest")
+require("MedBot.Bot.IsNavigableTest")
 require("MedBot.Visuals")
 require("MedBot.Utils.Config")
 require("MedBot.Menu")
@@ -630,6 +631,21 @@ local function OnDrawMenu()
 		G.Menu.Visuals.OptimizedISWalkableTest =
 			TimMenu.Checkbox("Optimized ISWalkable Test", G.Menu.Visuals.OptimizedISWalkableTest)
 		TimMenu.Tooltip("EXPERIMENTAL: Navmesh-optimized ISWalkable (hold F to test)")
+		TimMenu.NextLine()
+
+		TimMenu.EndSector()
+		TimMenu.NextLine()
+
+		-- IsNavigable Test Section
+		TimMenu.BeginSector("IsNavigable Test")
+
+		-- Initialize IsNavigableTest menu variables
+		if G.Menu.Visuals.IsNavigableTest == nil then
+			G.Menu.Visuals.IsNavigableTest = false
+		end
+
+		G.Menu.Visuals.IsNavigableTest = TimMenu.Checkbox("IsNavigable Test", G.Menu.Visuals.IsNavigableTest)
+		TimMenu.Tooltip("Test node-based navigation skipping (hold F to test)")
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()
@@ -1988,7 +2004,7 @@ __bundle_register("MedBot.Visuals", function(require, _LOADED, __bundle_register
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local MathUtils = require("MedBot.Utils.MathUtils")
 
 local Visuals = {}
@@ -3109,245 +3125,138 @@ end
 return MathUtils
 
 end)
-__bundle_register("MedBot.Navigation.IsWalkable", function(require, _LOADED, __bundle_register, __bundle_modules)
+__bundle_register("MedBot.Navigation.isWalkable.IsWalkable", function(require, _LOADED, __bundle_register, __bundle_modules)
 -- Path Validation Module - Uses trace hulls to check if path A→B is walkable
 -- This is NOT movement execution, just validation logic
--- Uses the expensive but accurate algorithm from A_standstillDummy.lua
--- Only called during stuck detection, so performance cost is acceptable
+-- Ported from A_standstillDummy.lua (working reference implementation)
 local PathValidator = {}
 local G = require("MedBot.Core.Globals")
 local Common = require("MedBot.Core.Common")
 
--- Constants (static defaults - player properties don't change during session)
-local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) } -- Player collision hull
-local MaxSpeed = 450 -- Default max speed (TF2 scout speed)
-local gravity = client.GetConVar("sv_gravity") or 800 -- Gravity or default one
-local STEP_HEIGHT = 18 -- Maximum height the player can step up
+-- Constants
+local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
+local MaxSpeed = 450
+local STEP_HEIGHT = 18
 local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
-local MAX_FALL_DISTANCE = 250 -- Maximum distance the player can fall without taking fall damage
+local MAX_FALL_DISTANCE = 250
 local MAX_FALL_DISTANCE_Vector = Vector3(0, 0, MAX_FALL_DISTANCE)
 local STEP_FRACTION = STEP_HEIGHT / MAX_FALL_DISTANCE
-
 local UP_VECTOR = Vector3(0, 0, 1)
-local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval() -- Minimum step size to consider for ground checks
+local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval()
+local MAX_SURFACE_ANGLE = 45
+local MAX_ITERATIONS = 37
 
-local MAX_SURFACE_ANGLE = 45 -- Maximum angle for ground surfaces
-local MAX_ITERATIONS = 37 -- Maximum number of iterations to prevent infinite loops
+-- Debug mode: set at load time, never changes
+local DEBUG_TRACES = false
 
--- Debug flag (set to true to enable trace visualization)
-local DEBUG_TRACES = (G.Menu.Visuals and G.Menu.Visuals.Debug_Mode) or false -- follow global debug setting by default
-
--- Traces tables for debugging (MUST be declared before DrawDebugTraces function)
+-- Debug storage
 local hullTraces = {}
 local lineTraces = {}
-local validationResults = {} -- Store multiple validation results (start, end, result, time)
+local currentTickLogged = -1
 
-local POSITION_TOLERANCE = 8 -- Units tolerance when reusing recent validation result
+-- Trace functions (set at load based on DEBUG_TRACES)
+local TraceHullFunc
+local TraceLineFunc
 
-local lastValidation = {
-	tick = -math.huge,
-	start = nil,
-	goal = nil,
-	result = nil,
-}
+-- Wrap trace hull to log positions for debug visualization
+local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter)
+	local currentTick = globals.TickCount()
 
-local function copyVectorComponents(vec)
-	return { x = vec.x, y = vec.y, z = vec.z }
-end
-
-local function vectorsClose(vec, cached)
-	if not vec or not cached then
-		return false
-	end
-	return math.abs(vec.x - cached.x) <= POSITION_TOLERANCE
-		and math.abs(vec.y - cached.y) <= POSITION_TOLERANCE
-		and math.abs(vec.z - cached.z) <= POSITION_TOLERANCE
-end
-
-local function cacheValidationResult(tick, startPos, goalPos, result)
-	lastValidation.tick = tick
-	lastValidation.start = copyVectorComponents(startPos)
-	lastValidation.goal = copyVectorComponents(goalPos)
-	lastValidation.result = result
-end
-
--- Calculate tick interval at runtime
-local function getTraceExpireTime()
-	return globals.TickInterval() * 4 -- Keep traces for 4 ticks
-end
-
--- Debug visualization function for trace hulls
-function PathValidator.DrawDebugTraces()
-	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode ~= nil then
-		DEBUG_TRACES = G.Menu.Visuals.Debug_Mode
-	end
-	if not DEBUG_TRACES then
-		return
+	if currentTick > currentTickLogged then
+		hullTraces = {}
+		lineTraces = {}
+		currentTickLogged = currentTick
 	end
 
-	local currentTime = globals.RealTime()
-	local expireTime = getTraceExpireTime()
+	local result = engine.TraceHull(startPos, endPos, minHull, maxHull, mask, filter)
 
-	-- Remove expired validation results
-	local i = 1
-	while i <= #validationResults do
-		if (currentTime - validationResults[i].time) > expireTime then
-			table.remove(validationResults, i)
-		else
-			i = i + 1
-		end
-	end
+	table.insert(hullTraces, {
+		startPos = startPos,
+		endPos = result.endpos,
+		tick = currentTick,
+	})
 
-	-- Draw all hull traces as BLUE arrows (background layer)
-	if hullTraces and #hullTraces > 0 then
-		for _, trace in ipairs(hullTraces) do
-			if trace.startPos and trace.endPos then
-				draw.Color(0, 50, 255, 255) -- Blue for hull traces
-				Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
-			end
-		end
-	end
-
-	-- Draw all line traces as white lines (middle layer)
-	if lineTraces and #lineTraces > 0 then
-		for _, trace in ipairs(lineTraces) do
-			if trace.startPos and trace.endPos then
-				draw.Color(255, 255, 255, 255) -- White for line traces
-				local w2s_start = client.WorldToScreen(trace.startPos)
-				local w2s_end = client.WorldToScreen(trace.endPos)
-				if w2s_start and w2s_end then
-					draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
-				end
-			end
-		end
-	end
-
-	-- Draw ALL validation result arrows LAST (foreground layer - GREEN = walkable, RED = blocked)
-	for _, validation in ipairs(validationResults) do
-		if validation.startPos and validation.endPos then
-			if validation.result then
-				draw.Color(0, 255, 0, 255) -- Green for walkable
-			else
-				draw.Color(255, 0, 0, 255) -- Red for blocked
-			end
-			Common.DrawArrowLine(validation.startPos, validation.endPos, 10, 20, false)
-		end
-	end
+	return result
 end
 
--- Toggle debug visualization on/off
-function PathValidator.ToggleDebug()
-	local newState = not DEBUG_TRACES
-	DEBUG_TRACES = newState
-	if G.Menu.Visuals then
-		G.Menu.Visuals.Debug_Mode = newState
+-- Wrap trace line to log positions for debug visualization
+local function traceLineWrapper(startPos, endPos, mask, filter)
+	local currentTick = globals.TickCount()
+
+	if currentTick > currentTickLogged then
+		hullTraces = {}
+		lineTraces = {}
+		currentTickLogged = currentTick
 	end
-	print("PathValidator debug mode: " .. (newState and "ENABLED" or "DISABLED"))
+
+	local result = engine.TraceLine(startPos, endPos, mask, filter)
+
+	table.insert(lineTraces, {
+		startPos = startPos,
+		endPos = result.endpos,
+		tick = currentTick,
+	})
+
+	return result
 end
 
--- Get current debug state
-function PathValidator.IsDebugEnabled()
-	return DEBUG_TRACES
+-- Initialize trace functions based on debug mode at load time
+if DEBUG_TRACES then
+	TraceHullFunc = traceHullWrapper
+	TraceLineFunc = traceLineWrapper
+else
+	TraceHullFunc = engine.TraceHull
+	TraceLineFunc = engine.TraceLine
 end
 
--- Clear debug traces (call this before each ISWalkable check)
-function PathValidator.ClearDebugTraces()
-	hullTraces = {}
-	lineTraces = {}
-	validationResults = {}
-end
-
+-- Filter function for traces
 local function shouldHitEntity(entity)
-	-- Use fresh player reference from globals (updated every tick)
 	local pLocal = G.pLocal and G.pLocal.entity
-	return entity ~= pLocal -- Ignore self (the player being simulated)
+	return entity ~= pLocal
+end
+
+local function Normalize(vec)
+	return vec / vec:Length()
 end
 
 local function getHorizontalManhattanDistance(point1, point2)
 	return math.abs(point1.x - point2.x) + math.abs(point1.y - point2.y)
 end
 
--- Perform a hull trace to check for obstructions between two points
-local function performTraceHull(startPos, endPos)
-	local result =
-		engine.TraceHull(startPos, endPos, PLAYER_HULL.Min, PLAYER_HULL.Max, MASK_PLAYERSOLID, shouldHitEntity)
-
-	local currentTime = globals.RealTime()
-	local expireTime = getTraceExpireTime()
-
-	-- Before adding new trace, remove old ones (older than 4 ticks)
-	local i = 1
-	while i <= #hullTraces do
-		if (currentTime - hullTraces[i].time) > expireTime then
-			table.remove(hullTraces, i)
-		else
-			i = i + 1
-		end
-	end
-
-	-- Add new trace
-	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos, time = currentTime })
-	return result
-end
-
 -- Adjust the direction vector to align with the surface normal
 local function adjustDirectionToSurface(direction, surfaceNormal)
-	direction = Common.Normalize(direction)
+	direction = Normalize(direction)
 	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
 
-	-- Check if the surface is within the maximum allowed angle for adjustment
 	if angle > MAX_SURFACE_ANGLE then
 		return direction
 	end
 
 	local dotProduct = direction:Dot(surfaceNormal)
-
-	-- Adjust the z component of the direction in place
 	direction.z = direction.z - surfaceNormal.z * dotProduct
 
-	-- Normalize the direction after adjustment
-	return Common.Normalize(direction)
+	return Normalize(direction)
 end
 
--- Main function to check walkability
--- Uses the expensive but accurate algorithm from A_standstillDummy.lua
--- Only called during stuck detection, so performance cost is acceptable
-function PathValidator.Path(startPos, goalPos, overrideMode)
-	-- Don't clear traces - accumulate them over time
-	-- Old traces are removed in DrawDebugTraces based on timestamp
-
-	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode ~= nil then
-		DEBUG_TRACES = G.Menu.Visuals.Debug_Mode
-	end
-
-	local currentTick = globals.TickCount()
-	if (currentTick - lastValidation.tick) < 11 then
-		if vectorsClose(startPos, lastValidation.start) and vectorsClose(goalPos, lastValidation.goal) then
-			return lastValidation.result
-		end
-	end
-
-	local checkTime = globals.RealTime() -- Record when check happened
-
-	if DEBUG_TRACES then
-		print(
-			string.format(
-				"PathValidator: Checking path from (%.0f,%.0f,%.0f) to (%.0f,%.0f,%.0f)",
-				startPos.x,
-				startPos.y,
-				startPos.z,
-				goalPos.x,
-				goalPos.y,
-				goalPos.z
-			)
-		)
-	end
+-- Main walkability check - ported from A_standstillDummy.lua
+function PathValidator.IsWalkable(startPos, goalPos)
+	-- Clear trace tables for debugging
+	hullTraces = {}
+	lineTraces = {}
+	local blocked = false
 
 	-- Initialize variables
 	local currentPos = startPos
 
 	-- Adjust start position to ground level
-	local startGroundTrace = performTraceHull(startPos + STEP_HEIGHT_Vector, startPos - MAX_FALL_DISTANCE_Vector)
+	local startGroundTrace = TraceHullFunc(
+		startPos + STEP_HEIGHT_Vector,
+		startPos - MAX_FALL_DISTANCE_Vector,
+		PLAYER_HULL.Min,
+		PLAYER_HULL.Max,
+		MASK_PLAYERSOLID,
+		shouldHitEntity
+	)
 
 	currentPos = startGroundTrace.endpos
 
@@ -3363,35 +3272,22 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		local distanceToGoal = (currentPos - goalPos):Length()
 		local direction = lastDirection
 
-		-- Calculate next position with incremental steps instead of full distance
-		-- This allows gradual progress even if full path has obstacles
-		local stepDistance = math.min(distanceToGoal, MIN_STEP_SIZE * 2) -- Max 2 step sizes per iteration
-		local NextPos = lastPos + direction * stepDistance
+		-- Calculate next position
+		local NextPos = lastPos + direction * distanceToGoal
 
 		-- Forward collision check
-		local wallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, NextPos + STEP_HEIGHT_Vector)
+		local wallTrace = TraceHullFunc(
+			lastPos + STEP_HEIGHT_Vector,
+			NextPos + STEP_HEIGHT_Vector,
+			PLAYER_HULL.Min,
+			PLAYER_HULL.Max,
+			MASK_PLAYERSOLID,
+			shouldHitEntity
+		)
 		currentPos = wallTrace.endpos
 
 		if wallTrace.fraction == 0 then
-			-- Instead of immediately failing, try to navigate around the obstacle
-			-- by taking a smaller step or adjusting direction
-			local smallerStep = stepDistance * 0.5
-			local alternativePos = lastPos + direction * smallerStep
-			local altWallTrace = performTraceHull(lastPos + STEP_HEIGHT_Vector, alternativePos + STEP_HEIGHT_Vector)
-
-			if altWallTrace.fraction == 0 then
-				-- Store validation result BEFORE returning
-				table.insert(validationResults, {
-					startPos = startPos,
-					endPos = goalPos,
-					result = false,
-					time = checkTime,
-				})
-				cacheValidationResult(currentTick, startPos, goalPos, false)
-				return false -- Still blocked after smaller step - truly unwalkable
-			else
-				currentPos = altWallTrace.endpos -- Use the smaller step that worked
-			end
+			blocked = true -- Path is blocked by a wall
 		end
 
 		-- Ground collision with segmentation
@@ -3404,17 +3300,16 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 			local segmentTop = segmentPos + STEP_HEIGHT_Vector
 			local segmentBottom = segmentPos - MAX_FALL_DISTANCE_Vector
 
-			local groundTrace = performTraceHull(segmentTop, segmentBottom)
+			local groundTrace = TraceHullFunc(
+				segmentTop,
+				segmentBottom,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID,
+				shouldHitEntity
+			)
 
 			if groundTrace.fraction == 1 then
-				-- Store validation result BEFORE returning
-				table.insert(validationResults, {
-					startPos = startPos,
-					endPos = goalPos,
-					result = false,
-					time = checkTime,
-				})
-				cacheValidationResult(currentTick, startPos, goalPos, false)
 				return false -- No ground beneath; path is unwalkable
 			end
 
@@ -3422,43 +3317,20 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 				-- Adjust position to ground
 				direction = adjustDirectionToSurface(direction, groundTrace.plane)
 				currentPos = groundTrace.endpos
+				blocked = false
 				break
 			end
 		end
 
 		-- Calculate current horizontal distance to goal
 		local currentDistance = getHorizontalManhattanDistance(currentPos, goalPos)
-		if currentDistance > MaxDistance then --if target is unreachable
-			-- Store validation result BEFORE returning
-			table.insert(validationResults, {
-				startPos = startPos,
-				endPos = goalPos,
-				result = false,
-				time = checkTime,
-			})
-			cacheValidationResult(currentTick, startPos, goalPos, false)
+		if blocked or currentDistance > MaxDistance then
 			return false
-		elseif currentDistance < 24 then --within range
+		elseif currentDistance < 24 then
 			local verticalDist = math.abs(goalPos.z - currentPos.z)
-			if verticalDist < 24 then --within vertical range
-				-- Store validation result BEFORE returning (SUCCESS)
-				table.insert(validationResults, {
-					startPos = startPos,
-					endPos = goalPos,
-					result = true,
-					time = checkTime,
-				})
-				cacheValidationResult(currentTick, startPos, goalPos, true)
+			if verticalDist < 24 then
 				return true -- Goal is within reach; path is walkable
-			else --unreachable
-				-- Store validation result BEFORE returning
-				table.insert(validationResults, {
-					startPos = startPos,
-					endPos = goalPos,
-					result = false,
-					time = checkTime,
-				})
-				cacheValidationResult(currentTick, startPos, goalPos, false)
+			else
 				return false -- Goal is too far vertically; path is unwalkable
 			end
 		end
@@ -3468,20 +3340,39 @@ function PathValidator.Path(startPos, goalPos, overrideMode)
 		lastDirection = direction
 	end
 
-	-- Store validation result BEFORE returning (max iterations)
-	table.insert(validationResults, {
-		startPos = startPos,
-		endPos = goalPos,
-		result = false,
-		time = checkTime,
-	})
-	cacheValidationResult(currentTick, startPos, goalPos, false)
 	return false -- Max iterations reached without finding a path
 end
 
--- Simple wrapper function for checking if a position is walkable from another position
-function PathValidator.IsWalkable(fromPos, toPos)
-	return PathValidator.Path(fromPos, toPos)
+-- Debug visualization - call once per frame
+function PathValidator.DrawDebugTraces()
+	if not DEBUG_TRACES then
+		return
+	end
+
+	-- Draw hull traces as blue arrows
+	for _, trace in ipairs(hullTraces) do
+		if trace.startPos and trace.endPos then
+			draw.Color(0, 50, 255, 255)
+			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+		end
+	end
+
+	-- Draw line traces as white lines
+	for _, trace in ipairs(lineTraces) do
+		if trace.startPos and trace.endPos then
+			draw.Color(255, 255, 255, 255)
+			local w2s_start = client.WorldToScreen(trace.startPos)
+			local w2s_end = client.WorldToScreen(trace.endPos)
+			if w2s_start and w2s_end then
+				draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+			end
+		end
+	end
+end
+
+-- Toggle debug (for runtime switching if needed)
+function PathValidator.SetDebug(enabled)
+	DEBUG_TRACES = enabled
 end
 
 return PathValidator
@@ -5828,6 +5719,624 @@ return {
 }
 
 end)
+__bundle_register("MedBot.Bot.IsNavigableTest", function(require, _LOADED, __bundle_register, __bundle_modules)
+--[[
+    IsNavigable Test Suite
+    Test module for node-based navigation skipping
+    Author: titaniummachine1 (github.com/titaniummachine1)
+]]
+
+local G = require("MedBot.Core.Globals")
+
+-- Test state variables
+local TestState = {
+	enabled = false,
+	startPos = nil,
+	currentPos = nil,
+	isNavigable = false,
+	showVisuals = true,
+
+	-- Benchmark data
+	benchmarkRecords = {},
+	MAX_RECORDS = 66,
+	averageMemoryUsage = 0,
+	averageTimeUsage = 0,
+
+	-- Visual data
+	hullTraces = {},
+	lineTraces = {},
+}
+
+-- Load Navigable module
+local Navigable = require("MedBot.Navigation.isWalkable.isNavigable")
+
+-- Constants
+local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
+
+-- Benchmark functions
+local function BenchmarkStart()
+	collectgarbage("collect")
+	local startMemory = collectgarbage("count")
+	local startTime = os.clock()
+	return startTime, startMemory
+end
+
+local function BenchmarkStop(startTime, startMemory)
+	local stopTime = os.clock()
+	collectgarbage("collect")
+	local stopMemory = collectgarbage("count")
+
+	local elapsedTime = math.max(stopTime - startTime, 0)
+	local memoryDelta = math.abs(stopMemory - startMemory)
+
+	table.insert(TestState.benchmarkRecords, 1, { time = elapsedTime, memory = memoryDelta })
+	if #TestState.benchmarkRecords > TestState.MAX_RECORDS then
+		table.remove(TestState.benchmarkRecords)
+	end
+
+	local totalTime, totalMemory = 0, 0
+	for _, record in ipairs(TestState.benchmarkRecords) do
+		totalTime = totalTime + record.time
+		totalMemory = totalMemory + record.memory
+	end
+
+	TestState.averageTimeUsage = totalTime / #TestState.benchmarkRecords
+	TestState.averageMemoryUsage = totalMemory / #TestState.benchmarkRecords
+end
+
+-- Normalize vector
+local function Normalize(vec)
+	return vec / vec:Length()
+end
+
+-- Arrow line drawing function
+local function ArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
+	if not (start_pos and end_pos) then
+		return
+	end
+
+	if invert then
+		start_pos, end_pos = end_pos, start_pos
+	end
+
+	local direction = end_pos - start_pos
+	local min_acceptable_length = arrowhead_length + (arrowhead_width / 2)
+	if direction:Length() < min_acceptable_length then
+		local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
+		if not (w2s_start and w2s_end) then
+			return
+		end
+		draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+		return
+	end
+
+	local normalized_direction = Normalize(direction)
+	local arrow_base = end_pos - normalized_direction * arrowhead_length
+	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
+
+	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
+	local w2s_arrow_base = client.WorldToScreen(arrow_base)
+	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
+	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
+
+	if not (w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2) then
+		return
+	end
+
+	draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
+	draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp2[2])
+	draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
+	draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
+end
+
+-- Draw 3D box at position
+local function Draw3DBox(size, pos)
+	local halfSize = size / 2
+	local corners = {
+		Vector3(-halfSize, -halfSize, -halfSize),
+		Vector3(halfSize, -halfSize, -halfSize),
+		Vector3(halfSize, halfSize, -halfSize),
+		Vector3(-halfSize, halfSize, -halfSize),
+		Vector3(-halfSize, -halfSize, halfSize),
+		Vector3(halfSize, -halfSize, halfSize),
+		Vector3(halfSize, halfSize, halfSize),
+		Vector3(-halfSize, halfSize, halfSize),
+	}
+
+	local linesToDraw = {
+		{ 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 1 },
+		{ 5, 6 }, { 6, 7 }, { 7, 8 }, { 8, 5 },
+		{ 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },
+	}
+
+	local screenPositions = {}
+	for _, cornerPos in ipairs(corners) do
+		local worldPos = pos + cornerPos
+		local screenPos = client.WorldToScreen(worldPos)
+		if screenPos then
+			table.insert(screenPositions, { x = screenPos[1], y = screenPos[2] })
+		end
+	end
+
+	for _, line in ipairs(linesToDraw) do
+		local p1, p2 = screenPositions[line[1]], screenPositions[line[2]]
+		if p1 and p2 then
+			draw.Line(p1.x, p1.y, p2.x, p2.y)
+		end
+	end
+end
+
+-- CreateMove callback
+local function OnCreateMove(Cmd)
+	-- Check menu state first
+	if not G.Menu.Visuals.IsNavigableTest then
+		return
+	end
+
+	-- Set enabled and initialize startPos if needed
+	if not TestState.enabled then
+		TestState.enabled = true
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal and pLocal:IsAlive() and not TestState.startPos then
+			TestState.startPos = pLocal:GetAbsOrigin()
+		end
+	end
+
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal or not pLocal:IsAlive() then
+		return
+	end
+
+	TestState.currentPos = pLocal:GetAbsOrigin()
+
+	-- Shift to reset position
+	if input.IsButtonDown(KEY_LSHIFT) then
+		TestState.startPos = TestState.currentPos
+		return
+	end
+
+	-- Don't interfere with movement
+	if Cmd:GetForwardMove() ~= 0 or Cmd:GetSideMove() ~= 0 then
+		return
+	end
+
+	-- Only run test when F key is held
+	if not input.IsButtonDown(KEY_F) then
+		return
+	end
+
+	-- Only run test if we have both positions and they're far enough apart
+	if TestState.startPos and (TestState.currentPos - TestState.startPos):Length() > 10 then
+		-- Get current node for start position
+		local Node = require("MedBot.Navigation.Node")
+		local startNode = Node.GetAreaAtPosition(TestState.currentPos)
+
+		if startNode then
+			local startTime, startMemory = BenchmarkStart()
+			TestState.isNavigable = Navigable.CanSkip(TestState.currentPos, TestState.startPos, startNode)
+			BenchmarkStop(startTime, startMemory)
+		else
+			TestState.isNavigable = false
+		end
+	end
+end
+
+-- Draw callback
+local function OnDraw()
+	-- Check menu state first
+	if not G.Menu.Visuals.IsNavigableTest then
+		return
+	end
+
+	if engine.Con_IsVisible() or engine.IsGameUIVisible() then
+		return
+	end
+
+	draw.SetFont(Fonts.Verdana)
+	draw.Color(255, 255, 255, 255)
+
+	-- Draw target position box
+	if TestState.startPos then
+		Draw3DBox(10, TestState.startPos)
+	end
+
+	-- Draw navigability test and arrow
+	if TestState.startPos and TestState.currentPos and (TestState.currentPos - TestState.startPos):Length() > 10 then
+		if TestState.isNavigable then
+			draw.Color(0, 255, 0, 255)
+		else
+			draw.Color(255, 0, 0, 255)
+		end
+		ArrowLine(TestState.currentPos, TestState.startPos, 10, 20, false)
+	end
+
+	-- Draw benchmark info
+	draw.Color(255, 255, 255, 255)
+	draw.Text(20, 120, string.format("IsNavigable Test: %s", G.Menu.Visuals.IsNavigableTest and "ON" or "OFF"))
+	draw.Text(20, 150, string.format("Memory usage: %.2f KB", TestState.averageMemoryUsage))
+	draw.Text(20, 180, string.format("Time usage: %.2f ms", TestState.averageTimeUsage * 1000))
+	draw.Text(20, 210, string.format("Result: %s", TestState.isNavigable and "NAVIGABLE" or "NOT NAVIGABLE"))
+	draw.Text(20, 240, "Press SHIFT to set start | Hold F to test")
+
+	-- Draw debug traces from Navigable module
+	Navigable.DrawDebugTraces()
+end
+
+-- Toggle function
+local function ToggleTest()
+	TestState.enabled = not TestState.enabled
+	if TestState.enabled then
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal and pLocal:IsAlive() then
+			TestState.startPos = pLocal:GetAbsOrigin()
+		end
+		print("IsNavigable Test Suite: ENABLED")
+		client.Command('play "ui/buttonclick"', true)
+	else
+		print("IsNavigable Test Suite: DISABLED")
+		client.Command('play "ui/buttonclick_release"', true)
+	end
+end
+
+-- Public API
+local IsNavigableTest = {
+	Toggle = ToggleTest,
+	IsEnabled = function()
+		return TestState.enabled
+	end,
+	GetState = function()
+		return TestState
+	end,
+}
+
+-- Auto-register callbacks
+callbacks.Register("CreateMove", "IsNavigableTest_CreateMove", OnCreateMove)
+callbacks.Register("Draw", "IsNavigableTest_Draw", OnDraw)
+
+-- Add to global for easy access
+G.IsNavigableTest = IsNavigableTest
+
+print("IsNavigable Test Suite loaded. Use G.IsNavigableTest.Toggle() to enable/disable.")
+
+return IsNavigableTest
+
+end)
+__bundle_register("MedBot.Navigation.isWalkable.isNavigable", function(require, _LOADED, __bundle_register, __bundle_modules)
+-- Optimized Node-Based Path Validator for Door/Portal Skipping
+-- Uses ray-AABB intersection and height interpolation instead of constant trace-downs
+local Navigable = {}
+local G = require("MedBot.Core.Globals")
+local Common = require("MedBot.Core.Common")
+
+-- Constants
+local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
+local STEP_HEIGHT = 18
+local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
+local MAX_FALL_DISTANCE = 250
+local MAX_FALL_DISTANCE_Vector = Vector3(0, 0, MAX_FALL_DISTANCE)
+local UP_VECTOR = Vector3(0, 0, 1)
+local MAX_SURFACE_ANGLE = 45
+local MAX_NODES_TO_SKIP = 10
+
+-- Debug mode (set at load time)
+local DEBUG_TRACES = false
+
+-- Trace wrappers for debug
+local TraceHullFunc
+local TraceLineFunc
+
+-- Debug storage
+local hullTraces = {}
+local lineTraces = {}
+local currentTickLogged = -1
+
+local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter)
+	local currentTick = globals.TickCount()
+	if currentTick > currentTickLogged then
+		hullTraces = {}
+		lineTraces = {}
+		currentTickLogged = currentTick
+	end
+	local result = engine.TraceHull(startPos, endPos, minHull, maxHull, mask, filter)
+	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos, tick = currentTick })
+	return result
+end
+
+local function traceLineWrapper(startPos, endPos, mask, filter)
+	local currentTick = globals.TickCount()
+	if currentTick > currentTickLogged then
+		hullTraces = {}
+		lineTraces = {}
+		currentTickLogged = currentTick
+	end
+	local result = engine.TraceLine(startPos, endPos, mask, filter)
+	table.insert(lineTraces, { startPos = startPos, endPos = result.endpos, tick = currentTick })
+	return result
+end
+
+if DEBUG_TRACES then
+	TraceHullFunc = traceHullWrapper
+	TraceLineFunc = traceLineWrapper
+else
+	TraceHullFunc = engine.TraceHull
+	TraceLineFunc = engine.TraceLine
+end
+
+-- Filter function
+local function shouldHitEntity(entity)
+	local pLocal = G.pLocal and G.pLocal.entity
+	return entity ~= pLocal
+end
+
+-- Get height at position within node using bilinear interpolation of corner heights
+local function getHeightAtPositionInNode(pos, node)
+	if not node.nw or not node.ne or not node.sw or not node.se then
+		return node.pos.z
+	end
+
+	local x = math.max(0, math.min(1, (pos.x - node._minX) / (node._maxX - node._minX)))
+	local y = math.max(0, math.min(1, (pos.y - node._minY) / (node._maxY - node._minY)))
+
+	local topHeight = node.nw.z * (1 - x) + node.ne.z * x
+	local bottomHeight = node.sw.z * (1 - x) + node.se.z * x
+
+	return topHeight * (1 - y) + bottomHeight * y
+end
+
+-- Ray-AABB intersection for axis-aligned node
+-- Returns: hit point (Vector3 or nil), distance, exit face (1=N, 2=S, 3=E, 4=W or nil)
+local function rayAABBIntersect(rayOrigin, rayDir, node)
+	local tmin = -math.huge
+	local tmax = math.huge
+	local exitFace = nil
+
+	-- X axis
+	if rayDir.x ~= 0 then
+		local tx1 = (node._minX - rayOrigin.x) / rayDir.x
+		local tx2 = (node._maxX - rayOrigin.x) / rayDir.x
+		if tx1 > tx2 then
+			tx1, tx2 = tx2, tx1
+		end
+		tmin = math.max(tmin, tx1)
+		tmax = math.min(tmax, tx2)
+		exitFace = (rayDir.x > 0) and 3 or 4 -- E or W
+	elseif rayOrigin.x < node._minX or rayOrigin.x > node._maxX then
+		return nil, 0, nil
+	end
+
+	-- Y axis
+	if rayDir.y ~= 0 then
+		local ty1 = (node._minY - rayOrigin.y) / rayDir.y
+		local ty2 = (node._maxY - rayOrigin.y) / rayDir.y
+		if ty1 > ty2 then
+			ty1, ty2 = ty2, ty1
+		end
+		tmin = math.max(tmin, ty1)
+		tmax = math.min(tmax, ty2)
+		if tmin == ty1 then
+			exitFace = (rayDir.y > 0) and 1 or 2 -- N or S
+		end
+	elseif rayOrigin.y < node._minY or rayOrigin.y > node._maxY then
+		return nil, 0, nil
+	end
+
+	if tmax < 0 or tmin > tmax then
+		return nil, 0, nil
+	end
+
+	local t = (tmin < 0) and tmax or tmin
+	if t < 0 then
+		return nil, 0, nil
+	end
+
+	return rayOrigin + rayDir * t, t, exitFace
+end
+
+-- Check if point is on valid connection between two nodes
+local function isPointOnConnection(point, fromNode, toNode)
+	if not fromNode.c then
+		return false
+	end
+
+	for dirId, dir in pairs(fromNode.c) do
+		if dir.connections then
+			for _, conn in ipairs(dir.connections) do
+				local targetId = type(conn) == "table" and conn.node or conn
+				if targetId == toNode.id then
+					-- Check if point is within door bounds if door exists
+					if dir.door then
+						local door = dir.door
+						if
+							point.x >= door.minX
+							and point.x <= door.maxX
+							and point.y >= door.minY
+							and point.y <= door.maxY
+						then
+							return true
+						end
+					else
+						-- No door, assume connection is at shared edge
+						return true
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
+-- Normalize vector
+local function Normalize(vec)
+	return vec / vec:Length()
+end
+
+-- Main function: Check if we can skip from startPos to goalPos through connected nodes
+function Navigable.CanSkip(startPos, goalPos, startNode)
+	if not startNode then
+		return false
+	end
+
+	local nodes = G.Navigation.nodes
+	if not nodes then
+		return false
+	end
+
+	-- Trace down at start to get initial ground height
+	local startGroundTrace = TraceHullFunc(
+		startPos + STEP_HEIGHT_Vector,
+		startPos - MAX_FALL_DISTANCE_Vector,
+		PLAYER_HULL.Min,
+		PLAYER_HULL.Max,
+		MASK_PLAYERSOLID,
+		shouldHitEntity
+	)
+	local currentPos = startGroundTrace.endpos
+	local currentNode = startNode
+	local direction = Normalize(goalPos - startPos)
+
+	for step = 1, MAX_NODES_TO_SKIP do
+		-- Check if we reached goal node
+		local goalNode = G.Navigation and G.Navigation.GetAreaAtPosition and G.Navigation.GetAreaAtPosition(goalPos)
+		if not goalNode then
+			-- Fallback: find node containing goalPos
+			for _, node in pairs(nodes) do
+				if
+					not node.isDoor
+					and goalPos.x >= node._minX
+					and goalPos.x <= node._maxX
+					and goalPos.y >= node._minY
+					and goalPos.y <= node._maxY
+				then
+					goalNode = node
+					break
+				end
+			end
+		end
+
+		if currentNode == goalNode then
+			-- Final trace to goal
+			local distToGoal = (currentPos - goalPos):Length()
+			if distToGoal < 1 then
+				return true
+			end
+
+			local finalTrace = TraceHullFunc(
+				currentPos + STEP_HEIGHT_Vector,
+				goalPos + STEP_HEIGHT_Vector,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID,
+				shouldHitEntity
+			)
+			return finalTrace.fraction > 0.9
+		end
+
+		-- Find exit point from current node
+		local exitPoint, dist, exitFace = rayAABBIntersect(currentPos, direction, currentNode)
+		if not exitPoint then
+			return false
+		end
+
+		-- Get interpolated height at exit point
+		local exitHeight = getHeightAtPositionInNode(exitPoint, currentNode)
+		local exitPos = Vector3(exitPoint.x, exitPoint.y, exitHeight)
+
+		-- Trace forward to exit point
+		local forwardTrace = TraceHullFunc(
+			currentPos + STEP_HEIGHT_Vector,
+			exitPos + STEP_HEIGHT_Vector,
+			PLAYER_HULL.Min,
+			PLAYER_HULL.Max,
+			MASK_PLAYERSOLID,
+			shouldHitEntity
+		)
+
+		if forwardTrace.fraction < 1.0 then
+			return false -- Blocked
+		end
+
+		-- Find which node we're entering through the connection
+		local nextNode = nil
+		if currentNode.c then
+			for dirId, dir in pairs(currentNode.c) do
+				if dir.connections then
+					for _, conn in ipairs(dir.connections) do
+						local targetId = type(conn) == "table" and conn.node or conn
+						local targetNode = nodes[targetId]
+						if targetNode and not targetNode.isDoor then
+							-- Check if exit point is on this connection
+							if isPointOnConnection(exitPos, currentNode, targetNode) then
+								nextNode = targetNode
+								break
+							end
+						end
+					end
+				end
+				if nextNode then
+					break
+				end
+			end
+		end
+
+		if not nextNode then
+			return false -- No valid connection
+		end
+
+		-- Trace down at entry point of new node to validate ground
+		local entryGroundTrace = TraceHullFunc(
+			exitPos + STEP_HEIGHT_Vector,
+			exitPos - MAX_FALL_DISTANCE_Vector,
+			PLAYER_HULL.Min,
+			PLAYER_HULL.Max,
+			MASK_PLAYERSOLID,
+			shouldHitEntity
+		)
+
+		if entryGroundTrace.fraction == 1.0 then
+			return false -- No ground
+		end
+
+		-- Update position and node
+		currentPos = entryGroundTrace.endpos
+		currentNode = nextNode
+		direction = Normalize(goalPos - currentPos)
+	end
+
+	return false -- Exceeded max nodes
+end
+
+-- Debug visualization
+function Navigable.DrawDebugTraces()
+	if not DEBUG_TRACES then
+		return
+	end
+
+	for _, trace in ipairs(hullTraces) do
+		if trace.startPos and trace.endPos then
+			draw.Color(0, 50, 255, 255)
+			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
+		end
+	end
+
+	for _, trace in ipairs(lineTraces) do
+		if trace.startPos and trace.endPos then
+			draw.Color(255, 255, 255, 255)
+			local w2s_start = client.WorldToScreen(trace.startPos)
+			local w2s_end = client.WorldToScreen(trace.endPos)
+			if w2s_start and w2s_end then
+				draw.Line(w2s_start[1], w2s_start[2], w2s_end[1], w2s_end[2])
+			end
+		end
+	end
+end
+
+function Navigable.SetDebug(enabled)
+	DEBUG_TRACES = enabled
+end
+
+return Navigable
+
+end)
 __bundle_register("MedBot.Bot.OptimizedISWalkableTest", function(require, _LOADED, __bundle_register, __bundle_modules)
 --[[
     Optimized ISWalkable Test Suite
@@ -6120,6 +6629,9 @@ local function OnCreateMove(Cmd)
 	end
 end
 
+--never inside funciton
+local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
+
 local function OnDraw()
 	-- Check menu state first
 	if not G.Menu.Visuals.OptimizedISWalkableTest then
@@ -6130,7 +6642,6 @@ local function OnDraw()
 		return
 	end
 
-	local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 	draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 255, 255, 255)
 
@@ -6244,6 +6755,7 @@ __bundle_register("MedBot.Bot.ISWalkableTest", function(require, _LOADED, __bund
     Author: titaniummachine1 (github.com/titaniummachine1)
 ]]
 
+local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 local G = require("MedBot.Core.Globals")
 
 -- Test state variables
@@ -6588,7 +7100,6 @@ local function OnDraw()
 		return
 	end
 
-	local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 	draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 255, 255, 255)
 
@@ -7296,7 +7807,7 @@ local Navigation = require("MedBot.Navigation")
 local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -7409,7 +7920,7 @@ function MovementDecisions.advanceNode()
 
 		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
 		if #G.Navigation.path >= 2 then
-			local PathValidator = require("MedBot.Navigation.IsWalkable")
+			local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 			local nextNode = G.Navigation.path[2]
 			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
 
@@ -7603,7 +8114,7 @@ Logic:
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local WorkManager = require("MedBot.WorkManager")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 
 local Log = Common.Log.new("NodeSkipper")
 
@@ -8304,7 +8815,7 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 	end
 
 	-- Use the existing walkability check from the Node module or PathValidator
-	local PathValidator = require("MedBot.Navigation.IsWalkable")
+	local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 	local isWalkable = PathValidator.IsWalkable(currentPos, nextNode.pos)
 
 	if isWalkable then
@@ -9220,7 +9731,7 @@ local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local SmartJump = require("MedBot.Bot.SmartJump")
 
 local StateHandler = {}

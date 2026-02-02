@@ -2,7 +2,7 @@
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local MathUtils = require("MedBot.Utils.MathUtils")
 
 local Visuals = {}

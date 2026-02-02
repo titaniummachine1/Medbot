@@ -289,6 +289,9 @@ local function OnCreateMove(Cmd)
 	end
 end
 
+--never inside funciton
+local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
+
 local function OnDraw()
 	-- Check menu state first
 	if not G.Menu.Visuals.OptimizedISWalkableTest then
@@ -299,7 +302,6 @@ local function OnDraw()
 		return
 	end
 
-	local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 	draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 255, 255, 255)
 

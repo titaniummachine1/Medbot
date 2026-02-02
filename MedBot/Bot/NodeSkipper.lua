@@ -9,7 +9,7 @@ Logic:
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
 local WorkManager = require("MedBot.WorkManager")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 
 local Log = Common.Log.new("NodeSkipper")
 

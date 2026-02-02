@@ -276,6 +276,21 @@ local function OnDrawMenu()
 		TimMenu.NextLine()
 
 		TimMenu.EndSector()
+		TimMenu.NextLine()
+
+		-- IsNavigable Test Section
+		TimMenu.BeginSector("IsNavigable Test")
+
+		-- Initialize IsNavigableTest menu variables
+		if G.Menu.Visuals.IsNavigableTest == nil then
+			G.Menu.Visuals.IsNavigableTest = false
+		end
+
+		G.Menu.Visuals.IsNavigableTest = TimMenu.Checkbox("IsNavigable Test", G.Menu.Visuals.IsNavigableTest)
+		TimMenu.Tooltip("Test node-based navigation skipping (hold F to test)")
+		TimMenu.NextLine()
+
+		TimMenu.EndSector()
 	end
 
 	-- Always end the menu if we began it

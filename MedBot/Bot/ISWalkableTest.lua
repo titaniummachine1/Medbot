@@ -5,6 +5,7 @@
     Author: titaniummachine1 (github.com/titaniummachine1)
 ]]
 
+local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 local G = require("MedBot.Core.Globals")
 
 -- Test state variables
@@ -349,7 +350,6 @@ local function OnDraw()
 		return
 	end
 
-	local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 	draw.SetFont(Fonts.Verdana)
 	draw.Color(255, 255, 255, 255)
 

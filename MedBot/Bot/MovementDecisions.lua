@@ -9,7 +9,7 @@ local Navigation = require("MedBot.Navigation")
 local MovementController = require("MedBot.Bot.MovementController")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local WorkManager = require("MedBot.WorkManager")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 
 local MovementDecisions = {}
 local Log = Common.Log.new("MovementDecisions")
@@ -122,7 +122,7 @@ function MovementDecisions.advanceNode()
 
 		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
 		if #G.Navigation.path >= 2 then
-			local PathValidator = require("MedBot.Navigation.IsWalkable")
+			local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 			local nextNode = G.Navigation.path[2]
 			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
 

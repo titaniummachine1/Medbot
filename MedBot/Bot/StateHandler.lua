@@ -9,7 +9,7 @@ local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local PathValidator = require("MedBot.Navigation.IsWalkable")
+local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
 local SmartJump = require("MedBot.Bot.SmartJump")
 
 local StateHandler = {}
