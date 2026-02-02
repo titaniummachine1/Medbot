@@ -4,8 +4,6 @@
 ]]
 local Navigable = {}
 local G = require("MedBot.Core.Globals")
-local Node = require("MedBot.Navigation.Node")
-local Common = require("MedBot.Core.Common")
 
 -- Constants
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
@@ -31,48 +29,22 @@ end
 
 local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
 
--- Dummy filter that hits all entities
-local function traceFilter(entity)
-	return true
+local function shouldHitEntity(entity)
+	local pLocal = G.pLocal and G.pLocal.entity
+	return entity ~= pLocal
 end
 
--- Get which node contains this position using spatial query
-local function getNodeAtPosition(pos)
-	return Node.GetAreaAtPosition(pos)
+-- Get which node contains this position (horizontal only)
+local function getNodeAtPosition(pos, nodes)
+	for _, node in pairs(nodes) do
+		if not node.isDoor then
+			if pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY then
+				return node
+			end
+		end
+	end
+	return nil
 end
-
--- Surface angle adjustment (from IsWalkable.lua)
-local UP_VECTOR = Vector3(0, 0, 1)
-local MAX_SURFACE_ANGLE = 45
-
-local function adjustDirectionToSurface(direction, surfaceNormal)
-	local dirLen = direction:Length()
-	if dirLen == 0 then
-		return direction
-	end
-	direction = direction / dirLen
-
-	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
-	if angle > MAX_SURFACE_ANGLE then
-		return direction * dirLen
-	end
-
-	local dotProduct = direction:Dot(surfaceNormal)
-	direction = Vector3(direction.x, direction.y, direction.z - surfaceNormal.z * dotProduct)
-
-	local newLen = direction:Length()
-	if newLen > 0 then
-		direction = direction / newLen
-	end
-
-	return direction * dirLen
-end
-
--- Direction constants
-local DIR_NORTH = 1
-local DIR_SOUTH = 2
-local DIR_EAST = 4
-local DIR_WEST = 8
 
 -- Find where ray exits node bounds
 local function findNodeExit(startPos, dir, node)
@@ -81,7 +53,6 @@ local function findNodeExit(startPos, dir, node)
 
 	local tMin = math.huge
 	local exitX, exitY
-	local exitDir
 
 	-- Check X boundaries
 	if dir.x > 0 then
@@ -90,7 +61,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = maxX
 			exitY = startPos.y + dir.y * t
-			exitDir = DIR_EAST
 		end
 	elseif dir.x < 0 then
 		local t = (minX - startPos.x) / dir.x
@@ -98,7 +68,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = minX
 			exitY = startPos.y + dir.y * t
-			exitDir = DIR_WEST
 		end
 	end
 
@@ -109,7 +78,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = maxY
-			exitDir = DIR_NORTH
 		end
 	elseif dir.y < 0 then
 		local t = (minY - startPos.y) / dir.y
@@ -117,7 +85,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = minY
-			exitDir = DIR_SOUTH
 		end
 	end
 
@@ -125,26 +92,23 @@ local function findNodeExit(startPos, dir, node)
 		return nil
 	end
 
-	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
+	return Vector3(exitX, exitY, startPos.z), tMin
 end
 
 -- MAIN FUNCTION - Trace to borders
-function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
+function Navigable.CanSkip(startPos, goalPos, startNode)
 	assert(startNode, "CanSkip: startNode required")
-
-	if respectPortals == nil then
-		respectPortals = true -- Default: respect doors/portals
-	end
+	local nodes = G.Navigation and G.Navigation.nodes
+	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
 
 	if DEBUG_TRACES then
 		print(
 			string.format(
-				"[IsNavigable] START: From (%.1f, %.1f) to (%.1f, %.1f), respectPortals=%s",
+				"[IsNavigable] START: From (%.1f, %.1f) to (%.1f, %.1f)",
 				startPos.x,
 				startPos.y,
 				goalPos.x,
-				goalPos.y,
-				tostring(respectPortals)
+				goalPos.y
 			)
 		)
 	end
@@ -156,20 +120,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 
 	while iteration < MAX_ITERATIONS do
 		iteration = iteration + 1
-
-		-- Ground snap at start of iteration to handle ramps/height changes
-		local groundSnapTrace = TraceHull(
-			currentPos + STEP_HEIGHT_Vector,
-			currentPos - Vector3(0, 0, 100),
-			PLAYER_HULL.Min,
-			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID,
-			traceFilter
-		)
-
-		if groundSnapTrace.fraction < 1 then
-			currentPos = groundSnapTrace.endpos
-		end
 
 		-- Direction to goal from current position
 		local toGoal = goalPos - currentPos
@@ -183,15 +133,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 		end
 
 		local dir = toGoal / distToGoal
-
-		-- Adjust direction to follow surface (ramps/slopes)
-		if groundSnapTrace.plane then
-			dir = adjustDirectionToSurface(dir, groundSnapTrace.plane)
-			local newLen = dir:Length()
-			if newLen > 0 then
-				dir = dir / newLen
-			end
-		end
 
 		if DEBUG_TRACES then
 			print(
@@ -207,7 +148,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 		end
 
 		-- Check if goal is in current node
-		local goalNode = getNodeAtPosition(goalPos)
+		local goalNode = getNodeAtPosition(goalPos, nodes)
 		if goalNode and goalNode.id == currentNode.id then
 			-- Final trace to goal
 			local finalTrace = TraceHull(
@@ -216,7 +157,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				PLAYER_HULL.Min,
 				PLAYER_HULL.Max,
 				MASK_PLAYERSOLID,
-				traceFilter
+				shouldHitEntity
 			)
 			if finalTrace.fraction > 0.99 then
 				if DEBUG_TRACES then
@@ -233,8 +174,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			end
 		end
 
-		-- Find where we exit current node (toward goal)
-		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
+		-- Find where we exit current node
+		local exitPoint, exitDist = findNodeExit(currentPos, dir, currentNode)
 		if not exitPoint then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
@@ -249,7 +190,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
 			MASK_PLAYERSOLID,
-			traceFilter
+			shouldHitEntity
 		)
 
 		if exitTrace.fraction < 0.99 then
@@ -259,291 +200,30 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			return false
 		end
 
-		-- Get neighbor directly from connection data
-		local neighborNode = nil
-		local connectionId = nil -- Track the actual connection ID for portal checking
-
-		if currentNode.c and currentNode.c[exitDir] then
-			local dirData = currentNode.c[exitDir]
-			if dirData.connections and #dirData.connections > 0 then
-				-- Get first connection (typically only one in each direction)
-				local conn = dirData.connections[1]
-				connectionId = type(conn) == "table" and conn.node or conn
-
-				-- Look up the actual node
-				local nodes = G.Navigation and G.Navigation.nodes
-				if nodes then
-					neighborNode = nodes[connectionId]
-				end
-
-				if DEBUG_TRACES and neighborNode then
-					print(
-						string.format(
-							"[IsNavigable] Found neighbor node %s via exitDir %d connection",
-							tostring(connectionId),
-							exitDir
-						)
-					)
-				end
-
-				-- If neighbor is a door node, traverse through it to find the area
-				if neighborNode and neighborNode.isDoor then
-					if DEBUG_TRACES then
-						print(string.format("[IsNavigable] Door node found, traversing to area..."))
-					end
-					-- Door nodes connect to actual areas - find the one that's not currentNode
-					if neighborNode.c then
-						for doorDirId, doorDirData in pairs(neighborNode.c) do
-							if doorDirData.connections then
-								for _, doorConn in ipairs(doorDirData.connections) do
-									local doorTargetId = type(doorConn) == "table" and doorConn.node or doorConn
-									if doorTargetId ~= currentNode.id then
-										local areaNode = nodes[doorTargetId]
-										if areaNode and not areaNode.isDoor then
-											neighborNode = areaNode
-											if DEBUG_TRACES then
-												print(
-													string.format(
-														"[IsNavigable] Door leads to area node %d",
-														doorTargetId
-													)
-												)
-											end
-											break
-										end
-									end
-								end
-							end
-						end
-					end
-				end
-			end
+		-- Find neighbor node
+		local neighborNode = getNodeAtPosition(exitPoint, nodes)
+		if not neighborNode or neighborNode.id == currentNode.id then
+			-- Try slightly inside neighbor
+			local probePos = exitPoint + dir * 2
+			neighborNode = getNodeAtPosition(probePos, nodes)
 		end
 
 		if not neighborNode then
 			if DEBUG_TRACES then
 				print(
 					string.format(
-						"[IsNavigable] FAIL: No neighbor connection in exitDir %d from node %d",
-						exitDir,
-						currentNode.id
+						"[IsNavigable] FAIL: No neighbor found at exit (%.1f, %.1f)",
+						exitPoint.x,
+						exitPoint.y
 					)
 				)
 			end
 			return false
 		end
 
-		-- Portal checking if enabled
-		if respectPortals then
-			-- Check for door on EITHER side of the boundary
-			local foundPortal = false
-
-			-- Calculate opposite direction for entry check
-			local entryDir
-			if exitDir == DIR_NORTH then
-				entryDir = DIR_SOUTH
-			elseif exitDir == DIR_SOUTH then
-				entryDir = DIR_NORTH
-			elseif exitDir == DIR_EAST then
-				entryDir = DIR_WEST
-			elseif exitDir == DIR_WEST then
-				entryDir = DIR_EAST
-			end
-
-			-- Check exit connection on current node
-			if currentNode.c and currentNode.c[exitDir] then
-				local dirData = currentNode.c[exitDir]
-				if DEBUG_TRACES then
-					print(
-						string.format(
-							"[DEBUG] EXIT side: node=%d dir=%d hasConns=%s hasDoor=%s",
-							currentNode.id,
-							exitDir,
-							tostring(dirData.connections ~= nil),
-							tostring(dirData.door ~= nil)
-						)
-					)
-				end
-
-				if dirData.connections then
-					-- Check if connection to neighbor exists (use connectionId, not neighborNode.id)
-					for _, conn in ipairs(dirData.connections) do
-						local targetId = type(conn) == "table" and conn.node or conn
-						if DEBUG_TRACES then
-							print(
-								string.format(
-									"[DEBUG] EXIT comparing targetId=%s with connectionId=%s",
-									tostring(targetId),
-									tostring(connectionId)
-								)
-							)
-						end
-						if targetId == connectionId then
-							-- Connection exists - check if there's a door
-							if dirData.door then
-								local door = dirData.door
-								if DEBUG_TRACES then
-									print(
-										string.format(
-											"[DEBUG] EXIT door bounds: (%.1f,%.1f)-(%.1f,%.1f)",
-											door.minX,
-											door.minY,
-											door.maxX,
-											door.maxY
-										)
-									)
-								end
-								-- Must be within door bounds
-								if
-									exitPoint.x >= door.minX
-									and exitPoint.x <= door.maxX
-									and exitPoint.y >= door.minY
-									and exitPoint.y <= door.maxY
-								then
-									foundPortal = true
-									if DEBUG_TRACES then
-										print(
-											string.format(
-												"[IsNavigable] Portal found at EXIT with door in dir %d",
-												exitDir
-											)
-										)
-									end
-									break
-								end
-							else
-								-- No door = open connection, allow it
-								foundPortal = true
-								if DEBUG_TRACES then
-									print(
-										string.format(
-											"[IsNavigable] Open connection at EXIT (no door) in dir %d",
-											exitDir
-										)
-									)
-								end
-								break
-							end
-						end
-					end
-				end
-			end
-
-			-- If no exit connection, check entry connection on neighbor node
-			if not foundPortal and neighborNode.c and neighborNode.c[entryDir] then
-				local dirData = neighborNode.c[entryDir]
-				if DEBUG_TRACES then
-					print(
-						string.format(
-							"[DEBUG] ENTRY side: node=%d dir=%d hasConns=%s hasDoor=%s",
-							neighborNode.id,
-							entryDir,
-							tostring(dirData.connections ~= nil),
-							tostring(dirData.door ~= nil)
-						)
-					)
-				end
-
-				if dirData.connections then
-					-- Check if connection to current node exists
-					if DEBUG_TRACES then
-						print(string.format("[DEBUG] ENTRY has %d connections", #dirData.connections))
-					end
-					for _, conn in ipairs(dirData.connections) do
-						local targetId = type(conn) == "table" and conn.node or conn
-						if DEBUG_TRACES then
-							print(
-								string.format(
-									"[DEBUG] ENTRY conn target=%s, looking for=%d",
-									tostring(targetId),
-									currentNode.id
-								)
-							)
-						end
-						if targetId == currentNode.id then
-							-- Connection exists - check if there's a door
-							if dirData.door then
-								local door = dirData.door
-								if DEBUG_TRACES then
-									print(
-										string.format(
-											"[DEBUG] ENTRY door bounds: (%.1f,%.1f)-(%.1f,%.1f)",
-											door.minX,
-											door.minY,
-											door.maxX,
-											door.maxY
-										)
-									)
-								end
-								-- Must be within door bounds
-								if
-									exitPoint.x >= door.minX
-									and exitPoint.x <= door.maxX
-									and exitPoint.y >= door.minY
-									and exitPoint.y <= door.maxY
-								then
-									foundPortal = true
-									if DEBUG_TRACES then
-										print(
-											string.format(
-												"[IsNavigable] Portal found at ENTRY with door in dir %d",
-												entryDir
-											)
-										)
-									end
-									break
-								end
-							else
-								-- No door = open connection, allow it
-								foundPortal = true
-								if DEBUG_TRACES then
-									print(
-										string.format(
-											"[IsNavigable] Open connection at ENTRY (no door) in dir %d",
-											entryDir
-										)
-									)
-								end
-								break
-							end
-						end
-					end
-				end
-			end
-
-			if not foundPortal then
-				if DEBUG_TRACES then
-					print(
-						string.format(
-							"[IsNavigable] FAIL: No portal at boundary (%.1f, %.1f) exit_dir=%d entry_dir=%d",
-							exitPoint.x,
-							exitPoint.y,
-							exitDir,
-							entryDir
-						)
-					)
-				end
-				return false
-			end
-		end
-
-		-- Entry point starts from actual exit point, only clamp if outside bounds
-		local entryX = exitPoint.x
-		local entryY = exitPoint.y
-
-		-- Only clamp if exit point is outside neighbor bounds
-		if entryX < neighborNode._minX then
-			entryX = neighborNode._minX + 0.5
-		elseif entryX > neighborNode._maxX then
-			entryX = neighborNode._maxX - 0.5
-		end
-
-		if entryY < neighborNode._minY then
-			entryY = neighborNode._minY + 0.5
-		elseif entryY > neighborNode._maxY then
-			entryY = neighborNode._maxY - 0.5
-		end
-
+		-- Entry point is exitPoint clamped to neighbor bounds
+		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
+		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
 		local entryPos = Vector3(entryX, entryY, exitPoint.z)
 
 		-- Ground snap at entry
@@ -553,7 +233,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
 			MASK_PLAYERSOLID,
-			traceFilter
+			shouldHitEntity
 		)
 
 		if groundTrace.fraction == 1 then
@@ -585,6 +265,7 @@ function Navigable.DrawDebugTraces()
 	for _, trace in ipairs(hullTraces) do
 		if trace.startPos and trace.endPos then
 			draw.Color(0, 50, 255, 255)
+			local Common = require("MedBot.Core.Common")
 			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 		end
 	end
