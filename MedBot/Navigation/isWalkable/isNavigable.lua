@@ -34,16 +34,10 @@ local function shouldHitEntity(entity)
 	return entity ~= pLocal
 end
 
--- Get which node contains this position (horizontal only)
-local function getNodeAtPosition(pos, nodes)
-	for _, node in pairs(nodes) do
-		if not node.isDoor then
-			if pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY then
-				return node
-			end
-		end
-	end
-	return nil
+-- Get which node contains this position using spatial query
+local function getNodeAtPosition(pos)
+	local Node = require("MedBot.Navigation.Node")
+	return Node.GetAreaAtPosition(pos)
 end
 
 -- Find where ray exits node bounds
@@ -96,19 +90,22 @@ local function findNodeExit(startPos, dir, node)
 end
 
 -- MAIN FUNCTION - Trace to borders
-function Navigable.CanSkip(startPos, goalPos, startNode)
+function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 	assert(startNode, "CanSkip: startNode required")
-	local nodes = G.Navigation and G.Navigation.nodes
-	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
+
+	if respectPortals == nil then
+		respectPortals = false -- Default: ignore doors
+	end
 
 	if DEBUG_TRACES then
 		print(
 			string.format(
-				"[IsNavigable] START: From (%.1f, %.1f) to (%.1f, %.1f)",
+				"[IsNavigable] START: From (%.1f, %.1f) to (%.1f, %.1f), respectPortals=%s",
 				startPos.x,
 				startPos.y,
 				goalPos.x,
-				goalPos.y
+				goalPos.y,
+				tostring(respectPortals)
 			)
 		)
 	end
@@ -148,7 +145,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		end
 
 		-- Check if goal is in current node
-		local goalNode = getNodeAtPosition(goalPos, nodes)
+		local goalNode = getNodeAtPosition(goalPos)
 		if goalNode and goalNode.id == currentNode.id then
 			-- Final trace to goal
 			local finalTrace = TraceHull(
@@ -201,11 +198,11 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		end
 
 		-- Find neighbor node
-		local neighborNode = getNodeAtPosition(exitPoint, nodes)
+		local neighborNode = getNodeAtPosition(exitPoint)
 		if not neighborNode or neighborNode.id == currentNode.id then
 			-- Try slightly inside neighbor
 			local probePos = exitPoint + dir * 2
-			neighborNode = getNodeAtPosition(probePos, nodes)
+			neighborNode = getNodeAtPosition(probePos)
 		end
 
 		if not neighborNode then
@@ -219,6 +216,57 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 				)
 			end
 			return false
+		end
+
+		-- Portal checking if enabled
+		if respectPortals then
+			-- Check if exit point is within a door/portal connecting these nodes
+			local foundPortal = false
+
+			if currentNode.c then
+				for dirId, dirData in pairs(currentNode.c) do
+					if dirData.connections and dirData.door then
+						-- Check if this door connects to our neighbor
+						for _, conn in ipairs(dirData.connections) do
+							local targetId = type(conn) == "table" and conn.node or conn
+							if targetId == neighborNode.id then
+								-- Check if exit point is within door bounds
+								local door = dirData.door
+								if
+									exitPoint.x >= door.minX
+									and exitPoint.x <= door.maxX
+									and exitPoint.y >= door.minY
+									and exitPoint.y <= door.maxY
+								then
+									foundPortal = true
+									break
+								end
+							end
+						end
+					end
+					if foundPortal then
+						break
+					end
+				end
+			end
+
+			if not foundPortal then
+				if DEBUG_TRACES then
+					print(
+						string.format(
+							"[IsNavigable] FAIL: No portal at exit (%.1f, %.1f) to node %d",
+							exitPoint.x,
+							exitPoint.y,
+							neighborNode.id
+						)
+					)
+				end
+				return false
+			end
+
+			if DEBUG_TRACES then
+				print(string.format("[IsNavigable] Portal found at exit to node %d", neighborNode.id))
+			end
 		end
 
 		-- Entry point is exitPoint clamped to neighbor bounds
