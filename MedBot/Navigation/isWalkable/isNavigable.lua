@@ -113,14 +113,24 @@ end
 
 -- Check if position is inside node bounds (horizontal only)
 local function isInNode(pos, node)
+	assert(node, "isInNode: node required")
+	assert(node._minX, "isInNode: node missing bounds")
+	assert(node._minY, "isInNode: node missing bounds")
+	assert(node._maxX, "isInNode: node missing bounds")
+	assert(node._maxY, "isInNode: node missing bounds")
+
 	return pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY
 end
 
 -- MAIN FUNCTION
 function Navigable.CanSkip(startPos, goalPos, startNode)
 	assert(startNode, "CanSkip: startNode required")
+	assert(startNode.c, "CanSkip: startNode has no connections")
+	assert(startNode._minX, "CanSkip: startNode missing bounds")
 
 	local nodes = G.Navigation and G.Navigation.nodes
+	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
+
 	if not nodes then
 		return false
 	end
@@ -180,6 +190,18 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 				)
 				return trace.fraction > 0.99
 			end
+			print(
+				string.format(
+					"[IsNavigable] FAIL: No exit found from node %d at (%.1f, %.1f, %.1f) towards (%.1f, %.1f, %.1f)",
+					currentNode.id,
+					currentPos.x,
+					currentPos.y,
+					currentPos.z,
+					goalPos.x,
+					goalPos.y,
+					goalPos.z
+				)
+			)
 			return false
 		end
 
@@ -203,12 +225,29 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		local neighborNode = getNeighborInDirection(currentNode, exitDir, nodes)
 
 		if not neighborNode then
-			return false -- No connection
+			print(
+				string.format(
+					"[IsNavigable] FAIL: No neighbor in direction %d from node %d at exit (%.1f, %.1f)",
+					exitDir,
+					currentNode.id,
+					exitPoint.x,
+					exitPoint.y
+				)
+			)
+			return false
 		end
 
 		-- Verify portal overlap
 		if not isInsidePortal(exitPoint, exitDir, neighborNode) then
-			return false -- Path goes through wall, not door
+			print(
+				string.format(
+					"[IsNavigable] FAIL: Exit point (%.1f, %.1f) not inside portal to neighbor %d",
+					exitPoint.x,
+					exitPoint.y,
+					neighborNode.id
+				)
+			)
+			return false
 		end
 
 		-- Trace within current node to exit point (check for obstacles)
@@ -222,7 +261,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		)
 
 		if wallTrace.fraction < 0.99 then
-			return false -- Hit obstacle before reaching portal
+			print(
+				string.format(
+					"[IsNavigable] FAIL: Hit obstacle at fraction %.2f in node %d before reaching portal",
+					wallTrace.fraction,
+					currentNode.id
+				)
+			)
+			return false
 		end
 
 		-- Project exitPoint to closest point on neighbor's border
@@ -242,7 +288,15 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		)
 
 		if groundTrace.fraction == 1 then
-			return false -- No ground, gap/cliff
+			print(
+				string.format(
+					"[IsNavigable] FAIL: No ground found at entry (%.1f, %.1f) into node %d - gap/cliff",
+					entryPos.x,
+					entryPos.y,
+					neighborNode.id
+				)
+			)
+			return false
 		end
 
 		-- Update position to grounded entry point and advance to neighbor
@@ -252,6 +306,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		-- Continue loop - will recalculate direction and find next exit
 	end
 
+	print(
+		string.format(
+			"[IsNavigable] FAIL: Max iterations (%d) exceeded, stopped at node %d",
+			MAX_ITERATIONS,
+			currentNode.id
+		)
+	)
 	return false
 end
 
