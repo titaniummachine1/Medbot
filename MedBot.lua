@@ -4991,7 +4991,13 @@ function SetupOrchestrator.ExecuteFullSetup(navFilePath)
 	-- BASIC SETUP COMPLETE - Set global for advanced phases
 	-- ========================================================================
 	G.Navigation.nodes = nodes
-	Log:Info("Basic setup complete: %d nodes ready", #nodes)
+
+	-- Count nodes (dictionary table, # operator doesn't work)
+	local nodeCount = 0
+	for _ in pairs(nodes) do
+		nodeCount = nodeCount + 1
+	end
+	Log:Info("Basic setup complete: %d nodes ready", nodeCount)
 
 	-- ========================================================================
 	-- PHASE 3: Build KD-tree spatial index
@@ -5067,7 +5073,12 @@ function SetupOrchestrator.ExecuteBasicSetup(navFilePath)
 	G.Navigation.nodes = nodes
 	G.Navigation.navMeshUpdated = true
 
-	Log:Info("Basic setup complete: %d nodes", #nodes)
+	-- Count nodes (dictionary table, # operator doesn't work)
+	local nodeCount = 0
+	for _ in pairs(nodes) do
+		nodeCount = nodeCount + 1
+	end
+	Log:Info("Basic setup complete: %d nodes", nodeCount)
 	return nodes
 end
 
