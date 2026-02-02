@@ -6201,7 +6201,19 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return trace.fraction > 0.99
 		end
 
-		-- Trace within node to verify no obstacles
+		-- Find neighbor in exit direction
+		local neighborNode = getNeighborInDirection(currentNode, exitDir, nodes)
+
+		if not neighborNode then
+			return false -- No connection
+		end
+
+		-- Verify portal overlap
+		if not isInsidePortal(exitPoint, exitDir, neighborNode) then
+			return false -- Path goes through wall, not door
+		end
+
+		-- Trace within current node to exit point (check for obstacles)
 		local wallTrace = TraceHull(
 			currentPos + STEP_HEIGHT_Vector,
 			exitPoint + STEP_HEIGHT_Vector,
@@ -6212,45 +6224,34 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		)
 
 		if wallTrace.fraction < 0.99 then
-			return false
+			return false -- Hit obstacle before reaching portal
 		end
 
-		-- Find neighbor
-		local neighborNode = getNeighborInDirection(currentNode, exitDir, nodes)
+		-- Project exitPoint to closest point on neighbor's border
+		-- This is the entry point into the neighbor node
+		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
+		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
+		local entryPos = Vector3(entryX, entryY, exitPoint.z)
 
-		if not neighborNode then
-			return false
-		end
-
-		-- Verify portal overlap
-		if not isInsidePortal(exitPoint, exitDir, neighborNode) then
-			return false
-		end
-
-		-- Find closest point in neighbor node to exit point (clamp to neighbor bounds)
-		local entryPos = Vector3(
-			math.max(neighborNode._minX + 1, math.min(neighborNode._maxX - 1, exitPoint.x)),
-			math.max(neighborNode._minY + 1, math.min(neighborNode._maxY - 1, exitPoint.y)),
-			exitPoint.z
-		)
-
-		-- Ground snap at entry point
-		local downTrace = TraceHull(
+		-- Trace down at entry point to find ground height
+		local groundTrace = TraceHull(
 			entryPos + STEP_HEIGHT_Vector,
-			entryPos - Vector3(0, 0, 50),
+			entryPos - Vector3(0, 0, 100),
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
 			MASK_PLAYERSOLID,
 			shouldHitEntity
 		)
 
-		if downTrace.fraction == 1 then
-			return false
+		if groundTrace.fraction == 1 then
+			return false -- No ground, gap/cliff
 		end
 
-		-- Advance to grounded entry position in new node
-		currentPos = downTrace.endpos
+		-- Update position to grounded entry point and advance to neighbor
+		currentPos = groundTrace.endpos
 		currentNode = neighborNode
+
+		-- Continue loop - will recalculate direction and find next exit
 	end
 
 	return false
