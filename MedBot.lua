@@ -1601,6 +1601,9 @@ Common.WPlayer = Lib.TF2.WPlayer
 Common.PR = Lib.TF2.PlayerResource
 Common.Helpers = Lib.TF2.Helpers
 
+-- Import G module at file scope
+local G = require("MedBot.Core.Globals")
+
 -- Safe logging system (replaces LNX Logger)
 local function safePrint(msg)
 	local success, err = pcall(print, msg)
@@ -1639,7 +1642,6 @@ end
 
 function Logger:Debug(msg, ...)
 	-- Only print debug messages if debug is enabled in menu
-	local G = require("MedBot.Core.Globals")
 	if not (G.Menu.Visuals and G.Menu.Visuals.Debug_Mode) then
 		return -- Skip debug output when debug is disabled
 	end
@@ -1990,7 +1992,6 @@ end
 
 -- Debug logging wrapper (deprecated - Logger:Debug now handles menu check automatically)
 function Common.DebugLog(level, ...)
-	local G = require("MedBot.Core.Globals")
 	if G.Menu.Visuals and G.Menu.Visuals.Debug_Mode then
 		Common.Log[level](...)
 	end
