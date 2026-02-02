@@ -163,7 +163,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			currentPos - Vector3(0, 0, 100),
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID
+			MASK_PLAYERSOLID,
+			traceFilter
 		)
 
 		if groundSnapTrace.fraction < 1 then
@@ -214,7 +215,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				goalPos + STEP_HEIGHT_Vector,
 				PLAYER_HULL.Min,
 				PLAYER_HULL.Max,
-				MASK_PLAYERSOLID
+				MASK_PLAYERSOLID,
+				traceFilter
 			)
 			if finalTrace.fraction > 0.99 then
 				if DEBUG_TRACES then
@@ -231,7 +233,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			end
 		end
 
-		-- Find where we exit current node
+		-- Find where we exit current node (toward goal)
 		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
 		if not exitPoint then
 			if DEBUG_TRACES then
@@ -246,7 +248,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			exitPoint + STEP_HEIGHT_Vector,
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID
+			MASK_PLAYERSOLID,
+			traceFilter
 		)
 
 		if exitTrace.fraction < 0.99 then
@@ -524,9 +527,23 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			end
 		end
 
-		-- Entry point is exitPoint clamped to neighbor bounds
-		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
-		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
+		-- Entry point starts from actual exit point, only clamp if outside bounds
+		local entryX = exitPoint.x
+		local entryY = exitPoint.y
+
+		-- Only clamp if exit point is outside neighbor bounds
+		if entryX < neighborNode._minX then
+			entryX = neighborNode._minX + 0.5
+		elseif entryX > neighborNode._maxX then
+			entryX = neighborNode._maxX - 0.5
+		end
+
+		if entryY < neighborNode._minY then
+			entryY = neighborNode._minY + 0.5
+		elseif entryY > neighborNode._maxY then
+			entryY = neighborNode._maxY - 0.5
+		end
+
 		local entryPos = Vector3(entryX, entryY, exitPoint.z)
 
 		-- Ground snap at entry
@@ -535,7 +552,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			entryPos - Vector3(0, 0, 100),
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID
+			MASK_PLAYERSOLID,
+			traceFilter
 		)
 
 		if groundTrace.fraction == 1 then
