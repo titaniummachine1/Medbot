@@ -31,6 +31,11 @@ end
 
 local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
 
+-- Dummy filter that hits all entities
+local function traceFilter(entity)
+	return true
+end
+
 -- Get which node contains this position using spatial query
 local function getNodeAtPosition(pos)
 	return Node.GetAreaAtPosition(pos)
