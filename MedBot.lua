@@ -6046,13 +6046,45 @@ end
 local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
 
 local function shouldHitEntity(entity)
+	-- Return false to ignore entity, true to hit it
+	-- Ignore local player
 	local pLocal = G.pLocal and G.pLocal.entity
-	return entity ~= pLocal
+	if entity == pLocal then
+		return false
+	end
+	return true
 end
 
 -- Get which node contains this position using spatial query
 local function getNodeAtPosition(pos)
 	return Node.GetAreaAtPosition(pos)
+end
+
+-- Surface angle adjustment (from IsWalkable.lua)
+local UP_VECTOR = Vector3(0, 0, 1)
+local MAX_SURFACE_ANGLE = 45
+
+local function adjustDirectionToSurface(direction, surfaceNormal)
+	local dirLen = direction:Length()
+	if dirLen == 0 then
+		return direction
+	end
+	direction = direction / dirLen
+
+	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
+	if angle > MAX_SURFACE_ANGLE then
+		return direction * dirLen
+	end
+
+	local dotProduct = direction:Dot(surfaceNormal)
+	direction = Vector3(direction.x, direction.y, direction.z - surfaceNormal.z * dotProduct)
+
+	local newLen = direction:Length()
+	if newLen > 0 then
+		direction = direction / newLen
+	end
+
+	return direction * dirLen
 end
 
 -- Direction constants
@@ -6144,6 +6176,20 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 	while iteration < MAX_ITERATIONS do
 		iteration = iteration + 1
 
+		-- Ground snap at start of iteration to handle ramps/height changes
+		local groundSnapTrace = TraceHull(
+			currentPos + STEP_HEIGHT_Vector,
+			currentPos - Vector3(0, 0, 100),
+			PLAYER_HULL.Min,
+			PLAYER_HULL.Max,
+			MASK_PLAYERSOLID,
+			shouldHitEntity
+		)
+
+		if groundSnapTrace.fraction < 1 then
+			currentPos = groundSnapTrace.endpos
+		end
+
 		-- Direction to goal from current position
 		local toGoal = goalPos - currentPos
 		local distToGoal = toGoal:Length()
@@ -6156,6 +6202,15 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 		end
 
 		local dir = toGoal / distToGoal
+
+		-- Adjust direction to follow surface (ramps/slopes)
+		if groundSnapTrace.plane then
+			dir = adjustDirectionToSurface(dir, groundSnapTrace.plane)
+			local newLen = dir:Length()
+			if newLen > 0 then
+				dir = dir / newLen
+			end
+		end
 
 		if DEBUG_TRACES then
 			print(
@@ -6242,11 +6297,43 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				if DEBUG_TRACES and neighborNode then
 					print(
 						string.format(
-							"[IsNavigable] Found neighbor node %d via exitDir %d connection",
-							neighborId,
+							"[IsNavigable] Found neighbor node %s via exitDir %d connection",
+							tostring(neighborId),
 							exitDir
 						)
 					)
+				end
+
+				-- If neighbor is a door node, traverse through it to find the area
+				if neighborNode and neighborNode.isDoor then
+					if DEBUG_TRACES then
+						print(string.format("[IsNavigable] Door node found, traversing to area..."))
+					end
+					-- Door nodes connect to actual areas - find the one that's not currentNode
+					if neighborNode.c then
+						for doorDirId, doorDirData in pairs(neighborNode.c) do
+							if doorDirData.connections then
+								for _, doorConn in ipairs(doorDirData.connections) do
+									local doorTargetId = type(doorConn) == "table" and doorConn.node or doorConn
+									if doorTargetId ~= currentNode.id then
+										local areaNode = nodes[doorTargetId]
+										if areaNode and not areaNode.isDoor then
+											neighborNode = areaNode
+											if DEBUG_TRACES then
+												print(
+													string.format(
+														"[IsNavigable] Door leads to area node %d",
+														doorTargetId
+													)
+												)
+											end
+											break
+										end
+									end
+								end
+							end
+						end
+					end
 				end
 			end
 		end
