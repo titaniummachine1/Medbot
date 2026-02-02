@@ -223,11 +223,17 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Ground snap
-		local probePos = exitPoint + (dir * 2)
+		-- Find closest point in neighbor node to exit point (clamp to neighbor bounds)
+		local entryPos = Vector3(
+			math.max(neighborNode._minX + 1, math.min(neighborNode._maxX - 1, exitPoint.x)),
+			math.max(neighborNode._minY + 1, math.min(neighborNode._maxY - 1, exitPoint.y)),
+			exitPoint.z
+		)
+
+		-- Ground snap at entry point
 		local downTrace = TraceHull(
-			probePos + STEP_HEIGHT_Vector,
-			probePos - Vector3(0, 0, 50),
+			entryPos + STEP_HEIGHT_Vector,
+			entryPos - Vector3(0, 0, 50),
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
 			MASK_PLAYERSOLID,
@@ -238,7 +244,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Advance
+		-- Advance to grounded entry position in new node
 		currentPos = downTrace.endpos
 		currentNode = neighborNode
 	end
