@@ -31,16 +31,6 @@ end
 
 local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
 
-local function shouldHitEntity(entity)
-	-- Return false to ignore entity, true to hit it
-	-- Ignore local player
-	local pLocal = G.pLocal and G.pLocal.entity
-	if entity == pLocal then
-		return false
-	end
-	return true
-end
-
 -- Get which node contains this position using spatial query
 local function getNodeAtPosition(pos)
 	return Node.GetAreaAtPosition(pos)
@@ -168,8 +158,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			currentPos - Vector3(0, 0, 100),
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID,
-			shouldHitEntity
+			MASK_PLAYERSOLID
 		)
 
 		if groundSnapTrace.fraction < 1 then
@@ -220,8 +209,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				goalPos + STEP_HEIGHT_Vector,
 				PLAYER_HULL.Min,
 				PLAYER_HULL.Max,
-				MASK_PLAYERSOLID,
-				shouldHitEntity
+				MASK_PLAYERSOLID
 			)
 			if finalTrace.fraction > 0.99 then
 				if DEBUG_TRACES then
@@ -253,8 +241,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			exitPoint + STEP_HEIGHT_Vector,
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID,
-			shouldHitEntity
+			MASK_PLAYERSOLID
 		)
 
 		if exitTrace.fraction < 0.99 then
@@ -266,25 +253,26 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 
 		-- Get neighbor directly from connection data
 		local neighborNode = nil
+		local connectionId = nil -- Track the actual connection ID for portal checking
 
 		if currentNode.c and currentNode.c[exitDir] then
 			local dirData = currentNode.c[exitDir]
 			if dirData.connections and #dirData.connections > 0 then
 				-- Get first connection (typically only one in each direction)
 				local conn = dirData.connections[1]
-				local neighborId = type(conn) == "table" and conn.node or conn
+				connectionId = type(conn) == "table" and conn.node or conn
 
 				-- Look up the actual node
 				local nodes = G.Navigation and G.Navigation.nodes
 				if nodes then
-					neighborNode = nodes[neighborId]
+					neighborNode = nodes[connectionId]
 				end
 
 				if DEBUG_TRACES and neighborNode then
 					print(
 						string.format(
 							"[IsNavigable] Found neighbor node %s via exitDir %d connection",
-							tostring(neighborId),
+							tostring(connectionId),
 							exitDir
 						)
 					)
@@ -370,10 +358,19 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 				end
 
 				if dirData.connections then
-					-- Check if connection to neighbor exists
+					-- Check if connection to neighbor exists (use connectionId, not neighborNode.id)
 					for _, conn in ipairs(dirData.connections) do
 						local targetId = type(conn) == "table" and conn.node or conn
-						if targetId == neighborNode.id then
+						if DEBUG_TRACES then
+							print(
+								string.format(
+									"[DEBUG] EXIT comparing targetId=%s with connectionId=%s",
+									tostring(targetId),
+									tostring(connectionId)
+								)
+							)
+						end
+						if targetId == connectionId then
 							-- Connection exists - check if there's a door
 							if dirData.door then
 								local door = dirData.door
@@ -533,8 +530,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectPortals)
 			entryPos - Vector3(0, 0, 100),
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID,
-			shouldHitEntity
+			MASK_PLAYERSOLID
 		)
 
 		if groundTrace.fraction == 1 then
