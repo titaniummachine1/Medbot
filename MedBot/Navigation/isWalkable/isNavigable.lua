@@ -2,6 +2,10 @@
     Simple Ray-Marching Path Validator
     Like IsWalkable but uses navmesh awareness to minimize traces
 ]]
+
+local vectordivide = vector.Divide
+local vectorLength = vector.Length
+
 local Navigable = {}
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
@@ -124,9 +128,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 	local iteration = 0
 	local MAX_ITERATIONS = 20
 
-	-- Vector normalization speed test
-	local testVector = Vector3(3, 4, 0)
-
 	while iteration < MAX_ITERATIONS do
 		Profiler.Begin("Iteration")
 		iteration = iteration + 1
@@ -134,29 +135,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		-- Direction to goal from current position
 		local toGoal = goalPos - currentPos
 		local distToGoal = toGoal:Length()
-
-		local result = testVector
-		-- Method 1: Divide
-		Profiler.Begin("VecTest_Divide")
-		result = testVector / testVector:Length()
-		Profiler.End("VecTest_Divide")
-
-		-- Method 2: VectorDivide
-		Profiler.Begin("VecTest_VectorDivide")
-		result = vector.Divide(testVector, testVector:Length())
-		Profiler.End("VecTest_VectorDivide")
-
-		local vectordivide = vector.Divide
-		-- Method 2: VectorDivide
-		Profiler.Begin("VecTest_VectorDividelocalized")
-		result = vectordivide(testVector, testVector:Length())
-		Profiler.End("VecTest_VectorDividelocalized")
-
-		result = testVector
-		-- Method 3: Normalize (fresh copy)
-		Profiler.Begin("VecTest_Normalize")
-		result:Normalize()
-		Profiler.End("VecTest_Normalize")
 
 		-- Normalize direction for navigation
 		local dir = distToGoal > 0.001 and Common.Normalize(toGoal) or Vector3(1, 0, 0)

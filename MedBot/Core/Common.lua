@@ -135,10 +135,11 @@ end
 
 Common.JSON = JSON
 local vectorDivide = vector.Divide
+local vectorLength = vector.Length
 
 --- Normalize vector using in-place :Normalize() (fastest method)
 function Common.Normalize(vec)
-	return vector.Divide(vec, vec:Length()) -- Return the normalized vector
+	return vectorDivide(vec, vectorLength(vec)) -- Return the normalized vector
 end
 
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
