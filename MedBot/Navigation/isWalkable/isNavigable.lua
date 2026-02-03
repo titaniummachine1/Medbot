@@ -313,8 +313,40 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			end
 
 			for i, connection in ipairs(dirData.connections) do
-				local targetId = connection.node or (type(connection) == "number" and connection)
+				if DEBUG_TRACES then
+					print(
+						string.format(
+							"[IsNavigable]   Conn %d RAW: type=%s, connection.node=%s, connection.id=%s",
+							i,
+							type(connection),
+							tostring(connection.node),
+							tostring(connection.id)
+						)
+					)
+					if type(connection) == "table" then
+						local keys = {}
+						for k, v in pairs(connection) do
+							table.insert(keys, k .. "=" .. tostring(v))
+						end
+						print(string.format("[IsNavigable]     Keys: %s", table.concat(keys, ", ")))
+					end
+				end
+
+				local targetId = connection.node or connection.id or (type(connection) == "number" and connection)
 				local targetNode = nodes[targetId]
+
+				if DEBUG_TRACES then
+					print(
+						string.format(
+							"[IsNavigable]   Conn %d: targetId=%s, found=%s, isDoor=%s",
+							i,
+							tostring(targetId),
+							tostring(targetNode ~= nil),
+							tostring(targetNode and targetNode.isDoor or "n/a")
+						)
+					)
+				end
+
 				if targetNode and not targetNode.isDoor then
 					-- 1D bounds check on shared axis
 					local onSharedAxis = false
