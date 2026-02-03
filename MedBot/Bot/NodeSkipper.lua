@@ -22,7 +22,12 @@ function NodeSkipper.Tick(playerPos)
 	end
 
 	local path = G.Navigation.path
-	if not path or #path < 2 then
+	if not path or #path < 3 then
+		return
+	end
+
+	local skipTarget = path[3]
+	if not (skipTarget and skipTarget.pos) then
 		return
 	end
 
@@ -31,33 +36,13 @@ function NodeSkipper.Tick(playerPos)
 		return
 	end
 
-	local furthestIdx = 1
+	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false)
 
-	for i = 2, math.min(#path, 10) do
-		local targetNode = path[i]
-		if not (targetNode and targetNode.pos) then
-			break
-		end
+	if success and canSkip then
+		table.remove(path, 1)
+		table.remove(path, 1)
 
-		local success, canSkip = pcall(isNavigable.CanSkip, playerPos, targetNode.pos, currentArea, false)
-
-		if success and canSkip then
-			furthestIdx = i
-		else
-			break
-		end
-	end
-
-	if furthestIdx > 1 then
-		local skippedCount = furthestIdx - 1
-		local targetNode = path[furthestIdx]
-
-		for i = 1, skippedCount do
-			table.remove(path, 1)
-		end
-
-		Log:Info("Skipped %d nodes, now at node %s", skippedCount, tostring(targetNode.id))
-
+		Log:Info("Skipped 2 nodes, now at node %s", tostring(skipTarget.id))
 		G.Navigation.currentNodeIndex = 1
 	end
 end
