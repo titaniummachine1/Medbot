@@ -51,7 +51,15 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 
 	-- Per-tick node skipping (runs every tick)
-	NodeSkipper.Tick(LocalOrigin)
+	if NodeSkipper.Tick(LocalOrigin) then
+		-- Path changed (nodes skipped), rebuild waypoints to match new path
+		Navigation.BuildDoorWaypointsFromPath()
+		Log:Debug("NodeSkipper modified path - waypoints rebuilt")
+
+		-- Don't process "reachedTarget" this tick as it was calculated for the OLD target
+		-- We want to start moving to the new target immediately
+		reachedTarget = false
+	end
 
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
@@ -255,7 +263,7 @@ function MovementDecisions.handleMovingState(userCmd)
 	-- Run all decision components (these don't affect movement execution)
 	MovementDecisions.handleDebugLogging()
 	MovementDecisions.checkDistanceAndAdvance(userCmd)
-	MovementDecisions.checkStuckState()
+	-- MovementDecisions.checkStuckState() -- DISABLED: Deprecated, handled by StateHandler/NodeSkipper
 
 	-- ALWAYS execute movement at the end, regardless of decision outcomes
 	MovementDecisions.executeMovement(userCmd)
