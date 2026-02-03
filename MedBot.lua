@@ -6273,187 +6273,57 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Determine primary and secondary exit directions (for corner exits)
-		local tolerance = 5.0
-		local exitDirs = {}
-
-		-- Check distance to each edge
-		local distNorth = math.abs(exitPoint.y - currentNode._maxY)
-		local distEast = math.abs(exitPoint.x - currentNode._maxX)
-		local distSouth = math.abs(exitPoint.y - currentNode._minY)
-		local distWest = math.abs(exitPoint.x - currentNode._minX)
-
-		-- Add edges within tolerance as candidates
-		if distNorth < tolerance then
-			table.insert(exitDirs, { dir = 1, dist = distNorth, name = "NORTH" })
-		end
-		if distEast < tolerance then
-			table.insert(exitDirs, { dir = 2, dist = distEast, name = "EAST" })
-		end
-		if distSouth < tolerance then
-			table.insert(exitDirs, { dir = 3, dist = distSouth, name = "SOUTH" })
-		end
-		if distWest < tolerance then
-			table.insert(exitDirs, { dir = 4, dist = distWest, name = "WEST" })
-		end
-
-		-- Sort by closest first
-		table.sort(exitDirs, function(a, b)
-			return a.dist < b.dist
-		end)
-
-		local primaryDir = exitDirs[1]
-		local secondaryDir = exitDirs[2]
-
-		if DEBUG_TRACES then
-			if primaryDir then
-				print(string.format("[IsNavigable] Primary exit: %s (dist=%.1f)", primaryDir.name, primaryDir.dist))
-			end
-			if secondaryDir then
-				print(
-					string.format("[IsNavigable] Secondary exit: %s (dist=%.1f)", secondaryDir.name, secondaryDir.dist)
-				)
-			end
-		end
-
-		-- Find neighbor node - try primary direction first, then secondary
+		-- Find neighbor - check ALL connections with tolerance-based overlap
 		Profiler.Begin("FindNeighbor")
 		local neighborNode = nil
-		local foundVia = nil
+		local OVERLAP_TOLERANCE = 5.0
 
-		-- Helper function to check connections in a direction
-		local function checkDirection(exitDir)
-			if not exitDir or not currentNode.c or not currentNode.c[exitDir.dir] then
-				if DEBUG_TRACES then
-					print(
-						string.format("[IsNavigable] No connections in %s direction", exitDir and exitDir.name or "nil")
-					)
-				end
-				return nil
-			end
+		if currentNode.c then
+			for dirId, dirData in pairs(currentNode.c) do
+				if dirData.connections then
+					for i, connection in ipairs(dirData.connections) do
+						local targetId = (type(connection) == "table") and (connection.node or connection.id)
+							or connection
+						local candidate = nodes[targetId]
 
-			local dirData = currentNode.c[exitDir.dir]
-			if not dirData.connections then
-				if DEBUG_TRACES then
-					print(string.format("[IsNavigable] No connections data in %s", exitDir.name))
-				end
-				return nil
-			end
+						if candidate then
+							-- Check if exit point overlaps candidate bounds (with tolerance)
+							local inX = exitPoint.x >= (candidate._minX - OVERLAP_TOLERANCE)
+								and exitPoint.x <= (candidate._maxX + OVERLAP_TOLERANCE)
+							local inY = exitPoint.y >= (candidate._minY - OVERLAP_TOLERANCE)
+								and exitPoint.y <= (candidate._maxY + OVERLAP_TOLERANCE)
 
-			if DEBUG_TRACES then
-				print(
-					string.format(
-						"[IsNavigable] Checking %d connections in %s direction",
-						#dirData.connections,
-						exitDir.name
-					)
-				)
-			end
+							if DEBUG_TRACES then
+								print(
+									string.format(
+										"[IsNavigable] Check node=%d, X:[%.1f,%.1f] Y:[%.1f,%.1f], exit=(%.1f,%.1f), inX=%s, inY=%s",
+										candidate.id,
+										candidate._minX,
+										candidate._maxX,
+										candidate._minY,
+										candidate._maxY,
+										exitPoint.x,
+										exitPoint.y,
+										tostring(inX),
+										tostring(inY)
+									)
+								)
+							end
 
-			for i, connection in ipairs(dirData.connections) do
-				if DEBUG_TRACES then
-					print(
-						string.format(
-							"[IsNavigable]   Conn %d RAW: type=%s, connection.node=%s, connection.id=%s",
-							i,
-							type(connection),
-							tostring(connection.node),
-							tostring(connection.id)
-						)
-					)
-					if type(connection) == "table" then
-						local keys = {}
-						for k, v in pairs(connection) do
-							table.insert(keys, k .. "=" .. tostring(v))
+							if inX and inY then
+								neighborNode = candidate
+								if DEBUG_TRACES then
+									print(string.format("[IsNavigable] Found neighbor %d", candidate.id))
+								end
+								break
+							end
 						end
-						print(string.format("[IsNavigable]     Keys: %s", table.concat(keys, ", ")))
 					end
 				end
-
-				local targetId = connection.node or connection.id or (type(connection) == "number" and connection)
-				local targetNode = nodes[targetId]
-
-				if DEBUG_TRACES then
-					print(
-						string.format(
-							"[IsNavigable]   Conn %d: targetId=%s, found=%s, isDoor=%s",
-							i,
-							tostring(targetId),
-							tostring(targetNode ~= nil),
-							tostring(targetNode and targetNode.isDoor or "n/a")
-						)
-					)
-				end
-
-				if targetNode and not targetNode.isDoor then
-					-- 1D bounds check on shared axis
-					local onSharedAxis = false
-					local checkAxis, exitVal, minVal, maxVal
-
-					if exitDir.dir == 1 or exitDir.dir == 3 then
-						-- North or South - check X axis
-						checkAxis = "X"
-						exitVal = exitPoint.x
-						minVal = targetNode._minX
-						maxVal = targetNode._maxX
-						onSharedAxis = exitVal >= minVal and exitVal <= maxVal
-					elseif exitDir.dir == 2 or exitDir.dir == 4 then
-						-- East or West - check Y axis
-						checkAxis = "Y"
-						exitVal = exitPoint.y
-						minVal = targetNode._minY
-						maxVal = targetNode._maxY
-						onSharedAxis = exitVal >= minVal and exitVal <= maxVal
-					end
-
-					if DEBUG_TRACES then
-						print(
-							string.format(
-								"[IsNavigable]   Conn %d: node=%d, %s bounds=[%.1f to %.1f], exit%s=%.1f, match=%s",
-								i,
-								targetNode.id,
-								checkAxis,
-								minVal,
-								maxVal,
-								checkAxis,
-								exitVal,
-								tostring(onSharedAxis)
-							)
-						)
-					end
-
-					if onSharedAxis then
-						return targetNode, exitDir
-					end
-				elseif targetNode and targetNode.isDoor then
-					if DEBUG_TRACES then
-						print(string.format("[IsNavigable]   Conn %d: node=%d is DOOR, skipped", i, targetId))
-					end
+				if neighborNode then
+					break
 				end
 			end
-			return nil
-		end
-
-		-- Try primary direction first
-		if primaryDir then
-			neighborNode, foundVia = checkDirection(primaryDir)
-		end
-
-		-- If not found, try secondary direction
-		if not neighborNode and secondaryDir then
-			neighborNode, foundVia = checkDirection(secondaryDir)
-		end
-
-		if neighborNode and foundVia and DEBUG_TRACES then
-			print(
-				string.format(
-					"[IsNavigable] Found neighbor %d via %s at exit (%.1f, %.1f)",
-					neighborNode.id,
-					foundVia.name,
-					exitPoint.x,
-					exitPoint.y
-				)
-			)
 		end
 
 		Profiler.End("FindNeighbor")
