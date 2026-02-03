@@ -47,14 +47,6 @@ local function shouldHitEntity(entity)
 	return entity ~= pLocal
 end
 
--- Get which node contains this position using fast spatial query
-local function getNodeAtPosition(pos)
-	Profiler.Begin("getNodeAtPosition")
-	local result = Node.GetAreaAtPosition(pos)
-	Profiler.End("getNodeAtPosition")
-	return result
-end
-
 -- Find where ray exits node bounds
 local function findNodeExit(startPos, dir, node)
 	Profiler.Begin("findNodeExit")
@@ -166,13 +158,15 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			)
 		end
 
-		-- Check if goal is in current node
+		-- Check if goal is in current node (fast direct bounds check)
 		Profiler.Begin("GoalCheck")
-		local goalNode = getNodeAtPosition(goalPos)
+		local goalInCurrentNode = goalPos.x >= currentNode._minX
+			and goalPos.x <= currentNode._maxX
+			and goalPos.y >= currentNode._minY
+			and goalPos.y <= currentNode._maxY
 		Profiler.End("GoalCheck")
 
-		if goalNode and goalNode.id == currentNode.id then
-			-- Final trace to goal
+		if goalInCurrentNode then
 			Profiler.Begin("FinalTrace")
 			local finalTrace = TraceHull(
 				currentPos + STEP_HEIGHT_Vector,
@@ -238,13 +232,68 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Find neighbor node
+		-- Find neighbor node using directional connections (fast 1D bounds check)
 		Profiler.Begin("FindNeighbor")
-		local neighborNode = getNodeAtPosition(exitPoint)
-		if not neighborNode or neighborNode.id == currentNode.id then
-			-- Try slightly inside neighbor
-			local probePos = exitPoint + dir * 2
-			neighborNode = getNodeAtPosition(probePos)
+		local neighborNode = nil
+
+		-- Determine which direction we exited based on which boundary was hit
+		local exitDirId = nil
+		local tolerance = 0.5
+		if math.abs(exitPoint.x - currentNode._maxX) < tolerance then
+			exitDirId = 2 -- East (dirX = 1)
+		elseif math.abs(exitPoint.x - currentNode._minX) < tolerance then
+			exitDirId = 4 -- West (dirX = -1)
+		elseif math.abs(exitPoint.y - currentNode._maxY) < tolerance then
+			exitDirId = 3 -- South (dirY = 1)
+		elseif math.abs(exitPoint.y - currentNode._minY) < tolerance then
+			exitDirId = 1 -- North (dirY = -1)
+		end
+
+		-- Check connections in the exit direction
+		if exitDirId and currentNode.c and currentNode.c[exitDirId] then
+			local dir = currentNode.c[exitDirId]
+			if dir.connections then
+				for _, connection in ipairs(dir.connections) do
+					local targetId = connection.node or (type(connection) == "number" and connection)
+					local targetNode = nodes[targetId]
+					if targetNode and not targetNode.isDoor then
+						-- 1D bounds check: exit point must be within neighbor's bounds
+						local inNeighborBounds = exitPoint.x >= targetNode._minX
+							and exitPoint.x <= targetNode._maxX
+							and exitPoint.y >= targetNode._minY
+							and exitPoint.y <= targetNode._maxY
+						if inNeighborBounds then
+							neighborNode = targetNode
+							break
+						end
+					end
+				end
+			end
+		end
+
+		-- Fallback: check all directions if not found
+		if not neighborNode and currentNode.c then
+			for dirId, dir in pairs(currentNode.c) do
+				if dir.connections then
+					for _, connection in ipairs(dir.connections) do
+						local targetId = connection.node or (type(connection) == "number" and connection)
+						local targetNode = nodes[targetId]
+						if targetNode and not targetNode.isDoor then
+							local inNeighborBounds = exitPoint.x >= targetNode._minX
+								and exitPoint.x <= targetNode._maxX
+								and exitPoint.y >= targetNode._minY
+								and exitPoint.y <= targetNode._maxY
+							if inNeighborBounds then
+								neighborNode = targetNode
+								break
+							end
+						end
+					end
+					if neighborNode then
+						break
+					end
+				end
+			end
 		end
 		Profiler.End("FindNeighbor")
 
