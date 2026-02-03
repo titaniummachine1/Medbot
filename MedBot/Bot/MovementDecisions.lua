@@ -25,8 +25,21 @@ local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between expensive walkabil
 -- Decision: Check if we've reached the target and advance waypoints/nodes
 function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local result = { shouldContinue = true }
+	local LocalOrigin = G.pLocal.Origin
 
-	-- Throttled distance calculation
+	-- Per-tick node skipping (runs every tick, NOT throttled)
+	if NodeSkipper.Tick(LocalOrigin) then
+		-- Path changed (nodes skipped), rebuild waypoints to match new path
+		Navigation.BuildDoorWaypointsFromPath()
+		Log:Debug("NodeSkipper modified path - waypoints rebuilt")
+
+		-- If we skipped nodes, we might be far from the new target, or close.
+		-- We should probably update the targetPos immediately for the next frame or this frame's movement execution.
+		-- Current implementation of executeMovement calls getCurrentTarget(), which will get the NEW target.
+		-- So we just need to ensure we don't accidentally "reach" the old target or do weird distance logic this frame.
+	end
+
+	-- Throttled distance calculation for reaching nodes
 	if not WorkManager.attemptWork(DISTANCE_CHECK_COOLDOWN, "distance_check") then
 		return result -- Skip this frame's distance check
 	end
@@ -43,23 +56,11 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		return result
 	end
 
-	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
 
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
-
-	-- Per-tick node skipping (runs every tick)
-	if NodeSkipper.Tick(LocalOrigin) then
-		-- Path changed (nodes skipped), rebuild waypoints to match new path
-		Navigation.BuildDoorWaypointsFromPath()
-		Log:Debug("NodeSkipper modified path - waypoints rebuilt")
-
-		-- Don't process "reachedTarget" this tick as it was calculated for the OLD target
-		-- We want to start moving to the new target immediately
-		reachedTarget = false
-	end
 
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
@@ -263,7 +264,7 @@ function MovementDecisions.handleMovingState(userCmd)
 	-- Run all decision components (these don't affect movement execution)
 	MovementDecisions.handleDebugLogging()
 	MovementDecisions.checkDistanceAndAdvance(userCmd)
-	-- MovementDecisions.checkStuckState() -- DISABLED: Deprecated, handled by StateHandler/NodeSkipper
+	MovementDecisions.checkStuckState()
 
 	-- ALWAYS execute movement at the end, regardless of decision outcomes
 	MovementDecisions.executeMovement(userCmd)

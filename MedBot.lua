@@ -8089,8 +8089,21 @@ local WALKABILITY_CHECK_COOLDOWN = 5 -- ticks (~83ms) between expensive walkabil
 -- Decision: Check if we've reached the target and advance waypoints/nodes
 function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	local result = { shouldContinue = true }
+	local LocalOrigin = G.pLocal.Origin
 
-	-- Throttled distance calculation
+	-- Per-tick node skipping (runs every tick, NOT throttled)
+	if NodeSkipper.Tick(LocalOrigin) then
+		-- Path changed (nodes skipped), rebuild waypoints to match new path
+		Navigation.BuildDoorWaypointsFromPath()
+		Log:Debug("NodeSkipper modified path - waypoints rebuilt")
+
+		-- If we skipped nodes, we might be far from the new target, or close.
+		-- We should probably update the targetPos immediately for the next frame or this frame's movement execution.
+		-- Current implementation of executeMovement calls getCurrentTarget(), which will get the NEW target.
+		-- So we just need to ensure we don't accidentally "reach" the old target or do weird distance logic this frame.
+	end
+
+	-- Throttled distance calculation for reaching nodes
 	if not WorkManager.attemptWork(DISTANCE_CHECK_COOLDOWN, "distance_check") then
 		return result -- Skip this frame's distance check
 	end
@@ -8107,23 +8120,11 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 		return result
 	end
 
-	local LocalOrigin = G.pLocal.Origin
 	local horizontalDist = Common.Distance2D(LocalOrigin, targetPos)
 	local verticalDist = math.abs(LocalOrigin.z - targetPos.z)
 
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
-
-	-- Per-tick node skipping (runs every tick)
-	if NodeSkipper.Tick(LocalOrigin) then
-		-- Path changed (nodes skipped), rebuild waypoints to match new path
-		Navigation.BuildDoorWaypointsFromPath()
-		Log:Debug("NodeSkipper modified path - waypoints rebuilt")
-
-		-- Don't process "reachedTarget" this tick as it was calculated for the OLD target
-		-- We want to start moving to the new target immediately
-		reachedTarget = false
-	end
 
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
@@ -8327,7 +8328,7 @@ function MovementDecisions.handleMovingState(userCmd)
 	-- Run all decision components (these don't affect movement execution)
 	MovementDecisions.handleDebugLogging()
 	MovementDecisions.checkDistanceAndAdvance(userCmd)
-	-- MovementDecisions.checkStuckState() -- DISABLED: Deprecated, handled by StateHandler/NodeSkipper
+	MovementDecisions.checkStuckState()
 
 	-- ALWAYS execute movement at the end, regardless of decision outcomes
 	MovementDecisions.executeMovement(userCmd)
@@ -8377,19 +8378,17 @@ function NodeSkipper.Tick(playerPos)
 	end
 
 	local currentNode = path[1]
-	local targetNode = path[2]
-	local nextTargetNode = path[3]
+	local nextNode = path[2]
 
-	-- SMART SKIP: Check if player already passed the current target (path[2])
-	-- We compare distance to next target (path[3])
-	if nextTargetNode and nextTargetNode.pos and targetNode and targetNode.pos then
-		local distPlayerToNext = Common.Distance3D(playerPos, nextTargetNode.pos)
-		local distTargetToNext = Common.Distance3D(targetNode.pos, nextTargetNode.pos)
+	-- SMART SKIP: Check if player already passed the current target (path[1])
+	-- We compare distance to next target (path[2])
+	if currentNode and currentNode.pos and nextNode and nextNode.pos then
+		local distPlayerToNext = Common.Distance3D(playerPos, nextNode.pos)
+		local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 
-		if distPlayerToNext < distTargetToNext then
-			-- Player is closer to path[3] than path[2] is to path[3] - we passed path[2]
-			-- Remove path[2] (current target) so we target path[3]
-			local missedNode = table.remove(path, 2)
+		if distPlayerToNext < distCurrentToNext then
+			-- Player is closer to path[2] than path[1] is to path[2] - we passed path[1]
+			local missedNode = table.remove(path, 1)
 
 			-- Add to history
 			G.Navigation.pathHistory = G.Navigation.pathHistory or {}
@@ -8404,94 +8403,60 @@ function NodeSkipper.Tick(playerPos)
 			Log:Info(
 				"MISSED waypoint %s (player closer to next), skipping to %s",
 				tostring(missedNode.id),
-				tostring(nextTargetNode.id)
+				tostring(nextNode.id)
 			)
 			G.Navigation.currentNodeIndex = 1
 			return true
 		end
 	end
 
-	-- FORWARD SKIP: Check if we can skip ahead multiple nodes
-	-- Only skip if we can reach path[3] or further (bypassing at least 2 nodes)
-	-- We start checking from path[3]. If reachable, we can skip path[2].
+	-- FORWARD SKIP: Single check per tick (path[3] only)
+	-- If we can walk directly to path[3], skip path[1] and path[2] and bail.
 	if #path < 3 then
 		return false
 	end
 
 	local maxSkipRange = G.Menu.Main.MaxSkipRange or 500
-	local maxNodesToSkip = G.Menu.Main.MaxNodesToSkip or 3
+	local skipTarget = path[3]
+	if not (skipTarget and skipTarget.pos) then
+		return false
+	end
+
+	local distToTarget = Common.Distance3D(playerPos, skipTarget.pos)
+	if distToTarget > maxSkipRange then
+		return false
+	end
 
 	local currentArea = Node.GetAreaAtPosition(playerPos)
 	if not currentArea then
 		return false
 	end
 
-	local furthestIdx = 1
-
-	-- Start checking from path[3] (skip path[2] and potentially more)
-	-- We want to go from path[1] (current) -> path[i] (new target)
-	-- Actually, we check if we can walk from Player -> path[i]
-	for i = 3, math.min(#path, maxNodesToSkip + 2) do -- +2 because we start at 3
-		local checkNode = path[i]
-		if not (checkNode and checkNode.pos) then
-			break
-		end
-
-		-- Check distance limit
-		local distToTarget = Common.Distance3D(playerPos, checkNode.pos)
-		if distToTarget > maxSkipRange then
-			break
-		end
-
-		-- Check if we can walk directly to this node (bypassing intermediate nodes)
-		local success, canSkip = pcall(isNavigable.CanSkip, playerPos, checkNode.pos, currentArea, false)
-
-		if success and canSkip then
-			furthestIdx = i
-			-- GREEDY: Keep checking further nodes to maximize skip distance
-		else
-			-- Blocked - but continue checking further nodes (maybe we can reach path[i+1] even if path[i] is blocked)
-		end
+	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false)
+	if not (success and canSkip) then
+		return false
 	end
 
-	-- Apply forward skip only if we can bypass at least 1 node (reach path[3] or further)
-	if furthestIdx >= 3 then
-		local targetNode = path[furthestIdx]
+	G.Navigation.pathHistory = G.Navigation.pathHistory or {}
 
-		-- Initialize path history if needed
-		G.Navigation.pathHistory = G.Navigation.pathHistory or {}
-
-		-- Remove nodes BETWEEN path[1] and path[furthestIdx]
-		-- We want to remove path[2], path[3] ... path[furthestIdx-1]
-		-- So we remove 'furthestIdx - 2' nodes starting at index 2
-		local numToRemove = furthestIdx - 2
-		for i = 1, numToRemove do
-			local skipped = table.remove(path, 2)
-			if skipped then
-				table.insert(G.Navigation.pathHistory, 1, skipped)
-			end
-		end
-
-		-- Bound history size
-		while #G.Navigation.pathHistory > 32 do
-			table.remove(G.Navigation.pathHistory)
-		end
-
-		-- Track when we last skipped
-		G.Navigation.lastSkipTick = globals.TickCount()
-
-		Log:Info(
-			"FORWARD SKIP: bypassed %d nodes (direct path to %s, max %d, range %.0f)",
-			numToRemove,
-			tostring(targetNode.id),
-			maxNodesToSkip,
-			maxSkipRange
-		)
-		G.Navigation.currentNodeIndex = 1
-		return true
+	local skipped1 = table.remove(path, 1)
+	if skipped1 then
+		table.insert(G.Navigation.pathHistory, 1, skipped1)
+	end
+	local skipped2 = table.remove(path, 1)
+	if skipped2 then
+		table.insert(G.Navigation.pathHistory, 1, skipped2)
 	end
 
-	return false
+	while #G.Navigation.pathHistory > 32 do
+		table.remove(G.Navigation.pathHistory)
+	end
+
+	G.Navigation.lastSkipTick = globals.TickCount()
+
+	Log:Info("FORWARD SKIP: bypassed 2 nodes (direct path to %s, range %.0f)", tostring(skipTarget.id), maxSkipRange)
+	G.Navigation.currentNodeIndex = 1
+	return true
 end
 
 return NodeSkipper
