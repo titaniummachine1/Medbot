@@ -56,14 +56,7 @@ local G = require("MedBot.Core.Globals")
 local Navigation = require("MedBot.Navigation")
 local WorkManager = require("MedBot.WorkManager")
 
---[[ Profiler Integration ]]
-local profilerLoaded, Profiler = pcall(require, "Profiler")
-if profilerLoaded then
-	Profiler.SetVisible(true)
-	print("[MedBot] Profiler loaded and enabled")
-else
-	print("[MedBot] Profiler not available")
-end
+-- Profiler removed - not used
 
 --[[ Algorithms ]]
 local Greedy = require("MedBot.Algorithms.Greedy")
@@ -106,10 +99,7 @@ G.currentState = G.States.IDLE
 
 ----@param userCmd UserCmd
 local function onCreateMove(userCmd)
-	-- Profiler context
-	if profilerLoaded then
-		Profiler.SetContext("tick")
-	end
+	-- Profiler removed
 
 	-- Basic validation
 	local pLocal = entities.GetLocalPlayer()
@@ -337,13 +327,7 @@ local function onGameEvent(event)
 	end
 end
 
---[[ Profiler Draw Callback ]]
-local function onDraw()
-	if profilerLoaded then
-		Profiler.SetContext("frame")
-		Profiler.Draw()
-	end
-end
+-- Profiler removed
 
 --[[ Initialization ]]
 
@@ -356,7 +340,7 @@ callbacks.Unregister("Draw", "MedBot.ProfilerDraw")
 callbacks.Register("CreateMove", "ZMedBot.CreateMove", onCreateMove) -- Z prefix ensures it runs after SmartJump
 callbacks.Register("DrawModel", "MedBot.DrawModel", onDrawModel)
 callbacks.Register("FireGameEvent", "MedBot.FireGameEvent", onGameEvent)
-callbacks.Register("Draw", "MedBot.ProfilerDraw", onDraw)
+-- Profiler removed
 
 -- Initialize navigation if a valid map is loaded
 Notify.Alert("MedBot loaded!")
@@ -476,6 +460,12 @@ local function OnDrawMenu()
 		G.Menu.Main.MaxSkipRange = G.Menu.Main.MaxSkipRange or 500
 		G.Menu.Main.MaxSkipRange = TimMenu.Slider("Max Skip Range", G.Menu.Main.MaxSkipRange, 100, 2000, 50)
 		TimMenu.Tooltip("Maximum distance to skip nodes in units (default: 500)")
+		TimMenu.NextLine()
+
+		-- Max Nodes To Skip slider
+		G.Menu.Main.MaxNodesToSkip = G.Menu.Main.MaxNodesToSkip or 3
+		G.Menu.Main.MaxNodesToSkip = TimMenu.Slider("Max Nodes To Skip", G.Menu.Main.MaxNodesToSkip, 1, 10, 1)
+		TimMenu.Tooltip("Maximum nodes to skip per tick (default: 3)")
 		TimMenu.NextLine()
 
 		-- Stop Distance slider for FOLLOWING state
@@ -8343,8 +8333,10 @@ return MovementDecisions
 end)
 __bundle_register("MedBot.Bot.NodeSkipper", function(require, _LOADED, __bundle_register, __bundle_modules)
 --[[
-Node Skipper - Simple per-tick node skipping
-Runs every tick: Find furthest node you can walk to directly and skip to it
+Node Skipper - Per-tick node skipping with menu-controlled limits
+Uses:
+- G.Menu.Main.MaxSkipRange: max distance to skip (default 500)
+- G.Menu.Main.MaxNodesToSkip: max nodes per tick (default 3)
 ]]
 
 local Common = require("MedBot.Core.Common")
@@ -8370,44 +8362,76 @@ function NodeSkipper.Tick(playerPos)
 		return
 	end
 
-	local currentNode = path[1]
-	local nextNode = path[2]
-
-	if not (currentNode and currentNode.pos and nextNode and nextNode.pos) then
-		return
-	end
-
-	local distPlayerToNext = Common.Distance3D(playerPos, nextNode.pos)
-	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
-
-	if distPlayerToNext < distCurrentToNext then
-		table.remove(path, 1)
-		Log:Info("Smart skip: player closer to next, skipped node %s", tostring(currentNode.id))
-		G.Navigation.currentNodeIndex = 1
-		return
-	end
-
-	if #path < 3 then
-		return
-	end
-
-	local skipTarget = path[3]
-	if not (skipTarget and skipTarget.pos) then
-		return
-	end
+	local maxSkipRange = G.Menu.Main.MaxSkipRange or 500
+	local maxNodesToSkip = G.Menu.Main.MaxNodesToSkip or 3
 
 	local currentArea = Node.GetAreaAtPosition(playerPos)
 	if not currentArea then
 		return
 	end
 
-	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false)
+	local nodesSkipped = 0
+	local furthestIdx = 1
 
-	if success and canSkip then
-		table.remove(path, 1)
-		table.remove(path, 1)
+	-- Check nodes ahead up to maxNodesToSkip + 1 (since we need to check path[2] to path[max+1])
+	for i = 2, math.min(#path, maxNodesToSkip + 1) do
+		local targetNode = path[i]
+		if not (targetNode and targetNode.pos) then
+			break
+		end
 
-		Log:Info("Forward skip: skipped 2 nodes, now at node %s", tostring(skipTarget.id))
+		-- Check distance limit
+		local distToTarget = Common.Distance3D(playerPos, targetNode.pos)
+		if distToTarget > maxSkipRange then
+			Log:Debug(
+				"Skip target %s at %.0f units exceeds max range %.0f",
+				tostring(targetNode.id),
+				distToTarget,
+				maxSkipRange
+			)
+			break
+		end
+
+		-- Check if walkable
+		local success, canSkip = pcall(isNavigable.CanSkip, playerPos, targetNode.pos, currentArea, false)
+
+		if success and canSkip then
+			furthestIdx = i
+			nodesSkipped = nodesSkipped + 1
+			Log:Debug("Can skip to node %s (%d/%d)", tostring(targetNode.id), nodesSkipped, maxNodesToSkip)
+		else
+			-- Blocked - stop checking further
+			break
+		end
+	end
+
+	-- Remove skipped nodes and add to path history (as if we reached them normally)
+	if furthestIdx > 1 then
+		local targetNode = path[furthestIdx]
+
+		-- Initialize path history if needed
+		G.Navigation.pathHistory = G.Navigation.pathHistory or {}
+
+		-- Remove nodes and add to history (like Navigation.RemoveCurrentNode does)
+		for i = 1, furthestIdx - 1 do
+			local skipped = table.remove(path, 1)
+			if skipped then
+				table.insert(G.Navigation.pathHistory, 1, skipped)
+			end
+		end
+
+		-- Bound history size
+		while #G.Navigation.pathHistory > 32 do
+			table.remove(G.Navigation.pathHistory)
+		end
+
+		Log:Info(
+			"Skipped %d nodes (max %d, range %d), now at node %s",
+			nodesSkipped,
+			maxNodesToSkip,
+			maxSkipRange,
+			tostring(targetNode.id)
+		)
 		G.Navigation.currentNodeIndex = 1
 	end
 end
@@ -9957,6 +9981,13 @@ function StateHandler.handleIdleState()
 				G.lastPathfindingTick = 0 -- Force repath immediately
 			end
 		end
+	end
+
+	-- Check if path was recently modified by node skipper (prevent immediate overwrite)
+	local currentTick = globals.TickCount()
+	if G.Navigation.lastSkipTick and (currentTick - G.Navigation.lastSkipTick) < 10 then
+		Log:Debug("Path was recently skipped, not overwriting")
+		return
 	end
 
 	-- Prevent pathfinding spam by limiting frequency

@@ -79,6 +79,13 @@ function StateHandler.handleIdleState()
 		end
 	end
 
+	-- Check if path was recently modified by node skipper (prevent immediate overwrite)
+	local currentTick = globals.TickCount()
+	if G.Navigation.lastSkipTick and (currentTick - G.Navigation.lastSkipTick) < 10 then
+		Log:Debug("Path was recently skipped, not overwriting")
+		return
+	end
+
 	-- Prevent pathfinding spam by limiting frequency
 	G.lastPathfindingTick = G.lastPathfindingTick or 0
 	if currentTick - G.lastPathfindingTick < 33 then

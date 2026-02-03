@@ -96,6 +96,12 @@ local function OnDrawMenu()
 		TimMenu.Tooltip("Maximum distance to skip nodes in units (default: 500)")
 		TimMenu.NextLine()
 
+		-- Max Nodes To Skip slider
+		G.Menu.Main.MaxNodesToSkip = G.Menu.Main.MaxNodesToSkip or 3
+		G.Menu.Main.MaxNodesToSkip = TimMenu.Slider("Max Nodes To Skip", G.Menu.Main.MaxNodesToSkip, 1, 10, 1)
+		TimMenu.Tooltip("Maximum nodes to skip per tick (default: 3)")
+		TimMenu.NextLine()
+
 		-- Stop Distance slider for FOLLOWING state
 		G.Menu.Navigation.StopDistance = G.Menu.Navigation.StopDistance or 50
 		G.Menu.Navigation.StopDistance = TimMenu.Slider("Stop Distance", G.Menu.Navigation.StopDistance, 20, 200, 5)
