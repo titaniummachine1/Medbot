@@ -6067,7 +6067,7 @@ local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
 local FORWARD_STEP = 100 -- Max distance per forward trace
 
 -- Debug
-local DEBUG_TRACES = true
+local DEBUG_TRACES = false -- Disabled for production
 local hullTraces = {}
 local currentTickLogged = -1
 
@@ -6090,6 +6090,7 @@ local function shouldHitEntity(entity)
 end
 
 -- Find where ray exits node bounds
+-- Returns: exitPoint, exitDist, exitDir (1=N, 2=E, 3=S, 4=W)
 local function findNodeExit(startPos, dir, node)
 	Profiler.Begin("findNodeExit")
 	local minX, maxX = node._minX, node._maxX
@@ -6097,6 +6098,7 @@ local function findNodeExit(startPos, dir, node)
 
 	local tMin = math.huge
 	local exitX, exitY
+	local exitDir = nil
 
 	-- Check X boundaries
 	if dir.x > 0 then
@@ -6105,6 +6107,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = maxX
 			exitY = startPos.y + dir.y * t
+			exitDir = 2 -- East
 		end
 	elseif dir.x < 0 then
 		local t = (minX - startPos.x) / dir.x
@@ -6112,6 +6115,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = minX
 			exitY = startPos.y + dir.y * t
+			exitDir = 4 -- West
 		end
 	end
 
@@ -6122,6 +6126,7 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = maxY
+			exitDir = 3 -- South
 		end
 	elseif dir.y < 0 then
 		local t = (minY - startPos.y) / dir.y
@@ -6129,20 +6134,21 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = minY
+			exitDir = 1 -- North
 		end
 	end
 
 	if tMin == math.huge then
 		Profiler.End("findNodeExit")
-		return nil
+		return nil, nil, nil
 	end
 
 	Profiler.End("findNodeExit")
-	return Vector3(exitX, exitY, startPos.z), tMin
+	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
 end
 
 -- MAIN FUNCTION - Trace to borders
-function Navigable.CanSkip(startPos, goalPos, startNode)
+function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	Profiler.Begin("CanSkip")
 
 	assert(startNode, "CanSkip: startNode required")
@@ -6240,16 +6246,28 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		-- Find where we exit current node
 		Profiler.Begin("FindExit")
-		local exitPoint, exitDist = findNodeExit(currentPos, dir, currentNode)
+		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
 		Profiler.End("FindExit")
 
-		if not exitPoint then
+		if not exitPoint or not exitDir then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
 			end
 			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
+		end
+
+		if DEBUG_TRACES then
+			local dirNames = { [1] = "N", [2] = "E", [3] = "S", [4] = "W" }
+			print(
+				string.format(
+					"[IsNavigable] Exit via %s at (%.1f, %.1f)",
+					dirNames[exitDir] or "?",
+					exitPoint.x,
+					exitPoint.y
+				)
+			)
 		end
 
 		-- Trace to exit point
@@ -6273,152 +6291,147 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Find neighbor - check ALL connections with tolerance-based overlap
+		-- Find neighbor - ONLY check connections in exit direction
 		Profiler.Begin("FindNeighbor")
 		local neighborNode = nil
 		local OVERLAP_TOLERANCE = 5.0
 
-		if DEBUG_TRACES then
-			local dirCount = 0
-			if currentNode.c then
-				for _ in pairs(currentNode.c) do
-					dirCount = dirCount + 1
-				end
+		if currentNode.c and currentNode.c[exitDir] then
+			local dirData = currentNode.c[exitDir]
+			if DEBUG_TRACES then
+				print(
+					string.format(
+						"[IsNavigable] Checking dir %d: %d connections",
+						exitDir,
+						dirData.connections and #dirData.connections or 0
+					)
+				)
 			end
-			print(string.format("[IsNavigable] currentNode.c has %d directions", dirCount))
-		end
 
-		if currentNode.c then
-			for dirId, dirData in pairs(currentNode.c) do
-				if DEBUG_TRACES then
-					local connCount = dirData.connections and #dirData.connections or 0
-					print(string.format("[IsNavigable] Direction %d: %d connections", dirId, connCount))
-				end
+			if dirData.connections then
+				for i, connection in ipairs(dirData.connections) do
+					local targetId = (type(connection) == "table") and (connection.node or connection.id) or connection
+					local candidate = nodes[targetId]
 
-				if dirData.connections then
-					for i, connection in ipairs(dirData.connections) do
-						local targetId = (type(connection) == "table") and (connection.node or connection.id)
-							or connection
-						local candidate = nodes[targetId]
+					if candidate and candidate._minX and candidate._maxX and candidate._minY and candidate._maxY then
+						-- Area node - check bounds overlap (optionally using door bounds)
+						local checkNode = candidate
 
-						if DEBUG_TRACES then
-							print(
-								string.format(
-									"[IsNavigable]   Conn %d: targetId=%s, candidate=%s, hasArea=%s",
-									i,
-									tostring(targetId),
-									tostring(candidate ~= nil),
-									tostring(candidate and candidate._minX ~= nil)
-								)
-							)
-						end
-
-						if
-							candidate
-							and candidate._minX
-							and candidate._maxX
-							and candidate._minY
-							and candidate._maxY
-						then
-							-- Area node - check bounds overlap
-							local inX = exitPoint.x >= (candidate._minX - OVERLAP_TOLERANCE)
-								and exitPoint.x <= (candidate._maxX + OVERLAP_TOLERANCE)
-							local inY = exitPoint.y >= (candidate._minY - OVERLAP_TOLERANCE)
-								and exitPoint.y <= (candidate._maxY + OVERLAP_TOLERANCE)
-
-							if DEBUG_TRACES then
-								print(
-									string.format(
-										"[IsNavigable] Check area=%d, X:[%.1f,%.1f] Y:[%.1f,%.1f], exit=(%.1f,%.1f), inX=%s, inY=%s",
-										candidate.id,
-										candidate._minX,
-										candidate._maxX,
-										candidate._minY,
-										candidate._maxY,
-										exitPoint.x,
-										exitPoint.y,
-										tostring(inX),
-										tostring(inY)
-									)
-								)
-							end
-
-							if inX and inY then
-								neighborNode = candidate
-								if DEBUG_TRACES then
-									print(string.format("[IsNavigable] Found neighbor area %d", candidate.id))
-								end
-								break
-							end
-						elseif candidate then
-							-- Door node - traverse through to find area on other side
-							if DEBUG_TRACES then
-								print(
-									string.format(
-										"[IsNavigable]   Conn %d: Door %s, traversing...",
-										i,
-										tostring(targetId)
-									)
-								)
-							end
-
-							if candidate.c then
-								-- Find the area connected through this door that isn't currentNode
-								for doorDirId, doorDirData in pairs(candidate.c) do
-									if doorDirData.connections then
-										for _, doorConn in ipairs(doorDirData.connections) do
-											local areaId = (type(doorConn) == "table")
-													and (doorConn.node or doorConn.id)
-												or doorConn
-											local areaNode = nodes[areaId]
-
-											if areaId ~= currentNode.id and areaNode and areaNode._minX then
-												-- Check if this area overlaps exit point
-												local inX = exitPoint.x >= (areaNode._minX - OVERLAP_TOLERANCE)
-													and exitPoint.x <= (areaNode._maxX + OVERLAP_TOLERANCE)
-												local inY = exitPoint.y >= (areaNode._minY - OVERLAP_TOLERANCE)
-													and exitPoint.y <= (areaNode._maxY + OVERLAP_TOLERANCE)
-
-												if DEBUG_TRACES then
-													print(
-														string.format(
-															"[IsNavigable]     Door leads to area=%d, inX=%s, inY=%s",
-															areaId,
-															tostring(inX),
-															tostring(inY)
-														)
-													)
-												end
-
-												if inX and inY then
-													neighborNode = areaNode
-													if DEBUG_TRACES then
-														print(
-															string.format(
-																"[IsNavigable] Found neighbor area %d via door",
-																areaNode.id
-															)
-														)
-													end
+						if respectDoors then
+							-- Find door between currentNode and candidate
+							for _, conn in ipairs(dirData.connections) do
+								local tid = (type(conn) == "table") and (conn.node or conn.id) or conn
+								local door = nodes[tid]
+								if door and not door._minX and door.c then
+									-- Door found, check if it connects to candidate
+									for _, ddir in pairs(door.c) do
+										if ddir.connections then
+											for _, dconn in ipairs(ddir.connections) do
+												local did = (type(dconn) == "table") and (dconn.node or dconn.id)
+													or dconn
+												if did == candidate.id then
+													checkNode = door
 													break
 												end
 											end
 										end
-										if neighborNode then
+										if checkNode == door then
 											break
+										end
+									end
+									if checkNode == door then
+										break
+									end
+								end
+							end
+						end
+
+						local inX = exitPoint.x >= (checkNode._minX - OVERLAP_TOLERANCE)
+							and exitPoint.x <= (checkNode._maxX + OVERLAP_TOLERANCE)
+						local inY = exitPoint.y >= (checkNode._minY - OVERLAP_TOLERANCE)
+							and exitPoint.y <= (checkNode._maxY + OVERLAP_TOLERANCE)
+
+						if DEBUG_TRACES then
+							print(
+								string.format(
+									"[IsNavigable] Check area=%d via %s, inX=%s, inY=%s",
+									candidate.id,
+									(checkNode == candidate and "area" or "door"),
+									tostring(inX),
+									tostring(inY)
+								)
+							)
+						end
+
+						if inX and inY then
+							neighborNode = candidate
+							if DEBUG_TRACES then
+								print(string.format("[IsNavigable] Found neighbor area %d", candidate.id))
+							end
+							break
+						end
+					elseif candidate then
+						-- Door node - traverse through to find area on other side
+						if DEBUG_TRACES then
+							print(
+								string.format("[IsNavigable]   Conn %d: Door %s, traversing...", i, tostring(targetId))
+							)
+						end
+
+						if candidate.c then
+							for _, doorDirData in pairs(candidate.c) do
+								if doorDirData.connections then
+									for _, doorConn in ipairs(doorDirData.connections) do
+										local areaId = (type(doorConn) == "table") and (doorConn.node or doorConn.id)
+											or doorConn
+										local areaNode = nodes[areaId]
+
+										if areaId ~= currentNode.id and areaNode and areaNode._minX then
+											local inX = exitPoint.x >= (areaNode._minX - OVERLAP_TOLERANCE)
+												and exitPoint.x <= (areaNode._maxX + OVERLAP_TOLERANCE)
+											local inY = exitPoint.y >= (areaNode._minY - OVERLAP_TOLERANCE)
+												and exitPoint.y <= (areaNode._maxY + OVERLAP_TOLERANCE)
+
+											if DEBUG_TRACES then
+												print(
+													string.format(
+														"[IsNavigable]     Door leads to area=%d, inX=%s, inY=%s",
+														areaId,
+														tostring(inX),
+														tostring(inY)
+													)
+												)
+											end
+
+											if inX and inY then
+												neighborNode = areaNode
+												if DEBUG_TRACES then
+													print(
+														string.format(
+															"[IsNavigable] Found neighbor area %d via door",
+															areaNode.id
+														)
+													)
+												end
+												break
+											end
 										end
 									end
 									if neighborNode then
 										break
 									end
 								end
+								if neighborNode then
+									break
+								end
 							end
 						end
 					end
 				end
-				if neighborNode then
-					break
-				end
+			end
+		else
+			if DEBUG_TRACES then
+				print(string.format("[IsNavigable] No connections in exit direction %d", exitDir))
 			end
 		end
 
@@ -6457,6 +6470,16 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			shouldHitEntity
 		)
 		Profiler.End("GroundTrace")
+
+		-- TEMPORARY: Compare TraceLine vs TraceHull for ground
+		Profiler.Begin("GroundTraceLine")
+		local groundTraceLine = engine.TraceLine(
+			entryPos + STEP_HEIGHT_Vector,
+			entryPos - Vector3(0, 0, 100),
+			MASK_PLAYERSOLID,
+			shouldHitEntity
+		)
+		Profiler.End("GroundTraceLine")
 
 		if groundTrace.fraction == 1 then
 			if DEBUG_TRACES then
