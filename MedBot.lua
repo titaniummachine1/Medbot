@@ -6083,6 +6083,21 @@ end
 
 local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
 
+-- Adjust the direction vector to align with the surface normal
+local function adjustDirectionToSurface(direction, surfaceNormal)
+	direction = Common.Normalize(direction)
+	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
+
+	if angle > 55 then
+		return direction
+	end
+
+	local dotProduct = direction:Dot(surfaceNormal)
+	direction.z = direction.z - surfaceNormal.z * dotProduct
+
+	return Common.Normalize(direction)
+end
+
 -- Find where ray exits node bounds
 -- Returns: exitPoint, exitDist, exitDir (1=N, 2=E, 3=S, 4=W)
 local function findNodeExit(startPos, dir, node)
@@ -6261,6 +6276,12 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		-- Find where we exit current node toward goal
 		local toGoal = goalPos - currentPos
 		local dir = Common.Normalize(toGoal)
+
+		-- Adjust direction to align with surface using quad normal
+		local groundZ, groundNormal = getGroundZFromQuad(currentPos.x, currentPos.y, currentNode)
+		if groundNormal then
+			dir = adjustDirectionToSurface(dir, groundNormal)
+		end
 
 		Profiler.Begin("FindExit")
 		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
