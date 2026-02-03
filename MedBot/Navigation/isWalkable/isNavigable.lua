@@ -130,12 +130,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		-- Direction to goal from current position
 		Profiler.Begin("CalculateDirection")
+		Profiler.Begin("VectorLength")
 		local toGoal = goalPos - currentPos
 		local distToGoal = toGoal:Length()
-		if distToGoal > 1 then
-			toGoal:Normalize() -- Reuse as direction vector, modifies in-place
-		end
-		local dir = toGoal
+		Profiler.End("VectorLength")
+		Profiler.Begin("VectorDivide")
+		local dir = distToGoal > 0.001 and (toGoal / distToGoal) or Vector3(1, 0, 0)
+		Profiler.End("VectorDivide")
 		Profiler.End("CalculateDirection")
 
 		if distToGoal < 50 then

@@ -1743,14 +1743,9 @@ end
 
 Common.JSON = JSON
 
---- Safe normalize that works with in-place method
-function Common.NormalizeSafe(vec)
-	local len = vec:Length()
-	if len > 0.0001 then
-		vec:Normalize() -- Modifies in-place
-		return vec
-	end
-	return vec
+--- Normalize vector using vector.Divide (faster than inline division)
+function Common.Normalize(vec)
+	return vector.Divide(vec, vec:Length())
 end
 
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
@@ -2026,69 +2021,237 @@ function Common.DebugLog(level, ...)
 	end
 end
 
---- Vector normalization test suite
+--- Vector normalization test suite - tries EVERY possible method
 function Common.TestVectorNormalize()
-	print("[Common] Testing vector normalization methods...")
+	print("[Common] ============================================")
+	print("[Common] TESTING ALL VECTOR NORMALIZATION METHODS")
+	print("[Common] ============================================")
 
 	local testVec = Vector3(3, 4, 0)
 	local originalLen = testVec:Length()
 	print(
 		string.format(
-			"[Common] Original vector: (%.1f, %.1f, %.1f), Length: %.1f",
+			"[Common] Test vector: (%.1f, %.1f, %.1f), Length: %.1f",
 			testVec.x,
 			testVec.y,
 			testVec.z,
 			originalLen
 		)
 	)
+	print("")
 
-	-- Test 1: Method in-place (vec:Normalize())
-	local methodVec = Vector3(3, 4, 0)
-	local methodReturn = methodVec:Normalize()
-	print(
-		string.format(
-			"[Common] Method :Normalize() - Result: (%.3f, %.3f, %.3f), Return: %s, Length after: %.3f",
-			methodVec.x,
-			methodVec.y,
-			methodVec.z,
-			tostring(methodReturn),
-			methodVec:Length()
+	-- Method 1: vector.Normalize() library function (from docs)
+	print("[Common] Method 1: vector.Normalize(vec) - Library function")
+	local m1_vec = Vector3(3, 4, 0)
+	local success1, result1 = pcall(function()
+		return vector.Normalize(m1_vec)
+	end)
+	if success1 then
+		print(
+			string.format(
+				"  SUCCESS! Return: (%.3f, %.3f, %.3f), Length: %.3f",
+				result1.x,
+				result1.y,
+				result1.z,
+				result1:Length()
+			)
 		)
-	)
+	else
+		print("  FAILED: " .. tostring(result1))
+	end
+	print("")
 
-	-- Test 2: Library function (vector.Normalize(vec))
-	local libVec = Vector3(3, 4, 0)
-	local libReturn = vector.Normalize(libVec)
-	print(
-		string.format(
-			"[Common] Library vector.Normalize() - Original: (%.3f, %.3f, %.3f), Return: (%.3f, %.3f, %.3f), Length: %.3f",
-			libVec.x,
-			libVec.y,
-			libVec.z,
-			libReturn.x,
-			libReturn.y,
-			libReturn.z,
-			libReturn:Length()
+	-- Method 1b: vector.normalize() lowercase
+	print("[Common] Method 1b: vector.normalize(vec) - Library function lowercase")
+	local m1b_vec = Vector3(3, 4, 0)
+	local success1b, result1b = pcall(function()
+		return vector.normalize(m1b_vec)
+	end)
+	if success1b then
+		print(
+			string.format(
+				"  SUCCESS! Return: (%.3f, %.3f, %.3f), Length: %.3f",
+				result1b.x,
+				result1b.y,
+				result1b.z,
+				result1b:Length()
+			)
 		)
-	)
+	else
+		print("  FAILED: " .. tostring(result1b))
+	end
+	print("")
 
-	-- Test 3: Division approach (creates new vector)
-	local divVec = Vector3(3, 4, 0)
-	local divResult = divVec / divVec:Length()
-	print(
-		string.format(
-			"[Common] Division vec/len - Original: (%.3f, %.3f, %.3f), Result: (%.3f, %.3f, %.3f), Length: %.3f",
-			divVec.x,
-			divVec.y,
-			divVec.z,
-			divResult.x,
-			divResult.y,
-			divResult.z,
-			divResult:Length()
+	-- Method 2: vec:Normalize() instance method (from docs)
+	print("[Common] Method 2: vec:Normalize() - Instance method (modifies in-place)")
+	local m2_vec = Vector3(3, 4, 0)
+	local success2, result2 = pcall(function()
+		return m2_vec:Normalize()
+	end)
+	if success2 then
+		print(
+			string.format(
+				"  Called successfully, vec now: (%.3f, %.3f, %.3f), Length: %.3f",
+				m2_vec.x,
+				m2_vec.y,
+				m2_vec.z,
+				m2_vec:Length()
+			)
 		)
-	)
+		print(string.format("  Return value: %s (type: %s)", tostring(result2), type(result2)))
+	else
+		print("  FAILED: " .. tostring(result2))
+	end
+	print("")
 
-	print("[Common] Vector normalization test complete.")
+	-- Method 2b: vec:normalize() lowercase
+	print("[Common] Method 2b: vec:normalize() - Instance method lowercase")
+	local m2b_vec = Vector3(3, 4, 0)
+	local success2b, result2b = pcall(function()
+		return m2b_vec:normalize()
+	end)
+	if success2b then
+		print(
+			string.format(
+				"  Called successfully, vec now: (%.3f, %.3f, %.3f), Length: %.3f",
+				m2b_vec.x,
+				m2b_vec.y,
+				m2b_vec.z,
+				m2b_vec:Length()
+			)
+		)
+		print(string.format("  Return value: %s (type: %s)", tostring(result2b), type(result2b)))
+	else
+		print("  FAILED: " .. tostring(result2b))
+	end
+	print("")
+
+	-- Method 2c: vec:Normalize() like Freecam.lua (explicit test)
+	print("[Common] Method 2c: vec:Normalize() - Like Freecam.lua pattern")
+	local m2c_vec = Vector3(3, 4, 0)
+	local success2c, result2c = pcall(function()
+		m2c_vec:Normalize() -- This is what Freecam.lua does
+		return m2c_vec -- Return the modified vector
+	end)
+	if success2c then
+		print(
+			string.format(
+				"  Called successfully, vec now: (%.3f, %.3f, %.3f), Length: %.3f",
+				m2c_vec.x,
+				m2c_vec.y,
+				m2c_vec.z,
+				m2c_vec:Length()
+			)
+		)
+		print(string.format("  Return value: %s (type: %s)", tostring(result2c), type(result2c)))
+	else
+		print("  FAILED: " .. tostring(result2c))
+	end
+	print("")
+
+	-- Method 3: Vector3.Normalize() static method (unlikely but test)
+	print("[Common] Method 3: Vector3.Normalize(vec) - Static method")
+	local m3_vec = Vector3(3, 4, 0)
+	local success3, result3 = pcall(function()
+		return Vector3.Normalize(m3_vec)
+	end)
+	if success3 then
+		print(
+			string.format(
+				"  SUCCESS! Return: (%.3f, %.3f, %.3f), Length: %.3f",
+				result3.x,
+				result3.y,
+				result3.z,
+				result3:Length()
+			)
+		)
+	else
+		print("  FAILED: " .. tostring(result3))
+	end
+	print("")
+
+	-- Method 4: Division approach (known working)
+	print("[Common] Method 4: vec / vec:Length() - Division")
+	local m4_vec = Vector3(3, 4, 0)
+	local success4, result4 = pcall(function()
+		return m4_vec / m4_vec:Length()
+	end)
+	if success4 then
+		print(
+			string.format(
+				"  SUCCESS! Result: (%.3f, %.3f, %.3f), Length: %.3f",
+				result4.x,
+				result4.y,
+				result4.z,
+				result4:Length()
+			)
+		)
+	else
+		print("  FAILED: " .. tostring(result4))
+	end
+	print("")
+
+	-- Method 5: Inline division with new vector
+	print("[Common] Method 5: Vector3(a,b,c) / length - Inline with constructor")
+	local success5, result5 = pcall(function()
+		local v = Vector3(3, 4, 0)
+		return v / 5.0
+	end)
+	if success5 then
+		print(
+			string.format(
+				"  SUCCESS! Result: (%.3f, %.3f, %.3f), Length: %.3f",
+				result5.x,
+				result5.y,
+				result5.z,
+				result5:Length()
+			)
+		)
+	else
+		print("  FAILED: " .. tostring(result5))
+	end
+	print("")
+
+	-- Method 6: Using vector.Divide if exists
+	print("[Common] Method 6: vector.Divide(vec, scalar) - Library divide")
+	local m6_vec = Vector3(3, 4, 0)
+	local success6, result6 = pcall(function()
+		return vector.Divide(m6_vec, 5.0)
+	end)
+	if success6 then
+		print(
+			string.format(
+				"  SUCCESS! Result: (%.3f, %.3f, %.3f), Length: %.3f",
+				result6.x,
+				result6.y,
+				result6.z,
+				result6:Length()
+			)
+		)
+	else
+		print("  FAILED: " .. tostring(result6))
+	end
+	print("")
+
+	-- Method 7: Check what vector library actually has
+	print("[Common] Method 7: Inspect vector library contents")
+	local success7, result7 = pcall(function()
+		local keys = {}
+		for k, v in pairs(vector) do
+			table.insert(keys, k)
+		end
+		return table.concat(keys, ", ")
+	end)
+	if success7 then
+		print("  Vector library functions: " .. tostring(result7))
+	else
+		print("  FAILED: " .. tostring(result7))
+	end
+	print("")
+
+	print("[Common] ============================================")
+	print("[Common] TEST COMPLETE")
+	print("[Common] ============================================")
 end
 
 -- Run test on load to verify behavior
@@ -6239,12 +6402,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		-- Direction to goal from current position
 		Profiler.Begin("CalculateDirection")
+		Profiler.Begin("VectorLength")
 		local toGoal = goalPos - currentPos
 		local distToGoal = toGoal:Length()
-		if distToGoal > 1 then
-			toGoal:Normalize() -- Reuse as direction vector, modifies in-place
-		end
-		local dir = toGoal
+		Profiler.End("VectorLength")
+		Profiler.Begin("VectorDivide")
+		local dir = distToGoal > 0.001 and (toGoal / distToGoal) or Vector3(1, 0, 0)
+		Profiler.End("VectorDivide")
 		Profiler.End("CalculateDirection")
 
 		if distToGoal < 50 then
