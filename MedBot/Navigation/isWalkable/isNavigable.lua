@@ -39,8 +39,7 @@ local MAX_SURFACE_ANGLE = 55
 local MAX_ITERATIONS = 37
 
 -- Debug
-local DEBUG_TRACES = true -- Disabled for production
-local DEBUG_MODE = true -- Set to false for production to disable profiler overhead
+local DEBUG_MODE = false -- Set to true for debugging (enables traces + profiler)
 local hullTraces = {}
 local currentTickLogged = -1
 
@@ -59,7 +58,7 @@ local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter
 	return result
 end
 
-local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
+local TraceHull = DEBUG_MODE and traceHullWrapper or engine.TraceHull
 
 -- Adjust the direction vector to align with the surface normal
 local function adjustDirectionToSurface(direction, surfaceNormal)
@@ -298,7 +297,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					traceCount = traceCount + 1
 
 					if trace.fraction < 0.99 then
-						if DEBUG_TRACES then
+						if DEBUG_MODE then
 							print(
 								string.format(
 									"[IsNavigable] FAIL: Entity blocking segment (trace %d, angle=%.1f°)",
@@ -316,7 +315,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				end
 			end
 
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(
 					string.format(
 						"[IsNavigable] SUCCESS: Path clear with %d traces (from %d waypoints)",
@@ -348,7 +347,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
 
 		if not exitPoint or not exitDir then
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
 			end
 			ProfilerEnd("Iteration")
@@ -356,7 +355,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			return false
 		end
 
-		if DEBUG_TRACES then
+		if DEBUG_MODE then
 			local dirNames = { [1] = "N", [2] = "E", [3] = "S", [4] = "W" }
 			print(
 				string.format(
@@ -439,7 +438,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 						local inY = exitPoint.y >= (checkNode._minY - OVERLAP_TOLERANCE)
 							and exitPoint.y <= (checkNode._maxY + OVERLAP_TOLERANCE)
 
-						if DEBUG_TRACES then
+						if DEBUG_MODE then
 							print(
 								string.format(
 									"[IsNavigable] Check area=%d via %s, inX=%s, inY=%s",
@@ -453,14 +452,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 						if inX and inY then
 							neighborNode = candidate
-							if DEBUG_TRACES then
+							if DEBUG_MODE then
 								print(string.format("[IsNavigable] Found neighbor area %d", candidate.id))
 							end
 							break
 						end
 					elseif candidate then
 						-- Door node - traverse through to find area on other side
-						if DEBUG_TRACES then
+						if DEBUG_MODE then
 							print(
 								string.format("[IsNavigable]   Conn %d: Door %s, traversing...", i, tostring(targetId))
 							)
@@ -480,7 +479,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 											local inY = exitPoint.y >= (areaNode._minY - OVERLAP_TOLERANCE)
 												and exitPoint.y <= (areaNode._maxY + OVERLAP_TOLERANCE)
 
-											if DEBUG_TRACES then
+											if DEBUG_MODE then
 												print(
 													string.format(
 														"[IsNavigable]     Door leads to area=%d, inX=%s, inY=%s",
@@ -493,7 +492,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 											if inX and inY then
 												neighborNode = areaNode
-												if DEBUG_TRACES then
+												if DEBUG_MODE then
 													print(
 														string.format(
 															"[IsNavigable] Found neighbor area %d via door",
@@ -518,13 +517,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				end
 			end
 		else
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(string.format("[IsNavigable] No connections in exit direction %d", exitDir))
 			end
 		end
 
 		if not neighborNode then
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(
 					string.format(
 						"[IsNavigable] FAIL: No neighbor found at exit (%.1f, %.1f)",
@@ -546,7 +545,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		local groundZ, groundNormal = getGroundZFromQuad(Vector3(entryX, entryY, 0), neighborNode)
 
 		if not groundZ then
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(string.format("[IsNavigable] FAIL: No ground geometry at entry to node %d", neighborNode.id))
 			end
 			ProfilerEnd("Iteration")
@@ -563,7 +562,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			normal = groundNormal,
 		})
 
-		if DEBUG_TRACES then
+		if DEBUG_MODE then
 			print(string.format("[IsNavigable] Crossed to node %d (Z=%.1f)", neighborNode.id, groundZ))
 		end
 
@@ -573,7 +572,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	end
 
 	-- Phase 1 failed to reach goal
-	if DEBUG_TRACES then
+	if DEBUG_MODE then
 		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
 	end
 	ProfilerEnd("CanSkip")
@@ -582,7 +581,7 @@ end
 
 -- Debug
 function Navigable.DrawDebugTraces()
-	if not DEBUG_TRACES then
+	if not DEBUG_MODE then
 		return
 	end
 	for _, trace in ipairs(hullTraces) do
@@ -594,7 +593,7 @@ function Navigable.DrawDebugTraces()
 end
 
 function Navigable.SetDebug(enabled)
-	DEBUG_TRACES = enabled
+	DEBUG_MODE = enabled
 end
 
 return Navigable

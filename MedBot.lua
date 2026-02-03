@@ -6085,8 +6085,7 @@ local MAX_SURFACE_ANGLE = 55
 local MAX_ITERATIONS = 37
 
 -- Debug
-local DEBUG_TRACES = true -- Disabled for production
-local DEBUG_MODE = true -- Set to false for production to disable profiler overhead
+local DEBUG_MODE = false -- Set to true for debugging (enables traces + profiler)
 local hullTraces = {}
 local currentTickLogged = -1
 
@@ -6105,7 +6104,7 @@ local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter
 	return result
 end
 
-local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
+local TraceHull = DEBUG_MODE and traceHullWrapper or engine.TraceHull
 
 -- Adjust the direction vector to align with the surface normal
 local function adjustDirectionToSurface(direction, surfaceNormal)
@@ -6344,7 +6343,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					traceCount = traceCount + 1
 
 					if trace.fraction < 0.99 then
-						if DEBUG_TRACES then
+						if DEBUG_MODE then
 							print(
 								string.format(
 									"[IsNavigable] FAIL: Entity blocking segment (trace %d, angle=%.1f°)",
@@ -6362,7 +6361,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				end
 			end
 
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(
 					string.format(
 						"[IsNavigable] SUCCESS: Path clear with %d traces (from %d waypoints)",
@@ -6394,7 +6393,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
 
 		if not exitPoint or not exitDir then
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
 			end
 			ProfilerEnd("Iteration")
@@ -6402,7 +6401,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			return false
 		end
 
-		if DEBUG_TRACES then
+		if DEBUG_MODE then
 			local dirNames = { [1] = "N", [2] = "E", [3] = "S", [4] = "W" }
 			print(
 				string.format(
@@ -6485,7 +6484,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 						local inY = exitPoint.y >= (checkNode._minY - OVERLAP_TOLERANCE)
 							and exitPoint.y <= (checkNode._maxY + OVERLAP_TOLERANCE)
 
-						if DEBUG_TRACES then
+						if DEBUG_MODE then
 							print(
 								string.format(
 									"[IsNavigable] Check area=%d via %s, inX=%s, inY=%s",
@@ -6499,14 +6498,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 						if inX and inY then
 							neighborNode = candidate
-							if DEBUG_TRACES then
+							if DEBUG_MODE then
 								print(string.format("[IsNavigable] Found neighbor area %d", candidate.id))
 							end
 							break
 						end
 					elseif candidate then
 						-- Door node - traverse through to find area on other side
-						if DEBUG_TRACES then
+						if DEBUG_MODE then
 							print(
 								string.format("[IsNavigable]   Conn %d: Door %s, traversing...", i, tostring(targetId))
 							)
@@ -6526,7 +6525,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 											local inY = exitPoint.y >= (areaNode._minY - OVERLAP_TOLERANCE)
 												and exitPoint.y <= (areaNode._maxY + OVERLAP_TOLERANCE)
 
-											if DEBUG_TRACES then
+											if DEBUG_MODE then
 												print(
 													string.format(
 														"[IsNavigable]     Door leads to area=%d, inX=%s, inY=%s",
@@ -6539,7 +6538,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 											if inX and inY then
 												neighborNode = areaNode
-												if DEBUG_TRACES then
+												if DEBUG_MODE then
 													print(
 														string.format(
 															"[IsNavigable] Found neighbor area %d via door",
@@ -6564,13 +6563,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				end
 			end
 		else
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(string.format("[IsNavigable] No connections in exit direction %d", exitDir))
 			end
 		end
 
 		if not neighborNode then
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(
 					string.format(
 						"[IsNavigable] FAIL: No neighbor found at exit (%.1f, %.1f)",
@@ -6592,7 +6591,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		local groundZ, groundNormal = getGroundZFromQuad(Vector3(entryX, entryY, 0), neighborNode)
 
 		if not groundZ then
-			if DEBUG_TRACES then
+			if DEBUG_MODE then
 				print(string.format("[IsNavigable] FAIL: No ground geometry at entry to node %d", neighborNode.id))
 			end
 			ProfilerEnd("Iteration")
@@ -6609,7 +6608,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			normal = groundNormal,
 		})
 
-		if DEBUG_TRACES then
+		if DEBUG_MODE then
 			print(string.format("[IsNavigable] Crossed to node %d (Z=%.1f)", neighborNode.id, groundZ))
 		end
 
@@ -6619,7 +6618,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	end
 
 	-- Phase 1 failed to reach goal
-	if DEBUG_TRACES then
+	if DEBUG_MODE then
 		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
 	end
 	ProfilerEnd("CanSkip")
@@ -6628,7 +6627,7 @@ end
 
 -- Debug
 function Navigable.DrawDebugTraces()
-	if not DEBUG_TRACES then
+	if not DEBUG_MODE then
 		return
 	end
 	for _, trace in ipairs(hullTraces) do
@@ -6640,7 +6639,7 @@ function Navigable.DrawDebugTraces()
 end
 
 function Navigable.SetDebug(enabled)
-	DEBUG_TRACES = enabled
+	DEBUG_MODE = enabled
 end
 
 return Navigable
@@ -8156,16 +8155,8 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 
-	-- Node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
-	if WorkManager.attemptWork(1, "node_skipping") then
-		local skipped = NodeSkipper.TrySkipNode(LocalOrigin, function()
-			Navigation.RemoveCurrentNode()
-		end)
-		if skipped then
-			-- Skip was validated - don't do reach-based advancement on same tick
-			reachedTarget = false
-		end
-	end
+	-- Per-tick node skipping (runs every tick)
+	NodeSkipper.Tick(LocalOrigin)
 
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
@@ -8223,45 +8214,17 @@ function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
 	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
-	if G.Menu.Navigation.Skip_Nodes then
-		Log:Debug("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
+	Log:Debug("Removing current node (reached target)")
+	Navigation.RemoveCurrentNode()
+	Navigation.ResetTickTimer()
+	Navigation.ResetNodeSkipping()
 
-		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
-		if #G.Navigation.path >= 2 then
-			local nextNode = G.Navigation.path[2]
-			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
-
-			if not canReachNext then
-				Log:Debug("BLOCKED: Wall between current and next node - triggering repath")
-				Navigation.ClearPath()
-				G.currentState = G.States.IDLE
-				G.lastPathfindingTick = 0
-				return false -- Force repath
-			end
-		end
-
-		Log:Debug("Removing current node (Skip Nodes enabled)")
-		Navigation.RemoveCurrentNode()
-		Navigation.ResetTickTimer()
-		-- Reset node skipping timer when manually advancing
-		Navigation.ResetNodeSkipping()
-
-		if #G.Navigation.path == 0 then
-			Navigation.ClearPath()
-			Log:Info("Reached end of path")
-			G.currentState = G.States.IDLE
-			G.lastPathfindingTick = 0
-			return false -- Don't continue
-		end
-	else
-		Log:Debug("Skip Nodes disabled - not removing node")
-		if #G.Navigation.path <= 1 then
-			Navigation.ClearPath()
-			Log:Info("Reached final node (Skip Nodes disabled)")
-			G.currentState = G.States.IDLE
-			G.lastPathfindingTick = 0
-			return false -- Don't continue
-		end
+	if #G.Navigation.path == 0 then
+		Navigation.ClearPath()
+		Log:Info("Reached end of path")
+		G.currentState = G.States.IDLE
+		G.lastPathfindingTick = 0
+		return false
 	end
 
 	return true -- Continue moving
@@ -8411,153 +8374,177 @@ return MovementDecisions
 end)
 __bundle_register("MedBot.Bot.NodeSkipper", function(require, _LOADED, __bundle_register, __bundle_modules)
 --[[
-Node Skipper - Simple forward-progress node skipping
-Logic:
-1. Respect Skip_Nodes toggle
-2. Only skip when the player is closer to the next node than the current node is
-3. Returns fixed skip count (1) to advance steadily without funneling
+Node Skipper - Per-tick node skipping with virtual waypoints
+Runs every tick:
+1. Smart skip: If player closer to next node than current node is, skip current
+2. Forward skip: Check if can skip to further nodes using isNavigable
+3. Virtual waypoints: Instead of discarding nodes, create interpolated waypoints
 ]]
 
 local Common = require("MedBot.Core.Common")
 local G = require("MedBot.Core.Globals")
-local WorkManager = require("MedBot.WorkManager")
-local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+local isNavigable = require("MedBot.Navigation.isWalkable.isNavigable")
+local Node = require("MedBot.Navigation.Node")
 
 local Log = Common.Log.new("NodeSkipper")
 
 local NodeSkipper = {}
 
--- ============================================================================
--- PUBLIC API
--- ============================================================================
+local VIRTUAL_WAYPOINT_SPACING = 150
 
--- Initialize/reset state when needed
 function NodeSkipper.Reset()
-	G.Navigation.nextNodeCloser = false
+	G.Navigation.virtualWaypoints = nil
 end
 
--- SINGLE SOURCE OF TRUTH for node skipping
--- Checks if we should skip current node and executes the skip
--- RETURNS: true if skipped, false otherwise
-function NodeSkipper.TrySkipNode(currentPos, removeNodeCallback)
-	-- Respect Skip_Nodes menu setting
-	if not G.Menu.Navigation.Skip_Nodes then
-		Log:Debug("Skip_Nodes is disabled")
-		return false
+local function createVirtualWaypoints(startPos, endPos, skippedNodes)
+	assert(startPos, "createVirtualWaypoints: startPos missing")
+	assert(endPos, "createVirtualWaypoints: endPos missing")
+	assert(skippedNodes, "createVirtualWaypoints: skippedNodes missing")
+
+	local waypoints = {}
+	local totalDist = Common.Distance3D(startPos, endPos)
+
+	if totalDist < 1 then
+		return waypoints
 	end
 
-	Log:Debug("Skip_Nodes is ENABLED, checking conditions...")
+	local dir = (endPos - startPos) / totalDist
+
+	local numSkipped = #skippedNodes
+	if numSkipped == 0 then
+		return waypoints
+	end
+
+	for i = 1, numSkipped do
+		local skippedNode = skippedNodes[i]
+		assert(skippedNode and skippedNode.pos, "createVirtualWaypoints: invalid skipped node")
+
+		local distToSkipped = Common.Distance3D(startPos, skippedNode.pos)
+		local ratio = distToSkipped / totalDist
+
+		local virtualPos = startPos + dir * (ratio * totalDist)
+
+		table.insert(waypoints, {
+			pos = virtualPos,
+			virtual = true,
+			originalNode = skippedNode,
+		})
+	end
+
+	return waypoints
+end
+
+function NodeSkipper.CheckSmartSkip(playerPos)
+	assert(playerPos, "CheckSmartSkip: playerPos missing")
+
+	if not G.Menu.Navigation.Skip_Nodes then
+		return false
+	end
 
 	local path = G.Navigation.path
-	if not path then
-		Log:Debug("ABORT - No path exists")
+	if not path or #path < 2 then
 		return false
 	end
 
-	-- Path goes player → goal (normal order)
-	-- path[1] = current target (walking toward RIGHT NOW)
-	-- path[2] = next node (after current)
-	-- path[3] = skip target (validate if we can reach this directly)
-	if #path < 3 then
-		Log:Debug("ABORT - Path too short (length=%d, need 3+)", #path)
+	local currentNode = path[1]
+	local nextNode = path[2]
+
+	if not (currentNode and currentNode.pos and nextNode and nextNode.pos) then
 		return false
 	end
 
-	local currentNode = path[1] -- Current target
-	local nextNode = path[2] -- Next after current
-	local skipToNode = path[3] -- Skip target
+	local distPlayerToNext = Common.Distance3D(playerPos, nextNode.pos)
+	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 
-	if not currentNode or not nextNode or not skipToNode then
-		Log:Debug("ABORT - Missing nodes")
-		return false
-	end
-
-	if not currentNode.pos or not nextNode.pos or not skipToNode.pos then
-		Log:Debug("ABORT - Missing node positions")
-		return false
-	end
-
-	Log:Debug("Path valid, checking distances (path length=%d)", #path)
-	Log:Debug(
-		"path[1]=%s (current), path[2]=%s (next), path[3]=%s (skip target)",
-		tostring(currentNode.id or "nil"),
-		tostring(nextNode.id or "nil"),
-		tostring(skipToNode.id or "nil")
-	)
-
-	-- CRITICAL: Only skip if we're actually AT or PAST path[1]
-	-- If player is far from path[1], we haven't reached it yet (e.g., fell and need to climb back)
-	local distPlayerToCurrent = Common.Distance3D(currentPos, currentNode.pos)
-	local REACH_THRESHOLD = 60 -- Same as MovementDecisions reach distance
-
-	if distPlayerToCurrent > REACH_THRESHOLD then
-		Log:Debug(
-			"ABORT - Haven't reached path[1] yet (dist=%.0f > threshold=%d)",
-			distPlayerToCurrent,
-			REACH_THRESHOLD
-		)
-		Log:Debug("Path[1] might be above/behind us after falling - don't skip until we reach it")
-		return false
-	end
-
-	local distPlayerToSkip = Common.Distance3D(currentPos, skipToNode.pos)
-	local distNextToSkip = Common.Distance3D(nextNode.pos, skipToNode.pos)
-
-	Log:Debug("Player pos=(%.0f,%.0f,%.0f)", currentPos.x, currentPos.y, currentPos.z)
-	Log:Debug("path[1] (current) pos=(%.0f,%.0f,%.0f)", currentNode.pos.x, currentNode.pos.y, currentNode.pos.z)
-	Log:Debug("path[2] (next) pos=(%.0f,%.0f,%.0f)", nextNode.pos.x, nextNode.pos.y, nextNode.pos.z)
-	Log:Debug("path[3] (skip target) pos=(%.0f,%.0f,%.0f)", skipToNode.pos.x, skipToNode.pos.y, skipToNode.pos.z)
-
-	-- Only skip if player is closer to skip target than NEXT node is to skip target
-	-- (meaning we're progressing past the current node already)
-	if distPlayerToSkip >= distNextToSkip then
-		Log:Debug("ABORT - Not closer (player=%.0f >= next=%.0f)", distPlayerToSkip, distNextToSkip)
-		return false -- Don't skip if we're not moving forward
-	end
-
-	Log:Debug("Distance check PASSED (player=%.0f < next=%.0f)", distPlayerToSkip, distNextToSkip)
-
-	-- VALIDATION: Check if we can walk DIRECTLY to skip target (path[3])
-	Log:Debug("=== Validate path to SKIP TARGET (path[3]) ===")
-	Log:Debug(
-		"FROM PLAYER(%.0f,%.0f,%.0f) TO SKIP_TARGET(%.0f,%.0f,%.0f)",
-		currentPos.x,
-		currentPos.y,
-		currentPos.z,
-		skipToNode.pos.x,
-		skipToNode.pos.y,
-		skipToNode.pos.z
-	)
-
-	if not WorkManager.attemptWork(11, "node_skip_validation") then
-		Log:Debug("Skip validation on cooldown - waiting 11 ticks between checks")
-		return false
-	end
-
-	local isWalkable = PathValidator.Path(currentPos, skipToNode.pos)
-	Log:Debug("Can reach skip target directly: %s", tostring(isWalkable))
-
-	-- Debug logging (respects G.Menu.Main.Debug)
-	Log:Debug(
-		"Skip check: playerDist=%.0f nextDist=%.0f walkable=%s",
-		distPlayerToSkip,
-		distNextToSkip,
-		tostring(isWalkable)
-	)
-
-	if not isWalkable then
-		Log:Debug("Skip blocked: path not walkable (wall detected)")
-		return false -- Don't skip if path has walls/obstacles
-	end
-
-	-- Execute the skip - remove path[1] (current node) so path[2] becomes new current
-	if removeNodeCallback then
-		Log:Debug("Skipping path[1] (node %s) - direct path to path[3] validated", tostring(currentNode.id))
-		removeNodeCallback()
+	if distPlayerToNext < distCurrentToNext then
+		Log:Debug("Smart skip: player closer to next (%.0f < %.0f)", distPlayerToNext, distCurrentToNext)
+		table.remove(path, 1)
+		G.Navigation.currentNodeIndex = 1
 		return true
 	end
 
 	return false
+end
+
+function NodeSkipper.CheckForwardSkip(playerPos)
+	assert(playerPos, "CheckForwardSkip: playerPos missing")
+
+	if not G.Menu.Navigation.Skip_Nodes then
+		return false
+	end
+
+	local path = G.Navigation.path
+	if not path or #path < 3 then
+		return false
+	end
+
+	local currentNode = path[1]
+	if not (currentNode and currentNode.pos) then
+		return false
+	end
+
+	local currentArea = Node.GetAreaAtPosition(playerPos)
+	if not currentArea then
+		return false
+	end
+
+	local furthestSkipIdx = 1
+	local skippedNodes = {}
+
+	for i = 2, math.min(#path, 10) do
+		local targetNode = path[i]
+		if not (targetNode and targetNode.pos) then
+			break
+		end
+
+		local canSkip = isNavigable.CanSkip(playerPos, targetNode.pos, currentArea, false)
+
+		if canSkip then
+			furthestSkipIdx = i
+			Log:Debug("Can skip to path[%d] (node %s)", i, tostring(targetNode.id))
+		else
+			break
+		end
+	end
+
+	if furthestSkipIdx > 1 then
+		for i = 1, furthestSkipIdx - 1 do
+			table.insert(skippedNodes, path[1])
+			table.remove(path, 1)
+		end
+
+		local targetNode = path[1]
+		assert(targetNode and targetNode.pos, "CheckForwardSkip: target node invalid after skip")
+
+		local virtuals = createVirtualWaypoints(playerPos, targetNode.pos, skippedNodes)
+		G.Navigation.virtualWaypoints = virtuals
+
+		Log:Debug("Forward skip: removed %d nodes, created %d virtual waypoints", #skippedNodes, #virtuals)
+
+		G.Navigation.currentNodeIndex = 1
+		return true
+	end
+
+	return false
+end
+
+function NodeSkipper.Tick(playerPos)
+	assert(playerPos, "Tick: playerPos missing")
+
+	if not G.Menu.Navigation.Skip_Nodes then
+		return
+	end
+
+	local path = G.Navigation.path
+	if not path or #path < 2 then
+		return
+	end
+
+	if NodeSkipper.CheckSmartSkip(playerPos) then
+		return
+	end
+
+	NodeSkipper.CheckForwardSkip(playerPos)
 end
 
 return NodeSkipper

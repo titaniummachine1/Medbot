@@ -50,16 +50,8 @@ function MovementDecisions.checkDistanceAndAdvance(userCmd)
 	-- Check if we've reached the target
 	local reachedTarget = MovementDecisions.hasReachedTarget(LocalOrigin, targetPos, horizontalDist, verticalDist)
 
-	-- Node skipping with WorkManager cooldown (1 tick normally, 132 ticks when stuck)
-	if WorkManager.attemptWork(1, "node_skipping") then
-		local skipped = NodeSkipper.TrySkipNode(LocalOrigin, function()
-			Navigation.RemoveCurrentNode()
-		end)
-		if skipped then
-			-- Skip was validated - don't do reach-based advancement on same tick
-			reachedTarget = false
-		end
-	end
+	-- Per-tick node skipping (runs every tick)
+	NodeSkipper.Tick(LocalOrigin)
 
 	if reachedTarget then
 		Log:Debug("Reached target - advancing waypoint/node")
@@ -117,45 +109,17 @@ function MovementDecisions.advanceNode()
 	previousDistance = nil -- Reset tracking when advancing nodes
 	Log:Debug(tostring(G.Menu.Main.Skip_Nodes), #G.Navigation.path)
 
-	if G.Menu.Navigation.Skip_Nodes then
-		Log:Debug("=== REACHED TARGET - Advancing to next node (NORMAL PROGRESSION, NOT SKIP) ===")
+	Log:Debug("Removing current node (reached target)")
+	Navigation.RemoveCurrentNode()
+	Navigation.ResetTickTimer()
+	Navigation.ResetNodeSkipping()
 
-		-- SINGLE SOURCE OF TRUTH: Validate we can reach NEXT node before advancing
-		if #G.Navigation.path >= 2 then
-			local nextNode = G.Navigation.path[2]
-			local canReachNext = PathValidator.Path(G.pLocal.Origin, nextNode.pos)
-
-			if not canReachNext then
-				Log:Debug("BLOCKED: Wall between current and next node - triggering repath")
-				Navigation.ClearPath()
-				G.currentState = G.States.IDLE
-				G.lastPathfindingTick = 0
-				return false -- Force repath
-			end
-		end
-
-		Log:Debug("Removing current node (Skip Nodes enabled)")
-		Navigation.RemoveCurrentNode()
-		Navigation.ResetTickTimer()
-		-- Reset node skipping timer when manually advancing
-		Navigation.ResetNodeSkipping()
-
-		if #G.Navigation.path == 0 then
-			Navigation.ClearPath()
-			Log:Info("Reached end of path")
-			G.currentState = G.States.IDLE
-			G.lastPathfindingTick = 0
-			return false -- Don't continue
-		end
-	else
-		Log:Debug("Skip Nodes disabled - not removing node")
-		if #G.Navigation.path <= 1 then
-			Navigation.ClearPath()
-			Log:Info("Reached final node (Skip Nodes disabled)")
-			G.currentState = G.States.IDLE
-			G.lastPathfindingTick = 0
-			return false -- Don't continue
-		end
+	if #G.Navigation.path == 0 then
+		Navigation.ClearPath()
+		Log:Info("Reached end of path")
+		G.currentState = G.States.IDLE
+		G.lastPathfindingTick = 0
+		return false
 	end
 
 	return true -- Continue moving
