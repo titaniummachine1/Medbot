@@ -9,7 +9,7 @@ local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+local isNavigable = require("MedBot.Navigation.isWalkable.isNavigable")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 
@@ -59,14 +59,20 @@ function StateHandler.handleIdleState()
 		-- Only use direct-walk shortcut outside CTF and for short hops
 		local mapName = engine.GetMapName():lower()
 		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
-		if allowDirectWalk and PathValidator.Path(G.pLocal.Origin, goalPos) then
-			Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
-			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-			G.Navigation.goalPos = goalPos
-			G.Navigation.goalNodeId = goalNode.id
-			G.currentState = G.States.MOVING
-			G.lastPathfindingTick = globals.TickCount()
-			return
+		if allowDirectWalk then
+			local currentArea = Navigation.GetAreaAtPosition(G.pLocal.Origin)
+			if currentArea then
+				local success, canWalk = pcall(isNavigable.CanSkip, G.pLocal.Origin, goalPos, currentArea, false)
+				if success and canWalk then
+					Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
+					G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+					G.Navigation.goalPos = goalPos
+					G.Navigation.goalNodeId = goalNode.id
+					G.currentState = G.States.MOVING
+					G.lastPathfindingTick = globals.TickCount()
+					return
+				end
+			end
 		end
 
 		-- Check if goal has changed significantly from current path

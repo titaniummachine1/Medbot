@@ -8797,7 +8797,7 @@ local Node = require("MedBot.Navigation.Node")
 local AStar = require("MedBot.Algorithms.A-Star")
 local ConnectionUtils = require("MedBot.Navigation.ConnectionUtils")
 local NodeSkipper = require("MedBot.Bot.NodeSkipper")
-local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+local isNavigable = require("MedBot.Navigation.isWalkable.isNavigable")
 local Lib = Common.Lib
 local Log = Lib.Utils.Logger.new("MedBot")
 Log.Level = 0
@@ -8997,10 +8997,16 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 		return false
 	end
 
-	-- Use the existing walkability check from the PathValidator module
-	local isWalkable = PathValidator.IsWalkable(currentPos, nextNode.pos)
+	-- Use isNavigable instead of IsWalkable
+	local currentArea = Node.GetAreaAtPosition(currentPos)
+	if not currentArea then
+		Log:Debug("CheckNextNodeWalkable: Could not find current area")
+		return false
+	end
 
-	if isWalkable then
+	local success, canWalk = pcall(isNavigable.CanSkip, currentPos, nextNode.pos, currentArea, false)
+
+	if success and canWalk then
 		Log:Debug("Next node %d is walkable from current position", nextNode.id)
 		return true
 	else
@@ -9913,7 +9919,7 @@ local Node = require("MedBot.Navigation.Node")
 local WorkManager = require("MedBot.WorkManager")
 local GoalFinder = require("MedBot.Bot.GoalFinder")
 local CircuitBreaker = require("MedBot.Bot.CircuitBreaker")
-local PathValidator = require("MedBot.Navigation.isWalkable.IsWalkable")
+local isNavigable = require("MedBot.Navigation.isWalkable.isNavigable")
 local SmartJump = require("MedBot.Bot.SmartJump")
 local MovementDecisions = require("MedBot.Bot.MovementDecisions")
 
@@ -9963,14 +9969,20 @@ function StateHandler.handleIdleState()
 		-- Only use direct-walk shortcut outside CTF and for short hops
 		local mapName = engine.GetMapName():lower()
 		local allowDirectWalk = not mapName:find("ctf_") and distance > 25 and distance <= 300
-		if allowDirectWalk and PathValidator.Path(G.pLocal.Origin, goalPos) then
-			Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
-			G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
-			G.Navigation.goalPos = goalPos
-			G.Navigation.goalNodeId = goalNode.id
-			G.currentState = G.States.MOVING
-			G.lastPathfindingTick = globals.TickCount()
-			return
+		if allowDirectWalk then
+			local currentArea = Navigation.GetAreaAtPosition(G.pLocal.Origin)
+			if currentArea then
+				local success, canWalk = pcall(isNavigable.CanSkip, G.pLocal.Origin, goalPos, currentArea, false)
+				if success and canWalk then
+					Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
+					G.Navigation.path = { { pos = goalPos, id = goalNode.id } }
+					G.Navigation.goalPos = goalPos
+					G.Navigation.goalNodeId = goalNode.id
+					G.currentState = G.States.MOVING
+					G.lastPathfindingTick = globals.TickCount()
+					return
+				end
+			end
 		end
 
 		-- Check if goal has changed significantly from current path
