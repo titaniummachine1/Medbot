@@ -429,12 +429,15 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		-- Track elevation changes for hill/cave detection
 		local heightDiff = groundZ - lastHeight
+		local traceFromPos = nil
+		local traceToPos = nil
 
 		if heightDiff > STEP_HEIGHT then
 			-- Climbing - track highest point
 			if not lastWasClimbing then
 				-- Started climbing - mark as potential hill
 				lastWasClimbing = true
+				traceFromPos = currentPos
 			end
 			if groundZ > highestHeight then
 				highestHeight = groundZ
@@ -443,7 +446,34 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			-- Descending
 			if lastWasClimbing and highestHeight > lastHeight + STEP_HEIGHT then
 				-- Was climbing and now descending - save hill peak
-				table.insert(hills, Vector3(currentPos.x, currentPos.y, highestHeight))
+				local hillPeak = Vector3(currentPos.x, currentPos.y, highestHeight)
+				-- Trace from last hill/cave or start to this hill
+				if #hills > 0 or #caves > 0 then
+					local lastPoint = (#caves > 0 and caves[#caves]) or hills[#hills]
+					Profiler.Begin("HillTrace")
+					local hillTrace = TraceHull(
+						lastPoint + STEP_HEIGHT_Vector,
+						hillPeak + STEP_HEIGHT_Vector,
+						PLAYER_HULL.Min,
+						PLAYER_HULL.Max,
+						MASK_PLAYERSOLID
+					)
+					Profiler.End("HillTrace")
+					if hillTrace.fraction < 0.99 then
+						if DEBUG_TRACES then
+							print(
+								string.format(
+									"[IsNavigable] FAIL: Entity blocking path to hill at %.2f",
+									hillTrace.fraction
+								)
+							)
+						end
+						Profiler.End("Iteration")
+						Profiler.End("CanSkip")
+						return false
+					end
+				end
+				table.insert(hills, hillPeak)
 				if DEBUG_TRACES then
 					print(string.format("[IsNavigable] Hill detected at Z=%.1f", highestHeight))
 				end
@@ -452,7 +482,34 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 			-- Check if descending into cave
 			if lastHeight - groundZ > STEP_HEIGHT then
-				table.insert(caves, Vector3(entryX, entryY, groundZ))
+				local cavePoint = Vector3(entryX, entryY, groundZ)
+				-- Trace from last hill to this cave
+				if #hills > 0 then
+					local lastHill = hills[#hills]
+					Profiler.Begin("CaveTrace")
+					local caveTrace = TraceHull(
+						lastHill + STEP_HEIGHT_Vector,
+						cavePoint + STEP_HEIGHT_Vector,
+						PLAYER_HULL.Min,
+						PLAYER_HULL.Max,
+						MASK_PLAYERSOLID
+					)
+					Profiler.End("CaveTrace")
+					if caveTrace.fraction < 0.99 then
+						if DEBUG_TRACES then
+							print(
+								string.format(
+									"[IsNavigable] FAIL: Entity blocking path to cave at %.2f",
+									caveTrace.fraction
+								)
+							)
+						end
+						Profiler.End("Iteration")
+						Profiler.End("CanSkip")
+						return false
+					end
+				end
+				table.insert(caves, cavePoint)
 				if DEBUG_TRACES then
 					print(string.format("[IsNavigable] Cave detected at Z=%.1f", groundZ))
 				end
