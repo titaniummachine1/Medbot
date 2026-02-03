@@ -235,49 +235,63 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
+		-- Determine which edge we're exiting from
+		local exitDirId = nil
+		local tolerance = 1.0
+		if math.abs(exitPoint.y - currentNode._maxY) < tolerance then
+			exitDirId = 1 -- Exiting NORTH edge
+		elseif math.abs(exitPoint.x - currentNode._maxX) < tolerance then
+			exitDirId = 2 -- Exiting EAST edge
+		elseif math.abs(exitPoint.y - currentNode._minY) < tolerance then
+			exitDirId = 3 -- Exiting SOUTH edge
+		elseif math.abs(exitPoint.x - currentNode._minX) < tolerance then
+			exitDirId = 4 -- Exiting WEST edge
+		end
+
+		if DEBUG_TRACES and exitDirId then
+			local dirNames = { [1] = "NORTH", [2] = "EAST", [3] = "SOUTH", [4] = "WEST" }
+			print(string.format("[IsNavigable] Exiting %s edge (dirId=%d)", dirNames[exitDirId], exitDirId))
+		end
+
 		-- Find neighbor node using directional connections (1D bounds check on shared axis)
 		Profiler.Begin("FindNeighbor")
 		local neighborNode = nil
 
-		-- Check all connections - use 1D bounds check on shared axis like door system
-		if currentNode.c then
-			for dirId, dirData in pairs(currentNode.c) do
-				if dirData.connections then
-					for _, connection in ipairs(dirData.connections) do
-						local targetId = connection.node or (type(connection) == "number" and connection)
-						local targetNode = nodes[targetId]
-						if targetNode and not targetNode.isDoor then
-							-- 1D bounds check on shared axis based on direction
-							-- North/South (dirId 1/3): shared axis is X (horizontal)
-							-- East/West (dirId 2/4): shared axis is Y (vertical)
-							local onSharedAxis = false
-							if dirId == 1 or dirId == 3 then
-								-- North or South connection - check X axis only
-								onSharedAxis = exitPoint.x >= targetNode._minX and exitPoint.x <= targetNode._maxX
-							elseif dirId == 2 or dirId == 4 then
-								-- East or West connection - check Y axis only
-								onSharedAxis = exitPoint.y >= targetNode._minY and exitPoint.y <= targetNode._maxY
-							end
-
-							if onSharedAxis then
-								neighborNode = targetNode
-								if DEBUG_TRACES then
-									print(
-										string.format(
-											"[IsNavigable] Found neighbor %d via direction %d at exit (%.1f, %.1f)",
-											targetNode.id,
-											dirId,
-											exitPoint.x,
-											exitPoint.y
-										)
-									)
-								end
-								break
-							end
+		-- Only check connections in exit direction
+		if exitDirId and currentNode.c and currentNode.c[exitDirId] then
+			local dirData = currentNode.c[exitDirId]
+			if dirData.connections then
+				for _, connection in ipairs(dirData.connections) do
+					local targetId = connection.node or (type(connection) == "number" and connection)
+					local targetNode = nodes[targetId]
+					if targetNode and not targetNode.isDoor then
+						-- 1D bounds check on shared axis based on direction
+						-- North/South (dirId 1/3): shared axis is X (horizontal)
+						-- East/West (dirId 2/4): shared axis is Y (vertical)
+						local onSharedAxis = false
+						if exitDirId == 1 or exitDirId == 3 then
+							-- North or South connection - check X axis only
+							onSharedAxis = exitPoint.x >= targetNode._minX and exitPoint.x <= targetNode._maxX
+						elseif exitDirId == 2 or exitDirId == 4 then
+							-- East or West connection - check Y axis only
+							onSharedAxis = exitPoint.y >= targetNode._minY and exitPoint.y <= targetNode._maxY
 						end
-					end
-					if neighborNode then
-						break
+
+						if onSharedAxis then
+							neighborNode = targetNode
+							if DEBUG_TRACES then
+								print(
+									string.format(
+										"[IsNavigable] Found neighbor %d via direction %d at exit (%.1f, %.1f)",
+										targetNode.id,
+										exitDirId,
+										exitPoint.x,
+										exitPoint.y
+									)
+								)
+							end
+							break
+						end
 					end
 				end
 			end
