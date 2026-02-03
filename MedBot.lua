@@ -8447,26 +8447,32 @@ function NodeSkipper.CheckSmartSkip(playerPos)
 	end
 
 	local currentNode = path[1]
-	local nextNode = path[2]
-
-	if not (currentNode and currentNode.pos and nextNode and nextNode.pos) then
-		Log:Debug("Smart skip: invalid nodes")
+	if not (currentNode and currentNode.pos) then
 		return false
 	end
 
-	local distPlayerToNext = Common.Distance3D(playerPos, nextNode.pos)
-	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+	local targetNode = nil
+	for i = 2, math.min(#path, 5) do
+		if path[i] and path[i].pos and not path[i].isDoor then
+			targetNode = path[i]
+			break
+		end
+	end
 
-	Log:Debug(
-		"Smart skip check: player->next=%.0f current->next=%.0f (nodes: %s -> %s)",
-		distPlayerToNext,
-		distCurrentToNext,
-		tostring(currentNode.id),
-		tostring(nextNode.id)
-	)
+	if not targetNode then
+		return false
+	end
 
-	if distPlayerToNext < distCurrentToNext then
-		Log:Debug("Smart skip: SKIPPING current node (player closer to next)")
+	local distPlayerToTarget = Common.Distance3D(playerPos, targetNode.pos)
+	local distCurrentToTarget = Common.Distance3D(currentNode.pos, targetNode.pos)
+
+	if distPlayerToTarget < distCurrentToTarget then
+		Log:Info(
+			"Smart skip: player->target=%.0f < current->target=%.0f, SKIPPING node %s",
+			distPlayerToTarget,
+			distCurrentToTarget,
+			tostring(currentNode.id)
+		)
 		table.remove(path, 1)
 		G.Navigation.currentNodeIndex = 1
 		return true
@@ -8494,7 +8500,7 @@ function NodeSkipper.CheckForwardSkip(playerPos)
 
 	local currentArea = Node.GetAreaAtPosition(playerPos)
 	if not currentArea then
-		Log:Debug("Forward skip: GetAreaAtPosition returned nil")
+		Log:Info("Forward skip: GetAreaAtPosition returned nil - cannot determine current area")
 		return false
 	end
 
@@ -8511,15 +8517,13 @@ function NodeSkipper.CheckForwardSkip(playerPos)
 		local success, canSkip = pcall(isNavigable.CanSkip, playerPos, targetNode.pos, currentArea, false)
 
 		if not success then
-			Log:Debug("Forward skip: isNavigable.CanSkip crashed for path[%d]: %s", i, tostring(canSkip))
+			Log:Info("Forward skip: isNavigable crashed for path[%d]: %s", i, tostring(canSkip))
 			break
 		end
 
 		if canSkip then
 			furthestSkipIdx = i
-			Log:Debug("Can skip to path[%d] (node %s)", i, tostring(targetNode.id))
 		else
-			Log:Debug("Cannot skip to path[%d] (node %s) - blocked", i, tostring(targetNode.id))
 			break
 		end
 	end
@@ -8536,13 +8540,17 @@ function NodeSkipper.CheckForwardSkip(playerPos)
 		local virtuals = createVirtualWaypoints(playerPos, targetNode.pos, skippedNodes)
 		G.Navigation.virtualWaypoints = virtuals
 
-		Log:Debug("Forward skip: removed %d nodes, created %d virtual waypoints", #skippedNodes, #virtuals)
+		Log:Info(
+			"Forward skip: skipped %d nodes (up to node %s), created %d virtual waypoints",
+			#skippedNodes,
+			tostring(targetNode.id),
+			#virtuals
+		)
 
 		G.Navigation.currentNodeIndex = 1
 		return true
 	end
 
-	Log:Debug("Forward skip: no nodes skipped (furthest=%d)", furthestSkipIdx)
 	return false
 end
 
@@ -8560,14 +8568,10 @@ function NodeSkipper.Tick(playerPos)
 
 	local smartSkipped = NodeSkipper.CheckSmartSkip(playerPos)
 	if smartSkipped then
-		Log:Debug("Smart skip executed - skipping forward skip this tick")
 		return
 	end
 
-	local forwardSkipped = NodeSkipper.CheckForwardSkip(playerPos)
-	if not forwardSkipped then
-		Log:Debug("Forward skip failed or found no skippable nodes")
-	end
+	NodeSkipper.CheckForwardSkip(playerPos)
 end
 
 return NodeSkipper
