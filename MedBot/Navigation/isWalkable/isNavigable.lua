@@ -233,7 +233,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			exitPoint + STEP_HEIGHT_Vector,
 			PLAYER_HULL.Min,
 			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID,
+			MASK_PLAYERSOLID
 		)
 		Profiler.End("ExitTrace")
 
@@ -416,24 +416,9 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		-- Ground snap at entry
 		Profiler.Begin("GroundTrace")
-		local groundTrace = TraceHull(
-			entryPos + STEP_HEIGHT_Vector,
-			entryPos - Vector3(0, 0, 100),
-			PLAYER_HULL.Min,
-			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID,
-
-		)
+		local groundTrace =
+			engine.TraceLine(entryPos + STEP_HEIGHT_Vector, entryPos - Vector3(0, 0, 100), MASK_PLAYERSOLID)
 		Profiler.End("GroundTrace")
-
-		-- TEMPORARY: Compare TraceLine vs TraceHull for ground
-		Profiler.Begin("GroundTraceLine")
-		local groundTraceLine = engine.TraceLine(
-			entryPos + STEP_HEIGHT_Vector,
-			entryPos - Vector3(0, 0, 100),
-			MASK_PLAYERSOLID,
-		)
-		Profiler.End("GroundTraceLine")
 
 		if groundTrace.fraction == 1 then
 			if DEBUG_TRACES then
