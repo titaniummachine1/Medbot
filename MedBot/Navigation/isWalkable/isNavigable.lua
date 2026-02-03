@@ -169,40 +169,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local iteration = 0
 	local MAX_ITERATIONS = 20
 
-	-- Get initial ground normal from current node
-	local lastNormal = nil
-	if currentNode.nw then
-		local _, normal = getGroundZFromQuad(currentPos.x, currentPos.y, currentNode)
-		lastNormal = normal
-	end
+	-- Elevation tracking for hill/cave detection (future trace optimization)
+	local lastHeight = startPos.z
+	local highestHeight = startPos.z
+	local hills = {} -- Points where elevation increases > step height
+	local caves = {} -- Points where elevation decreases > step height
+	local lastWasClimbing = false
 
-	-- Horizontal direction to goal (flattened)
-	local toGoalFlat = Vector3(goalPos.x - currentPos.x, goalPos.y - currentPos.y, 0)
-	local horizontalDir = Common.Normalize(toGoalFlat)
-
-	-- Adjust direction to ground normal if available
-	local sweepDir = horizontalDir
-	if lastNormal then
-		local dotProduct = horizontalDir:Dot(lastNormal)
-		sweepDir = Vector3(horizontalDir.x, horizontalDir.y, horizontalDir.z - lastNormal.z * dotProduct)
-		sweepDir = Common.Normalize(sweepDir)
-	end
-
-	-- Cast long sweep to goal (but don't trust it yet - must verify nodes)
-	local horizontalDist = Common.Distance2D(currentPos, goalPos)
-	local sweepEnd = currentPos + sweepDir * horizontalDist
-
-	Profiler.Begin("SweepTrace")
-	local sweepTrace = TraceHull(
-		currentPos + STEP_HEIGHT_Vector,
-		sweepEnd + STEP_HEIGHT_Vector,
-		PLAYER_HULL.Min,
-		PLAYER_HULL.Max,
-		MASK_PLAYERSOLID
-	)
-	Profiler.End("SweepTrace")
-
-	-- Traverse nodes to verify ground exists (don't skip even if sweep clear)
+	-- Traverse nodes to destination (no sweep trace needed)
 	while iteration < MAX_ITERATIONS do
 		Profiler.Begin("Iteration")
 		iteration = iteration + 1
@@ -214,24 +188,19 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			and goalPos.y <= currentNode._maxY
 
 		if goalInCurrentNode then
-			-- Reached destination node - check if sweep was clear
-			if sweepTrace.fraction > 0.99 then
-				-- Traversed all nodes AND sweep clear - path valid
-				if DEBUG_TRACES then
-					print("[IsNavigable] SUCCESS: Reached destination node with clear sweep")
-				end
-				Profiler.End("Iteration")
-				Profiler.End("CanSkip")
-				return true
-			else
-				-- At destination node but sweep blocked - obstacle in the way
-				if DEBUG_TRACES then
-					print("[IsNavigable] FAIL: At destination node but path blocked by obstacle")
-				end
-				Profiler.End("Iteration")
-				Profiler.End("CanSkip")
-				return false
+			-- Reached destination node - traversal successful
+			if DEBUG_TRACES then
+				print(
+					string.format(
+						"[IsNavigable] SUCCESS: Reached destination node (hills=%d, caves=%d)",
+						#hills,
+						#caves
+					)
+				)
 			end
+			Profiler.End("Iteration")
+			Profiler.End("CanSkip")
+			return true
 		end
 
 		-- Find where we exit current node toward goal
@@ -458,47 +427,42 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		local entryPos = Vector3(entryX, entryY, groundZ)
 
-		-- Check if ground normal changed - if so, recast sweep
-		local normalChanged = false
-		if lastNormal and groundNormal then
-			local dotDiff = math.abs(lastNormal:Dot(groundNormal) - 1.0)
-			normalChanged = dotDiff > 0.01
-		end
+		-- Track elevation changes for hill/cave detection
+		local heightDiff = groundZ - lastHeight
 
-		if normalChanged then
-			-- Normal changed - adjust sweep direction and recast
-			lastNormal = groundNormal
+		if heightDiff > STEP_HEIGHT then
+			-- Climbing - track highest point
+			if not lastWasClimbing then
+				-- Started climbing - mark as potential hill
+				lastWasClimbing = true
+			end
+			if groundZ > highestHeight then
+				highestHeight = groundZ
+			end
+		elseif heightDiff < -STEP_HEIGHT then
+			-- Descending
+			if lastWasClimbing and highestHeight > lastHeight + STEP_HEIGHT then
+				-- Was climbing and now descending - save hill peak
+				table.insert(hills, Vector3(currentPos.x, currentPos.y, highestHeight))
+				if DEBUG_TRACES then
+					print(string.format("[IsNavigable] Hill detected at Z=%.1f", highestHeight))
+				end
+			end
+			lastWasClimbing = false
 
-			local toGoalFlat2 = Vector3(goalPos.x - entryPos.x, goalPos.y - entryPos.y, 0)
-			local horizontalDir2 = Common.Normalize(toGoalFlat2)
-
-			local dotProduct = horizontalDir2:Dot(groundNormal)
-			sweepDir = Vector3(horizontalDir2.x, horizontalDir2.y, horizontalDir2.z - groundNormal.z * dotProduct)
-			sweepDir = Common.Normalize(sweepDir)
-
-			local horizontalDist2 = Common.Distance2D(entryPos, goalPos)
-			local sweepEnd2 = entryPos + sweepDir * horizontalDist2
-
-			Profiler.Begin("SweepTrace")
-			sweepTrace = TraceHull(
-				entryPos + STEP_HEIGHT_Vector,
-				sweepEnd2 + STEP_HEIGHT_Vector,
-				PLAYER_HULL.Min,
-				PLAYER_HULL.Max,
-				MASK_PLAYERSOLID
-			)
-			Profiler.End("SweepTrace")
-
-			-- If sweep now reaches goal, success
-			if sweepTrace.fraction > 0.99 then
-				Profiler.End("Iteration")
-				Profiler.End("CanSkip")
-				return true
+			-- Check if descending into cave
+			if lastHeight - groundZ > STEP_HEIGHT then
+				table.insert(caves, Vector3(entryX, entryY, groundZ))
+				if DEBUG_TRACES then
+					print(string.format("[IsNavigable] Cave detected at Z=%.1f", groundZ))
+				end
 			end
 		end
 
+		lastHeight = groundZ
+
 		if DEBUG_TRACES then
-			print(string.format("[IsNavigable] Crossed to node %d", neighborNode.id))
+			print(string.format("[IsNavigable] Crossed to node %d (Z=%.1f)", neighborNode.id, groundZ))
 		end
 
 		currentPos = entryPos
