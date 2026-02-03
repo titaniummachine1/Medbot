@@ -6229,7 +6229,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local nodes = G.Navigation and G.Navigation.nodes
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
 
-	-- PHASE 1: Verify path through nodes and collect waypoints
+	-- ============ PHASE 1: Verify path through nodes ============
 	Profiler.Begin("VerifyPath")
 
 	local currentPos = startPos
@@ -6288,7 +6288,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				traceEnd + STEP_HEIGHT_Vector,
 				PLAYER_HULL.Min,
 				PLAYER_HULL.Max,
-				MASK_PLAYERSOLID
+				MASK_SHOT_HULL
 			)
 			Profiler.End("FinalTrace")
 			if finalTrace.fraction < 0.99 then
@@ -6578,7 +6578,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					traceTarget + STEP_HEIGHT_Vector,
 					PLAYER_HULL.Min,
 					PLAYER_HULL.Max,
-					MASK_PLAYERSOLID
+					MASK_SHOT_HULL
 				)
 				Profiler.End("StartToHillTrace")
 				if startTrace.fraction < 0.99 then
@@ -6633,7 +6633,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					caveTraceTarget + STEP_HEIGHT_Vector,
 					PLAYER_HULL.Min,
 					PLAYER_HULL.Max,
-					MASK_PLAYERSOLID
+					MASK_SHOT_HULL
 				)
 				Profiler.End("HillToCaveTrace")
 				if caveTrace.fraction < 0.99 then
