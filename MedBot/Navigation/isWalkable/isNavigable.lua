@@ -175,7 +175,7 @@ local function getGroundZFromQuad(pos, node)
 	return z, normal
 end
 
--- MAIN FUNCTION - Optimized navmesh-aware sweep
+-- MAIN FUNCTION - Two-phase: verify path, then trace
 function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	Profiler.Begin("CanSkip")
 
@@ -183,61 +183,32 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local nodes = G.Navigation and G.Navigation.nodes
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
 
+	-- PHASE 1: Verify path through nodes and collect waypoints
+	Profiler.Begin("VerifyPath")
+
 	local currentPos = startPos
 	local currentNode = startNode
+	local waypoints = {} -- Collect points where we need to trace
 
-	-- Get initial surface normal from start node and adjust position/direction
-	Profiler.Begin("InitialGround")
+	-- Get starting ground Z
 	local startZ, startNormal = getGroundZFromQuad(startPos, startNode)
-	Profiler.End("InitialGround")
-
-	if startZ and startNormal then
-		-- Snap to ground Z
+	if startZ then
 		currentPos = Vector3(startPos.x, startPos.y, startZ)
-
-		-- Calculate initial direction adjusted to surface
-		local toGoal = goalPos - currentPos
-		local horizDir = Vector3(toGoal.x, toGoal.y, 0)
-		if horizDir:Length() > 0.001 then
-			horizDir = Common.Normalize(horizDir)
-			local startDir = adjustDirectionToSurface(horizDir, startNormal)
-
-			-- Do initial trace along surface direction
-			Profiler.Begin("InitialTrace")
-			local initialTraceDist = math.min(FORWARD_STEP, (goalPos - currentPos):Length())
-			local initialTraceEnd = currentPos + startDir * initialTraceDist
-			local initialTrace = TraceHull(
-				currentPos + STEP_HEIGHT_Vector,
-				initialTraceEnd + STEP_HEIGHT_Vector,
-				PLAYER_HULL.Min,
-				PLAYER_HULL.Max,
-				MASK_PLAYERSOLID
-			)
-			Profiler.End("InitialTrace")
-
-			if initialTrace.fraction < 0.99 then
-				if DEBUG_TRACES then
-					print("[IsNavigable] FAIL: Entity blocking initial path")
-				end
-				Profiler.End("CanSkip")
-				return false
-			end
-
-			-- Set lastTraceEnd to where initial trace ended, but snap Z back down by step height
-			lastTraceEnd = initialTrace.endpos - STEP_HEIGHT_Vector
-		end
 	end
 
-	-- Elevation tracking for hill/cave detection (future trace optimization)
-	local lastHeight = startPos.z
-	local highestHeight = startPos.z
-	local hills = {} -- Points where elevation increases > step height
-	local caves = {} -- Points where elevation decreases > step height
+	table.insert(waypoints, {
+		pos = currentPos,
+		node = startNode,
+		normal = startNormal,
+	})
+
+	local lastHeight = currentPos.z
+	local highestHeight = currentPos.z
 	local lastWasClimbing = false
 
-	-- Traverse nodes to destination (no sweep trace needed)
+	-- Traverse nodes to destination (no traces yet)
 	for iteration = 1, MAX_ITERATIONS do
-		Profiler.Begin("Iteration")
+		Profiler.Begin("VerifyIteration")
 
 		-- Check if goal is in current node
 		local goalInCurrentNode = goalPos.x >= currentNode._minX
