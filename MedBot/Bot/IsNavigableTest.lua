@@ -181,11 +181,6 @@ local function OnCreateMove(Cmd)
 		return
 	end
 
-	-- Don't interfere with movement
-	if Cmd:GetForwardMove() ~= 0 or Cmd:GetSideMove() ~= 0 then
-		return
-	end
-
 	-- Only run test when F key is held
 	if not input.IsButtonDown(KEY_F) then
 		return
