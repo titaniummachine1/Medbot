@@ -40,8 +40,13 @@ local MAX_ITERATIONS = 37
 
 -- Debug
 local DEBUG_TRACES = true -- Disabled for production
+local DEBUG_MODE = true -- Set to false for production to disable profiler overhead
 local hullTraces = {}
 local currentTickLogged = -1
+
+-- Fast profiler calls for production
+local ProfilerBegin = DEBUG_MODE and Profiler.Begin or function() end
+local ProfilerEnd = DEBUG_MODE and Profiler.End or function() end
 
 local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter)
 	local currentTick = globals.TickCount()
@@ -192,7 +197,7 @@ end
 
 -- MAIN FUNCTION - Two phases: 1) verify path through nodes, 2) trace with surface pitch
 function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
-	Profiler.Begin("CanSkip")
+	ProfilerBegin("CanSkip")
 
 	assert(startNode, "CanSkip: startNode required")
 	local nodes = G.Navigation and G.Navigation.nodes
@@ -218,6 +223,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 	-- Traverse to destination (no traces - just verify path exists)
 	for iteration = 1, MAX_ITERATIONS do
+		ProfilerBegin("Iteration")
+
 		-- Check if goal reached
 		local goalInNode = goalPos.x >= currentNode._minX
 			and goalPos.x <= currentNode._maxX
@@ -232,6 +239,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				normal = nil,
 			})
 
+			Profiler.End("Iteration")
 			-- ============ PHASE 2: Trace through waypoints ============
 			if #waypoints < 2 then
 				Profiler.End("CanSkip")
@@ -337,14 +345,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			dir = adjustDirectionToSurface(horizDir, groundNormal)
 		end
 
-		Profiler.Begin("FindExit")
 		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
-		Profiler.End("FindExit")
 
 		if not exitPoint or not exitDir then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
 			end
+			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
 		end
@@ -364,7 +371,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		-- No trace to exit - we trust navmesh is walkable
 
 		-- Find neighbor - optimized linear search from appropriate end
-		Profiler.Begin("FindNeighbor")
 		local neighborNode = nil
 		local OVERLAP_TOLERANCE = 5.0
 
@@ -517,8 +523,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			end
 		end
 
-		Profiler.End("FindNeighbor")
-
 		if not neighborNode then
 			if DEBUG_TRACES then
 				print(
@@ -529,25 +533,23 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					)
 				)
 			end
+			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
 		end
 
 		-- Entry point is exitPoint clamped to neighbor bounds
-		Profiler.Begin("EntryClamp")
 		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
 		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
-		Profiler.End("EntryClamp")
 
 		-- Ground snap using quad geometry (no engine call)
-		Profiler.Begin("GroundCalc")
 		local groundZ, groundNormal = getGroundZFromQuad(Vector3(entryX, entryY, 0), neighborNode)
-		Profiler.End("GroundCalc")
 
 		if not groundZ then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No ground geometry at entry to node %d", neighborNode.id))
 			end
+			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
 		end
@@ -567,6 +569,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		currentPos = entryPos
 		currentNode = neighborNode
+		Profiler.End("Iteration")
 	end
 
 	-- Phase 1 failed to reach goal
