@@ -6248,11 +6248,54 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			and goalPos.y <= currentNode._maxY
 
 		if goalInCurrentNode then
-			-- Trace from last trace end to destination
+			-- Calculate surface-aligned direction for final trace
+			local toGoal = goalPos - lastTraceEnd
+			local horizDir = Vector3(toGoal.x, toGoal.y, 0)
+			local horizLen = math.sqrt(horizDir.x * horizDir.x + horizDir.y * horizDir.y)
+			if horizLen < 0.001 then
+				horizLen = 0.001
+			end
+			horizDir.x = horizDir.x / horizLen
+			horizDir.y = horizDir.y / horizLen
+
+			-- Get ground normal at last trace position
+			local groundZ, groundNormal = getGroundZFromQuad(lastTraceEnd.x, lastTraceEnd.y, currentNode)
+
+			-- Calculate surface-aligned direction
+			local traceDir = horizDir
+			if groundNormal then
+				-- Check if slope is too steep
+				local surfaceAngle = math.deg(math.acos(groundNormal:Dot(UP_VECTOR)))
+				if surfaceAngle > MAX_SURFACE_ANGLE then
+					if DEBUG_TRACES then
+						print(string.format("[IsNavigable] FAIL: Surface too steep (%.1f°)", surfaceAngle))
+					end
+					Profiler.End("Iteration")
+					Profiler.End("CanSkip")
+					return false
+				end
+
+				-- Project horizontal direction onto surface plane
+				local dotProduct = horizDir.x * groundNormal.x + horizDir.y * groundNormal.y
+				traceDir = Vector3(horizDir.x, horizDir.y, -dotProduct / groundNormal.z)
+				-- Normalize
+				local dirLen = math.sqrt(traceDir.x * traceDir.x + traceDir.y * traceDir.y + traceDir.z * traceDir.z)
+				if dirLen > 0.001 then
+					traceDir.x = traceDir.x / dirLen
+					traceDir.y = traceDir.y / dirLen
+					traceDir.z = traceDir.z / dirLen
+				end
+			end
+
+			-- Calculate trace end point along surface-aligned direction
+			local traceDist = (goalPos - lastTraceEnd):Length()
+			local traceEnd = lastTraceEnd + traceDir * traceDist
+
+			-- Trace from last trace end to destination along surface
 			Profiler.Begin("FinalTrace")
 			local finalTrace = TraceHull(
 				lastTraceEnd + STEP_HEIGHT_Vector,
-				goalPos + STEP_HEIGHT_Vector,
+				traceEnd + STEP_HEIGHT_Vector,
 				PLAYER_HULL.Min,
 				PLAYER_HULL.Max,
 				MASK_PLAYERSOLID
