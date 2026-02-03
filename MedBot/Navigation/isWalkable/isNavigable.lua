@@ -65,10 +65,25 @@ local function adjustDirectionToSurface(direction, surfaceNormal)
 		return direction
 	end
 
-	local dotProduct = direction:Dot(surfaceNormal)
-	direction.z = direction.z - surfaceNormal.z * dotProduct
+	-- Project horizontal direction onto sloped surface
+	-- 1. Get right vector perpendicular to horizontal direction
+	local right = direction:Cross(UP_VECTOR)
+	if right:Length() < 0.0001 then
+		-- Direction is straight up/down, return as-is
+		return direction
+	end
+	right = Common.Normalize(right)
 
-	return Common.Normalize(direction)
+	-- 2. Get forward direction on surface (perpendicular to both right and surface normal)
+	local forward = right:Cross(surfaceNormal)
+	forward = Common.Normalize(forward)
+
+	-- 3. Ensure forward points in same general direction as input
+	if forward:Dot(direction) < 0 then
+		forward = forward * -1
+	end
+
+	return forward
 end
 
 -- Find where ray exits node bounds
