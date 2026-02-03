@@ -6245,8 +6245,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
 
 	-- ============ PHASE 1: Verify path through nodes ============
-	Profiler.Begin("VerifyPath")
-
 	local currentPos = startPos
 	local currentNode = startNode
 	local waypoints = {} -- Waypoints for Phase 2
@@ -6266,8 +6264,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 	-- Traverse to destination (no traces - just verify path exists)
 	for iteration = 1, MAX_ITERATIONS do
-		Profiler.Begin("Iteration")
-
 		-- Check if goal reached
 		local goalInNode = goalPos.x >= currentNode._minX
 			and goalPos.x <= currentNode._maxX
@@ -6281,14 +6277,9 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				node = currentNode,
 				normal = nil,
 			})
-			Profiler.End("Iteration")
-			Profiler.End("VerifyPath")
 
 			-- ============ PHASE 2: Trace through waypoints ============
-			Profiler.Begin("TracePath")
-
 			if #waypoints < 2 then
-				Profiler.End("TracePath")
 				Profiler.End("CanSkip")
 				return true -- Single waypoint, no trace needed
 			end
@@ -6334,7 +6325,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					local traceEnd = traceStart.pos + traceDir * traceDist
 
 					-- Trace with hull
-					Profiler.Begin("WaypointTrace")
 					local trace = TraceHull(
 						traceStart.pos + STEP_HEIGHT_Vector,
 						traceEnd + STEP_HEIGHT_Vector,
@@ -6342,7 +6332,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 						PLAYER_HULL.Max,
 						MASK_SHOT_HULL
 					)
-					Profiler.End("WaypointTrace")
 
 					traceCount = traceCount + 1
 
@@ -6356,7 +6345,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 								)
 							)
 						end
-						Profiler.End("TracePath")
 						Profiler.End("CanSkip")
 						return false
 					end
@@ -6376,7 +6364,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				)
 			end
 
-			Profiler.End("TracePath")
 			Profiler.End("CanSkip")
 			return true
 		end
@@ -6404,7 +6391,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
 			end
-			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
 		end
@@ -6589,7 +6575,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					)
 				)
 			end
-			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
 		end
@@ -6609,7 +6594,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No ground geometry at entry to node %d", neighborNode.id))
 			end
-			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
 		end
@@ -6629,14 +6613,12 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		currentPos = entryPos
 		currentNode = neighborNode
-		Profiler.End("Iteration")
 	end
 
 	-- Phase 1 failed to reach goal
 	if DEBUG_TRACES then
 		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
 	end
-	Profiler.End("VerifyPath")
 	Profiler.End("CanSkip")
 	return false
 end
