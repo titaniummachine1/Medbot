@@ -137,8 +137,7 @@ Common.JSON = JSON
 
 --- Normalize vector using in-place :Normalize() (fastest method)
 function Common.Normalize(vec)
-	vec:Normalize() -- Modifies in-place, returns nil
-	return vec -- Return the normalized vector
+	return vector.Divide(vec, vec:Length()) -- Return the normalized vector
 end
 
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
