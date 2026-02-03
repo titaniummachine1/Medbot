@@ -6207,7 +6207,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 	local currentPos = startPos
 	local currentNode = startNode
-	local iteration = 0
 	local MAX_ITERATIONS = 20
 
 	-- Elevation tracking for hill/cave detection (future trace optimization)
@@ -6218,9 +6217,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local lastWasClimbing = false
 
 	-- Traverse nodes to destination (no sweep trace needed)
-	while iteration < MAX_ITERATIONS do
+	for iteration = 1, MAX_ITERATIONS do
 		Profiler.Begin("Iteration")
-		iteration = iteration + 1
 
 		-- Check if goal is in current node
 		local goalInCurrentNode = goalPos.x >= currentNode._minX
