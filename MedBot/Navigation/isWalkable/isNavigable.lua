@@ -175,6 +175,24 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local caves = {} -- Points where elevation decreases > step height
 	local lastWasClimbing = false
 
+	-- Initial step-height trace from start position
+	Profiler.Begin("InitialTrace")
+	local initialTrace = TraceHull(
+		startPos + STEP_HEIGHT_Vector,
+		startPos + STEP_HEIGHT_Vector + Vector3(0, 0, 1),
+		PLAYER_HULL.Min,
+		PLAYER_HULL.Max,
+		MASK_PLAYERSOLID
+	)
+	Profiler.End("InitialTrace")
+	if initialTrace.fraction < 0.99 then
+		if DEBUG_TRACES then
+			print("[IsNavigable] FAIL: Blocked at start position")
+		end
+		Profiler.End("CanSkip")
+		return false
+	end
+
 	-- Traverse nodes to destination (no sweep trace needed)
 	for iteration = 1, MAX_ITERATIONS do
 		Profiler.Begin("Iteration")
@@ -186,6 +204,29 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			and goalPos.y <= currentNode._maxY
 
 		if goalInCurrentNode then
+			-- Reached destination node - check hills/caves traces to destination
+			if #hills > 0 or #caves > 0 then
+				-- Trace from last hill/cave to destination
+				local lastPoint = (#caves > 0 and caves[#caves]) or hills[#hills]
+				Profiler.Begin("FinalTrace")
+				local finalTrace = TraceHull(
+					lastPoint + STEP_HEIGHT_Vector,
+					goalPos + STEP_HEIGHT_Vector,
+					PLAYER_HULL.Min,
+					PLAYER_HULL.Max,
+					MASK_PLAYERSOLID
+				)
+				Profiler.End("FinalTrace")
+				if finalTrace.fraction < 0.99 then
+					if DEBUG_TRACES then
+						print("[IsNavigable] FAIL: Entity blocking path to destination")
+					end
+					Profiler.End("Iteration")
+					Profiler.End("CanSkip")
+					return false
+				end
+			end
+
 			-- Reached destination node - traversal successful
 			if DEBUG_TRACES then
 				print(
