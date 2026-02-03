@@ -8377,41 +8377,43 @@ function NodeSkipper.Tick(playerPos)
 	end
 
 	local currentNode = path[1]
-	local nextNode = path[2]
+	local targetNode = path[2]
+	local nextTargetNode = path[3]
 
-	if not (currentNode and currentNode.pos and nextNode and nextNode.pos) then
-		return false
-	end
+	-- SMART SKIP: Check if player already passed the current target (path[2])
+	-- We compare distance to next target (path[3])
+	if nextTargetNode and nextTargetNode.pos and targetNode and targetNode.pos then
+		local distPlayerToNext = Common.Distance3D(playerPos, nextTargetNode.pos)
+		local distTargetToNext = Common.Distance3D(targetNode.pos, nextTargetNode.pos)
 
-	-- SMART SKIP: Check if player already passed the current waypoint
-	local distPlayerToNext = Common.Distance3D(playerPos, nextNode.pos)
-	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+		if distPlayerToNext < distTargetToNext then
+			-- Player is closer to path[3] than path[2] is to path[3] - we passed path[2]
+			-- Remove path[2] (current target) so we target path[3]
+			local missedNode = table.remove(path, 2)
 
-	if distPlayerToNext < distCurrentToNext then
-		-- Player is closer to next node than current node is - we missed it
-		local missedNode = table.remove(path, 1)
+			-- Add to history
+			G.Navigation.pathHistory = G.Navigation.pathHistory or {}
+			table.insert(G.Navigation.pathHistory, 1, missedNode)
+			while #G.Navigation.pathHistory > 32 do
+				table.remove(G.Navigation.pathHistory)
+			end
 
-		-- Add to history
-		G.Navigation.pathHistory = G.Navigation.pathHistory or {}
-		table.insert(G.Navigation.pathHistory, 1, missedNode)
-		while #G.Navigation.pathHistory > 32 do
-			table.remove(G.Navigation.pathHistory)
+			-- Track when we last skipped
+			G.Navigation.lastSkipTick = globals.TickCount()
+
+			Log:Info(
+				"MISSED waypoint %s (player closer to next), skipping to %s",
+				tostring(missedNode.id),
+				tostring(nextTargetNode.id)
+			)
+			G.Navigation.currentNodeIndex = 1
+			return true
 		end
-
-		-- Track when we last skipped
-		G.Navigation.lastSkipTick = globals.TickCount()
-
-		Log:Info(
-			"MISSED waypoint %s (player closer to next), continuing to node %s",
-			tostring(missedNode.id),
-			tostring(nextNode.id)
-		)
-		G.Navigation.currentNodeIndex = 1
-		return true
 	end
 
 	-- FORWARD SKIP: Check if we can skip ahead multiple nodes
 	-- Only skip if we can reach path[3] or further (bypassing at least 2 nodes)
+	-- We start checking from path[3]. If reachable, we can skip path[2].
 	if #path < 3 then
 		return false
 	end
@@ -8426,21 +8428,23 @@ function NodeSkipper.Tick(playerPos)
 
 	local furthestIdx = 1
 
-	-- Start checking from path[3] (skip at least 2 nodes)
-	for i = 3, math.min(#path, maxNodesToSkip + 1) do
-		local targetNode = path[i]
-		if not (targetNode and targetNode.pos) then
+	-- Start checking from path[3] (skip path[2] and potentially more)
+	-- We want to go from path[1] (current) -> path[i] (new target)
+	-- Actually, we check if we can walk from Player -> path[i]
+	for i = 3, math.min(#path, maxNodesToSkip + 2) do -- +2 because we start at 3
+		local checkNode = path[i]
+		if not (checkNode and checkNode.pos) then
 			break
 		end
 
 		-- Check distance limit
-		local distToTarget = Common.Distance3D(playerPos, targetNode.pos)
+		local distToTarget = Common.Distance3D(playerPos, checkNode.pos)
 		if distToTarget > maxSkipRange then
 			break
 		end
 
 		-- Check if we can walk directly to this node (bypassing intermediate nodes)
-		local success, canSkip = pcall(isNavigable.CanSkip, playerPos, targetNode.pos, currentArea, false)
+		local success, canSkip = pcall(isNavigable.CanSkip, playerPos, checkNode.pos, currentArea, false)
 
 		if success and canSkip then
 			furthestIdx = i
@@ -8450,16 +8454,19 @@ function NodeSkipper.Tick(playerPos)
 		end
 	end
 
-	-- Apply forward skip only if we can bypass at least 2 nodes (reach path[3] or further)
+	-- Apply forward skip only if we can bypass at least 1 node (reach path[3] or further)
 	if furthestIdx >= 3 then
 		local targetNode = path[furthestIdx]
 
 		-- Initialize path history if needed
 		G.Navigation.pathHistory = G.Navigation.pathHistory or {}
 
-		-- Remove nodes and add to history
-		for i = 1, furthestIdx - 1 do
-			local skipped = table.remove(path, 1)
+		-- Remove nodes BETWEEN path[1] and path[furthestIdx]
+		-- We want to remove path[2], path[3] ... path[furthestIdx-1]
+		-- So we remove 'furthestIdx - 2' nodes starting at index 2
+		local numToRemove = furthestIdx - 2
+		for i = 1, numToRemove do
+			local skipped = table.remove(path, 2)
 			if skipped then
 				table.insert(G.Navigation.pathHistory, 1, skipped)
 			end
@@ -8475,7 +8482,7 @@ function NodeSkipper.Tick(playerPos)
 
 		Log:Info(
 			"FORWARD SKIP: bypassed %d nodes (direct path to %s, max %d, range %.0f)",
-			furthestIdx - 1,
+			numToRemove,
 			tostring(targetNode.id),
 			maxNodesToSkip,
 			maxSkipRange
