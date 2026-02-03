@@ -6541,11 +6541,26 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		if heightDiff > HILL_THRESHOLD then
 			-- Climbing - track highest point
 			if not lastWasClimbing then
-				-- Started climbing - trace from last trace end to this point
+				-- Started climbing - trace from last trace end to this point along surface
+				local toTarget = currentPos - lastTraceEnd
+				local horizDir = Vector3(toTarget.x, toTarget.y, 0)
+				horizDir = Common.Normalize(horizDir)
+
+				-- Get ground normal and adjust direction
+				local _, surfNormal = getGroundZFromQuad(lastTraceEnd.x, lastTraceEnd.y, currentNode)
+				local traceDir = horizDir
+				if surfNormal then
+					traceDir = adjustDirectionToSurface(horizDir, surfNormal)
+				end
+
+				-- Calculate surface-aligned trace target
+				local traceDist = (currentPos - lastTraceEnd):Length()
+				local traceTarget = lastTraceEnd + traceDir * traceDist
+
 				Profiler.Begin("StartToHillTrace")
 				local startTrace = TraceHull(
 					lastTraceEnd + STEP_HEIGHT_Vector,
-					currentPos + STEP_HEIGHT_Vector,
+					traceTarget + STEP_HEIGHT_Vector,
 					PLAYER_HULL.Min,
 					PLAYER_HULL.Max,
 					MASK_PLAYERSOLID
@@ -6581,11 +6596,26 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			-- Check if descending into cave
 			if lastHeight - groundZ > HILL_THRESHOLD then
 				local cavePoint = Vector3(entryX, entryY, groundZ)
-				-- Trace from last trace end to this cave
+				-- Trace from last trace end to this cave along surface
+				local toCave = cavePoint - lastTraceEnd
+				local caveHorizDir = Vector3(toCave.x, toCave.y, 0)
+				caveHorizDir = Common.Normalize(caveHorizDir)
+
+				-- Get ground normal and adjust direction
+				local _, caveNormal = getGroundZFromQuad(lastTraceEnd.x, lastTraceEnd.y, currentNode)
+				local caveTraceDir = caveHorizDir
+				if caveNormal then
+					caveTraceDir = adjustDirectionToSurface(caveHorizDir, caveNormal)
+				end
+
+				-- Calculate surface-aligned cave trace target
+				local caveTraceDist = (cavePoint - lastTraceEnd):Length()
+				local caveTraceTarget = lastTraceEnd + caveTraceDir * caveTraceDist
+
 				Profiler.Begin("HillToCaveTrace")
 				local caveTrace = TraceHull(
 					lastTraceEnd + STEP_HEIGHT_Vector,
-					cavePoint + STEP_HEIGHT_Vector,
+					caveTraceTarget + STEP_HEIGHT_Vector,
 					PLAYER_HULL.Min,
 					PLAYER_HULL.Max,
 					MASK_PLAYERSOLID
