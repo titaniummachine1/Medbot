@@ -6065,6 +6065,15 @@ local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
 local FORWARD_STEP = 100 -- Max distance per forward trace
 local HILL_THRESHOLD = 8 -- 0.5x step height for significant elevation changes
 
+local MaxSpeed = 450
+local MAX_FALL_DISTANCE = 250
+local MAX_FALL_DISTANCE_Vector = Vector3(0, 0, MAX_FALL_DISTANCE)
+local STEP_FRACTION = STEP_HEIGHT / MAX_FALL_DISTANCE
+local UP_VECTOR = Vector3(0, 0, 1)
+local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval()
+local MAX_SURFACE_ANGLE = 55
+local MAX_ITERATIONS = 37
+
 -- Debug
 local DEBUG_TRACES = true -- Disabled for production
 local hullTraces = {}
@@ -6088,7 +6097,7 @@ local function adjustDirectionToSurface(direction, surfaceNormal)
 	direction = Common.Normalize(direction)
 	local angle = math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
 
-	if angle > 55 then
+	if angle > MAX_SURFACE_ANGLE then
 		return direction
 	end
 
@@ -6275,12 +6284,43 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		-- Find where we exit current node toward goal
 		local toGoal = goalPos - currentPos
-		local dir = Common.Normalize(toGoal)
+		-- Start with horizontal direction, then adjust to surface slope
+		local horizDir = Vector3(toGoal.x, toGoal.y, 0)
+		local horizLen = math.sqrt(horizDir.x * horizDir.x + horizDir.y * horizDir.y)
+		if horizLen < 0.001 then
+			horizLen = 0.001
+		end
+		horizDir.x = horizDir.x / horizLen
+		horizDir.y = horizDir.y / horizLen
 
-		-- Adjust direction to align with surface using quad normal
+		-- Get ground normal at current position
 		local groundZ, groundNormal = getGroundZFromQuad(currentPos.x, currentPos.y, currentNode)
+
+		-- Calculate surface slope in horizontal direction
+		local dir = horizDir
 		if groundNormal then
-			dir = adjustDirectionToSurface(dir, groundNormal)
+			-- Check if slope is too steep
+			local surfaceAngle = math.deg(math.acos(groundNormal:Dot(UP_VECTOR)))
+			if surfaceAngle > MAX_SURFACE_ANGLE then
+				if DEBUG_TRACES then
+					print(string.format("[IsNavigable] FAIL: Surface too steep (%.1f°)", surfaceAngle))
+				end
+				Profiler.End("Iteration")
+				Profiler.End("CanSkip")
+				return false
+			end
+
+			-- Adjust direction to follow surface slope
+			-- Project horizontal direction onto surface plane
+			local dotProduct = horizDir.x * groundNormal.x + horizDir.y * groundNormal.y
+			dir = Vector3(horizDir.x, horizDir.y, -dotProduct / groundNormal.z)
+			-- Normalize
+			local dirLen = math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)
+			if dirLen > 0.001 then
+				dir.x = dir.x / dirLen
+				dir.y = dir.y / dirLen
+				dir.z = dir.z / dirLen
+			end
 		end
 
 		Profiler.Begin("FindExit")
