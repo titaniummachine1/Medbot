@@ -240,16 +240,49 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		local neighborNode = nil
 		local OVERLAP_TOLERANCE = 5.0
 
+		if DEBUG_TRACES then
+			local dirCount = 0
+			if currentNode.c then
+				for _ in pairs(currentNode.c) do
+					dirCount = dirCount + 1
+				end
+			end
+			print(string.format("[IsNavigable] currentNode.c has %d directions", dirCount))
+		end
+
 		if currentNode.c then
 			for dirId, dirData in pairs(currentNode.c) do
+				if DEBUG_TRACES then
+					local connCount = dirData.connections and #dirData.connections or 0
+					print(string.format("[IsNavigable] Direction %d: %d connections", dirId, connCount))
+				end
+
 				if dirData.connections then
 					for i, connection in ipairs(dirData.connections) do
 						local targetId = (type(connection) == "table") and (connection.node or connection.id)
 							or connection
 						local candidate = nodes[targetId]
 
-						if candidate then
-							-- Check if exit point overlaps candidate bounds (with tolerance)
+						if DEBUG_TRACES then
+							print(
+								string.format(
+									"[IsNavigable]   Conn %d: targetId=%s, candidate=%s, hasArea=%s",
+									i,
+									tostring(targetId),
+									tostring(candidate ~= nil),
+									tostring(candidate and candidate._minX ~= nil)
+								)
+							)
+						end
+
+						if
+							candidate
+							and candidate._minX
+							and candidate._maxX
+							and candidate._minY
+							and candidate._maxY
+						then
+							-- Area node - check bounds overlap
 							local inX = exitPoint.x >= (candidate._minX - OVERLAP_TOLERANCE)
 								and exitPoint.x <= (candidate._maxX + OVERLAP_TOLERANCE)
 							local inY = exitPoint.y >= (candidate._minY - OVERLAP_TOLERANCE)
@@ -258,7 +291,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 							if DEBUG_TRACES then
 								print(
 									string.format(
-										"[IsNavigable] Check node=%d, X:[%.1f,%.1f] Y:[%.1f,%.1f], exit=(%.1f,%.1f), inX=%s, inY=%s",
+										"[IsNavigable] Check area=%d, X:[%.1f,%.1f] Y:[%.1f,%.1f], exit=(%.1f,%.1f), inX=%s, inY=%s",
 										candidate.id,
 										candidate._minX,
 										candidate._maxX,
@@ -275,9 +308,72 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 							if inX and inY then
 								neighborNode = candidate
 								if DEBUG_TRACES then
-									print(string.format("[IsNavigable] Found neighbor %d", candidate.id))
+									print(string.format("[IsNavigable] Found neighbor area %d", candidate.id))
 								end
 								break
+							end
+						elseif candidate then
+							-- Door node - traverse through to find area on other side
+							if DEBUG_TRACES then
+								print(
+									string.format(
+										"[IsNavigable]   Conn %d: Door %s, traversing...",
+										i,
+										tostring(targetId)
+									)
+								)
+							end
+
+							if candidate.c then
+								-- Find the area connected through this door that isn't currentNode
+								for doorDirId, doorDirData in pairs(candidate.c) do
+									if doorDirData.connections then
+										for _, doorConn in ipairs(doorDirData.connections) do
+											local areaId = (type(doorConn) == "table")
+													and (doorConn.node or doorConn.id)
+												or doorConn
+											local areaNode = nodes[areaId]
+
+											if areaId ~= currentNode.id and areaNode and areaNode._minX then
+												-- Check if this area overlaps exit point
+												local inX = exitPoint.x >= (areaNode._minX - OVERLAP_TOLERANCE)
+													and exitPoint.x <= (areaNode._maxX + OVERLAP_TOLERANCE)
+												local inY = exitPoint.y >= (areaNode._minY - OVERLAP_TOLERANCE)
+													and exitPoint.y <= (areaNode._maxY + OVERLAP_TOLERANCE)
+
+												if DEBUG_TRACES then
+													print(
+														string.format(
+															"[IsNavigable]     Door leads to area=%d, inX=%s, inY=%s",
+															areaId,
+															tostring(inX),
+															tostring(inY)
+														)
+													)
+												end
+
+												if inX and inY then
+													neighborNode = areaNode
+													if DEBUG_TRACES then
+														print(
+															string.format(
+																"[IsNavigable] Found neighbor area %d via door",
+																areaNode.id
+															)
+														)
+													end
+													break
+												end
+											end
+										end
+										if neighborNode then
+											break
+										end
+									end
+									if neighborNode then
+										break
+									end
+								end
 							end
 						end
 					end
