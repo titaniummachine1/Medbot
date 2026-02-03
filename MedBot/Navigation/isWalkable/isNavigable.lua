@@ -29,7 +29,7 @@ local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
 local FORWARD_STEP = 100 -- Max distance per forward trace
 
 -- Debug
-local DEBUG_TRACES = false -- Disabled for production
+local DEBUG_TRACES = true -- Disabled for production
 local hullTraces = {}
 local currentTickLogged = -1
 
@@ -39,7 +39,7 @@ local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter
 		hullTraces = {}
 		currentTickLogged = currentTick
 	end
-	local result = engine.TraceHull(startPos, endPos, minHull, maxHull, mask, filter)
+	local result = engine.TraceHull(startPos, endPos, minHull, maxHull, mask)
 	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos })
 	return result
 end
@@ -160,7 +160,7 @@ local function getGroundZFromQuad(x, y, node)
 	return z, normal
 end
 
--- MAIN FUNCTION - Optimized single-trace approach
+-- MAIN FUNCTION - Optimized navmesh-aware sweep
 function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	Profiler.Begin("CanSkip")
 
@@ -168,93 +168,69 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local nodes = G.Navigation and G.Navigation.nodes
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
 
-	-- OPTIMIZATION 1: Try direct trace to goal first
-	Profiler.Begin("DirectTrace")
-	local directTrace = TraceHull(
-		startPos + STEP_HEIGHT_Vector,
-		goalPos + STEP_HEIGHT_Vector,
-		PLAYER_HULL.Min,
-		PLAYER_HULL.Max,
-		MASK_PLAYERSOLID
-	)
-	Profiler.End("DirectTrace")
-
-	-- If direct path clear, check if both positions in same node or goal reachable
-	if directTrace.fraction > 0.99 then
-		Profiler.End("CanSkip")
-		return true
-	end
-
-	-- Direct trace blocked - need to traverse nodes
 	local currentPos = startPos
 	local currentNode = startNode
 	local iteration = 0
 	local MAX_ITERATIONS = 20
 
+	-- Get initial ground normal from current node
+	local lastNormal = nil
+	if currentNode.nw then
+		local _, normal = getGroundZFromQuad(currentPos.x, currentPos.y, currentNode)
+		lastNormal = normal
+	end
+
+	-- Horizontal direction to goal (flattened)
+	local toGoalFlat = Vector3(goalPos.x - currentPos.x, goalPos.y - currentPos.y, 0)
+	local horizontalDir = Common.Normalize(toGoalFlat)
+
+	-- Adjust direction to ground normal if available
+	local sweepDir = horizontalDir
+	if lastNormal then
+		local dotProduct = horizontalDir:Dot(lastNormal)
+		sweepDir = Vector3(horizontalDir.x, horizontalDir.y, horizontalDir.z - lastNormal.z * dotProduct)
+		sweepDir = Common.Normalize(sweepDir)
+	end
+
+	-- Cast long sweep to goal (but don't trust it yet - must verify nodes)
+	local horizontalDist = Common.Distance2D(currentPos, goalPos)
+	local sweepEnd = currentPos + sweepDir * horizontalDist
+
+	Profiler.Begin("SweepTrace")
+	local sweepTrace = TraceHull(
+		currentPos + STEP_HEIGHT_Vector,
+		sweepEnd + STEP_HEIGHT_Vector,
+		PLAYER_HULL.Min,
+		PLAYER_HULL.Max,
+		MASK_PLAYERSOLID
+	)
+	Profiler.End("SweepTrace")
+
+	-- Traverse nodes to verify ground exists (don't skip even if sweep clear)
 	while iteration < MAX_ITERATIONS do
 		Profiler.Begin("Iteration")
 		iteration = iteration + 1
 
-		-- Direction to goal from current position
-		local toGoal = goalPos - currentPos
-		local distToGoal = toGoal:Length()
-
-		-- Normalize direction for navigation
-		local dir = distToGoal > 0.001 and Common.Normalize(toGoal) or Vector3(1, 0, 0)
-
-		if distToGoal < 50 then
-			if DEBUG_TRACES then
-				print(string.format("[IsNavigable] SUCCESS: Within 50 units of goal"))
-			end
-			Profiler.End("Iteration")
-			Profiler.End("CanSkip")
-			return true
-		end
-
-		if DEBUG_TRACES then
-			print(
-				string.format(
-					"[IsNavigable] Iter %d: node=%d, pos=(%.1f,%.1f), distToGoal=%.1f",
-					iteration,
-					currentNode.id,
-					currentPos.x,
-					currentPos.y,
-					distToGoal
-				)
-			)
-		end
-
-		-- Check if goal is in current node (fast direct bounds check)
-		Profiler.Begin("GoalCheck")
+		-- Check if goal is in current node
 		local goalInCurrentNode = goalPos.x >= currentNode._minX
 			and goalPos.x <= currentNode._maxX
 			and goalPos.y >= currentNode._minY
 			and goalPos.y <= currentNode._maxY
-		Profiler.End("GoalCheck")
 
 		if goalInCurrentNode then
-			Profiler.Begin("FinalTrace")
-			local finalTrace = TraceHull(
-				currentPos + STEP_HEIGHT_Vector,
-				goalPos + STEP_HEIGHT_Vector,
-				PLAYER_HULL.Min,
-				PLAYER_HULL.Max,
-				MASK_PLAYERSOLID
-			)
-			Profiler.End("FinalTrace")
-
-			if finalTrace.fraction > 0.99 then
+			-- Reached destination node - check if sweep was clear
+			if sweepTrace.fraction > 0.99 then
+				-- Traversed all nodes AND sweep clear - path valid
 				if DEBUG_TRACES then
-					print("[IsNavigable] SUCCESS: Direct trace to goal in same node")
+					print("[IsNavigable] SUCCESS: Reached destination node with clear sweep")
 				end
 				Profiler.End("Iteration")
 				Profiler.End("CanSkip")
 				return true
 			else
+				-- At destination node but sweep blocked - obstacle in the way
 				if DEBUG_TRACES then
-					print(
-						string.format("[IsNavigable] FAIL: Blocked at %.2f in same node as goal", finalTrace.fraction)
-					)
+					print("[IsNavigable] FAIL: At destination node but path blocked by obstacle")
 				end
 				Profiler.End("Iteration")
 				Profiler.End("CanSkip")
@@ -262,7 +238,10 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			end
 		end
 
-		-- Find where we exit current node
+		-- Find where we exit current node toward goal
+		local toGoal = goalPos - currentPos
+		local dir = Common.Normalize(toGoal)
+
 		Profiler.Begin("FindExit")
 		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
 		Profiler.End("FindExit")
@@ -288,25 +267,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			)
 		end
 
-		-- Trace to exit point
-		Profiler.Begin("ExitTrace")
-		local exitTrace = TraceHull(
-			currentPos + STEP_HEIGHT_Vector,
-			exitPoint + STEP_HEIGHT_Vector,
-			PLAYER_HULL.Min,
-			PLAYER_HULL.Max,
-			MASK_PLAYERSOLID
-		)
-		Profiler.End("ExitTrace")
-
-		if exitTrace.fraction < 0.99 then
-			if DEBUG_TRACES then
-				print(string.format("[IsNavigable] FAIL: Hit obstacle at %.2f before border", exitTrace.fraction))
-			end
-			Profiler.End("Iteration")
-			Profiler.End("CanSkip")
-			return false
-		end
+		-- No trace to exit - we trust navmesh is walkable
 
 		-- Find neighbor - optimized linear search from appropriate end
 		Profiler.Begin("FindNeighbor")
@@ -500,6 +461,45 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		end
 
 		local entryPos = Vector3(entryX, entryY, groundZ)
+
+		-- Check if ground normal changed - if so, recast sweep
+		local normalChanged = false
+		if lastNormal and groundNormal then
+			local dotDiff = math.abs(lastNormal:Dot(groundNormal) - 1.0)
+			normalChanged = dotDiff > 0.01
+		end
+
+		if normalChanged then
+			-- Normal changed - adjust sweep direction and recast
+			lastNormal = groundNormal
+
+			local toGoalFlat2 = Vector3(goalPos.x - entryPos.x, goalPos.y - entryPos.y, 0)
+			local horizontalDir2 = Common.Normalize(toGoalFlat2)
+
+			local dotProduct = horizontalDir2:Dot(groundNormal)
+			sweepDir = Vector3(horizontalDir2.x, horizontalDir2.y, horizontalDir2.z - groundNormal.z * dotProduct)
+			sweepDir = Common.Normalize(sweepDir)
+
+			local horizontalDist2 = Common.Distance2D(entryPos, goalPos)
+			local sweepEnd2 = entryPos + sweepDir * horizontalDist2
+
+			Profiler.Begin("SweepTrace")
+			sweepTrace = TraceHull(
+				entryPos + STEP_HEIGHT_Vector,
+				sweepEnd2 + STEP_HEIGHT_Vector,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID
+			)
+			Profiler.End("SweepTrace")
+
+			-- If sweep now reaches goal, success
+			if sweepTrace.fraction > 0.99 then
+				Profiler.End("Iteration")
+				Profiler.End("CanSkip")
+				return true
+			end
+		end
 
 		if DEBUG_TRACES then
 			print(string.format("[IsNavigable] Crossed to node %d", neighborNode.id))

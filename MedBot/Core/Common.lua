@@ -134,12 +134,24 @@ function JSON.stringify(obj)
 end
 
 Common.JSON = JSON
+
 local vectorDivide = vector.Divide
 local vectorLength = vector.Length
+local vectorDistance = vector.Distance
 
 --- Normalize vector using in-place :Normalize() (fastest method)
 function Common.Normalize(vec)
 	return vectorDivide(vec, vectorLength(vec)) -- Return the normalized vector
+end
+
+-- Distance2d posibly slower then distance 3D due to mroe instructions in lua then single call in cpp lib of dist 3d
+function Common.Distance2D(a, b)
+	return (a - b):Length2D()
+end
+
+--distance3D check proly fastest posible in lua
+function Common.Distance3D(a, b)
+	return vectorDistance(a, b)
 end
 
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
@@ -201,15 +213,6 @@ function Common.VectorToString(vec)
 		return "nil"
 	end
 	return string.format("(%.1f, %.1f, %.1f)", vec.x, vec.y, vec.z)
-end
-
--- Distance helpers (legacy compatibility - use Distance module for new code)
-function Common.Distance2D(a, b)
-	return (a - b):Length2D()
-end
-
-function Common.Distance3D(a, b)
-	return (a - b):Length()
 end
 
 -- Dynamic hull size functions (access via Common for consistency)
