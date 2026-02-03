@@ -232,49 +232,87 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				return true -- Single waypoint, no trace needed
 			end
 
-			-- Trace between each pair of waypoints
-			for i = 1, #waypoints - 1 do
-				local wpStart = waypoints[i]
-				local wpEnd = waypoints[i + 1]
+			-- Detect angle changes and trace only when terrain angle changes significantly
+			local ANGLE_CHANGE_THRESHOLD = 15 -- degrees
+			local traceStart = waypoints[1]
+			local traceCount = 0
 
-				-- Calculate horizontal direction
-				local toNext = wpEnd.pos - wpStart.pos
-				local horizDir = Vector3(toNext.x, toNext.y, 0)
-				horizDir = Common.Normalize(horizDir)
+			for i = 2, #waypoints do
+				local currentWp = waypoints[i]
+				local prevWp = waypoints[i - 1]
 
-				-- Adjust direction to follow surface pitch
-				local traceDir = horizDir
-				if wpStart.normal then
-					traceDir = adjustDirectionToSurface(horizDir, wpStart.normal)
+				-- Calculate angle change between consecutive normals
+				local angleChange = 0
+				if prevWp.normal and currentWp.normal then
+					local dotProduct = prevWp.normal:Dot(currentWp.normal)
+					dotProduct = math.max(-1, math.min(1, dotProduct)) -- Clamp for acos
+					angleChange = math.deg(math.acos(dotProduct))
+				elseif not currentWp.normal or not prevWp.normal then
+					-- No normal = flat terrain assumed, trigger trace at end
+					angleChange = 0
 				end
 
-				-- Calculate trace endpoint
-				local traceDist = (wpEnd.pos - wpStart.pos):Length()
-				local traceEnd = wpStart.pos + traceDir * traceDist
+				-- Check if this is last waypoint or angle changed significantly
+				local isLastWaypoint = (i == #waypoints)
+				local shouldTrace = isLastWaypoint or angleChange > ANGLE_CHANGE_THRESHOLD
 
-				-- Trace with hull
-				Profiler.Begin("WaypointTrace")
-				local trace = TraceHull(
-					wpStart.pos + STEP_HEIGHT_Vector,
-					traceEnd + STEP_HEIGHT_Vector,
-					PLAYER_HULL.Min,
-					PLAYER_HULL.Max,
-					MASK_SHOT_HULL
-				)
-				Profiler.End("WaypointTrace")
+				if shouldTrace then
+					-- Calculate horizontal direction from trace start to current
+					local toTarget = currentWp.pos - traceStart.pos
+					local horizDir = Vector3(toTarget.x, toTarget.y, 0)
+					horizDir = Common.Normalize(horizDir)
 
-				if trace.fraction < 0.99 then
-					if DEBUG_TRACES then
-						print(string.format("[IsNavigable] FAIL: Entity blocking waypoint %d->%d", i, i + 1))
+					-- Adjust direction using trace start's surface normal
+					local traceDir = horizDir
+					if traceStart.normal then
+						traceDir = adjustDirectionToSurface(horizDir, traceStart.normal)
 					end
-					Profiler.End("TracePath")
-					Profiler.End("CanSkip")
-					return false
+
+					-- Calculate trace endpoint
+					local traceDist = (currentWp.pos - traceStart.pos):Length()
+					local traceEnd = traceStart.pos + traceDir * traceDist
+
+					-- Trace with hull
+					Profiler.Begin("WaypointTrace")
+					local trace = TraceHull(
+						traceStart.pos + STEP_HEIGHT_Vector,
+						traceEnd + STEP_HEIGHT_Vector,
+						PLAYER_HULL.Min,
+						PLAYER_HULL.Max,
+						MASK_SHOT_HULL
+					)
+					Profiler.End("WaypointTrace")
+
+					traceCount = traceCount + 1
+
+					if trace.fraction < 0.99 then
+						if DEBUG_TRACES then
+							print(
+								string.format(
+									"[IsNavigable] FAIL: Entity blocking segment (trace %d, angle=%.1f°)",
+									traceCount,
+									angleChange
+								)
+							)
+						end
+						Profiler.End("TracePath")
+						Profiler.End("CanSkip")
+						return false
+					end
+
+					-- Start next trace segment from current waypoint
+					traceStart = currentWp
 				end
 			end
 
 			if DEBUG_TRACES then
-				print(string.format("[IsNavigable] SUCCESS: Path clear through %d waypoints", #waypoints))
+				print(
+					string.format(
+						"[IsNavigable] SUCCESS: Path clear with %d traces (from %d waypoints)",
+						traceCount,
+						#waypoints
+					)
+				)
 			end
 
 			Profiler.End("TracePath")
