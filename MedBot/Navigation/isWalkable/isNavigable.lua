@@ -49,7 +49,6 @@ local TraceHull = DEBUG_TRACES and traceHullWrapper or engine.TraceHull
 -- Find where ray exits node bounds
 -- Returns: exitPoint, exitDist, exitDir (1=N, 2=E, 3=S, 4=W)
 local function findNodeExit(startPos, dir, node)
-	Profiler.Begin("findNodeExit")
 	local minX, maxX = node._minX, node._maxX
 	local minY, maxY = node._minY, node._maxY
 
@@ -96,11 +95,8 @@ local function findNodeExit(startPos, dir, node)
 	end
 
 	if tMin == math.huge then
-		Profiler.End("findNodeExit")
 		return nil, nil, nil
 	end
-
-	Profiler.End("findNodeExit")
 	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
 end
 
