@@ -6294,20 +6294,20 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 					)
 				)
 			end
-			Profiler.End("IsNavigable.Iteration")
-			Profiler.End("IsNavigable.CanSkip")
+			Profiler.End("Iteration")
+			Profiler.End("CanSkip")
 			return false
 		end
 
 		-- Entry point is exitPoint clamped to neighbor bounds
-		Profiler.Begin("IsNavigable.EntryClamp")
+		Profiler.Begin("EntryClamp")
 		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
 		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
 		local entryPos = Vector3(entryX, entryY, exitPoint.z)
-		Profiler.End("IsNavigable.EntryClamp")
+		Profiler.End("EntryClamp")
 
 		-- Ground snap at entry
-		Profiler.Begin("IsNavigable.GroundTrace")
+		Profiler.Begin("GroundTrace")
 		local groundTrace = TraceHull(
 			entryPos + STEP_HEIGHT_Vector,
 			entryPos - Vector3(0, 0, 100),
@@ -6316,14 +6316,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			MASK_PLAYERSOLID,
 			shouldHitEntity
 		)
-		Profiler.End("IsNavigable.GroundTrace")
+		Profiler.End("GroundTrace")
 
 		if groundTrace.fraction == 1 then
 			if DEBUG_TRACES then
 				print(string.format("[IsNavigable] FAIL: No ground at entry to node %d", neighborNode.id))
 			end
-			Profiler.End("IsNavigable.Iteration")
-			Profiler.End("IsNavigable.CanSkip")
+			Profiler.End("Iteration")
+			Profiler.End("CanSkip")
 			return false
 		end
 
@@ -6333,13 +6333,13 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		currentPos = groundTrace.endpos
 		currentNode = neighborNode
-		Profiler.End("IsNavigable.Iteration")
+		Profiler.End("Iteration")
 	end
 
 	if DEBUG_TRACES then
 		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
 	end
-	Profiler.End("IsNavigable.CanSkip")
+	Profiler.End("CanSkip")
 	return false
 end
 
