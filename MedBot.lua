@@ -1743,9 +1743,10 @@ end
 
 Common.JSON = JSON
 
---- Normalize vector using vector.Divide (faster than inline division)
+--- Normalize vector using in-place :Normalize() (fastest method)
 function Common.Normalize(vec)
-	return vector.Divide(vec, vec:Length())
+	vec:Normalize() -- Modifies in-place, returns nil
+	return vec -- Return the normalized vector
 end
 
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
@@ -6396,20 +6397,38 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 	local iteration = 0
 	local MAX_ITERATIONS = 20
 
+	-- Vector normalization speed test
+	local testVector = Vector3(3, 4, 0)
+
 	while iteration < MAX_ITERATIONS do
 		Profiler.Begin("Iteration")
 		iteration = iteration + 1
 
 		-- Direction to goal from current position
-		Profiler.Begin("CalculateDirection")
-		Profiler.Begin("VectorLength")
 		local toGoal = goalPos - currentPos
 		local distToGoal = toGoal:Length()
-		Profiler.End("VectorLength")
-		Profiler.Begin("VectorDivide")
-		local dir = distToGoal > 0.001 and (toGoal / distToGoal) or Vector3(1, 0, 0)
-		Profiler.End("VectorDivide")
-		Profiler.End("CalculateDirection")
+
+		-- Vector normalization speed test (runs every iteration)
+		local testVector = Vector3(3, 4, 0)
+
+		-- Method 1: Divide
+		Profiler.Begin("VecTest_Divide")
+		local result1 = testVector / testVector:Length()
+		Profiler.End("VecTest_Divide")
+
+		-- Method 2: VectorDivide
+		Profiler.Begin("VecTest_VectorDivide")
+		local result2 = vector.Divide(testVector, testVector:Length())
+		Profiler.End("VecTest_VectorDivide")
+
+		-- Method 3: Normalize (fresh copy)
+		Profiler.Begin("VecTest_Normalize")
+		local result3 = Vector3(testVector.x, testVector.y, testVector.z)
+		result3:Normalize()
+		Profiler.End("VecTest_Normalize")
+
+		-- Normalize direction for navigation
+		local dir = distToGoal > 0.001 and Common.Normalize(toGoal) or Vector3(1, 0, 0)
 
 		if distToGoal < 50 then
 			if DEBUG_TRACES then
@@ -6612,6 +6631,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
 	end
 	Profiler.End("CanSkip")
+
 	return false
 end
 
