@@ -126,7 +126,7 @@ local function findNodeExit(startPos, dir, node)
 end
 
 -- Calculate ground Z position from node quad geometry (no engine call)
-local function getGroundZFromQuad(x, y, node)
+local function getGroundZFromQuad(pos, node)
 	if not (node.nw and node.ne and node.sw and node.se) then
 		return nil, nil
 	end
@@ -135,8 +135,8 @@ local function getGroundZFromQuad(x, y, node)
 
 	-- Determine which triangle contains the point
 	-- Split quad into: Triangle1(nw,ne,se) and Triangle2(nw,se,sw)
-	local dx = x - nw.x
-	local dy = y - nw.y
+	local dx = pos.x - nw.x
+	local dy = pos.y - nw.y
 	local dx_ne = ne.x - nw.x
 	local dy_se = se.y - nw.y
 
@@ -157,8 +157,8 @@ local function getGroundZFromQuad(x, y, node)
 		return v0.z, Vector3(0, 0, 1) -- Degenerate triangle, use first vertex
 	end
 
-	local w0 = ((v1.y - v2.y) * (x - v2.x) + (v2.x - v1.x) * (y - v2.y)) / denom
-	local w1 = ((v2.y - v0.y) * (x - v2.x) + (v0.x - v2.x) * (y - v2.y)) / denom
+	local w0 = ((v1.y - v2.y) * (pos.x - v2.x) + (v2.x - v1.x) * (pos.y - v2.y)) / denom
+	local w1 = ((v2.y - v0.y) * (pos.x - v2.x) + (v0.x - v2.x) * (pos.y - v2.y)) / denom
 	local w2 = 1.0 - w0 - w1
 
 	local z = w0 * v0.z + w1 * v1.z + w2 * v2.z
@@ -185,11 +185,10 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 	local currentPos = startPos
 	local currentNode = startNode
-	local MAX_ITERATIONS = 20
 
 	-- Get initial surface normal from start node and adjust position/direction
 	Profiler.Begin("InitialGround")
-	local startZ, startNormal = getGroundZFromQuad(startPos.x, startPos.y, startNode)
+	local startZ, startNormal = getGroundZFromQuad(startPos, startNode)
 	Profiler.End("InitialGround")
 
 	if startZ and startNormal then
@@ -202,9 +201,30 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		if horizDir:Length() > 0.001 then
 			horizDir = Common.Normalize(horizDir)
 			local startDir = adjustDirectionToSurface(horizDir, startNormal)
-			-- Initialize lastTraceEnd along surface direction
-			local distToGoal = (goalPos - currentPos):Length()
-			lastTraceEnd = currentPos + startDir * distToGoal * 0.01
+
+			-- Do initial trace along surface direction
+			Profiler.Begin("InitialTrace")
+			local initialTraceDist = math.min(FORWARD_STEP, (goalPos - currentPos):Length())
+			local initialTraceEnd = currentPos + startDir * initialTraceDist
+			local initialTrace = TraceHull(
+				currentPos + STEP_HEIGHT_Vector,
+				initialTraceEnd + STEP_HEIGHT_Vector,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID
+			)
+			Profiler.End("InitialTrace")
+
+			if initialTrace.fraction < 0.99 then
+				if DEBUG_TRACES then
+					print("[IsNavigable] FAIL: Entity blocking initial path")
+				end
+				Profiler.End("CanSkip")
+				return false
+			end
+
+			-- Set lastTraceEnd to where initial trace ended
+			lastTraceEnd = initialTrace.endpos
 		end
 	end
 
@@ -214,7 +234,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local hills = {} -- Points where elevation increases > step height
 	local caves = {} -- Points where elevation decreases > step height
 	local lastWasClimbing = false
-	local lastTraceEnd = startPos -- Track continuous trace path
 
 	-- Traverse nodes to destination (no sweep trace needed)
 	for iteration = 1, MAX_ITERATIONS do
@@ -233,7 +252,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			horizDir = Common.Normalize(horizDir)
 
 			-- Get ground normal at last trace position
-			local groundZ, groundNormal = getGroundZFromQuad(lastTraceEnd.x, lastTraceEnd.y, currentNode)
+			local groundZ, groundNormal = getGroundZFromQuad(lastTraceEnd, currentNode)
 
 			-- Adjust direction to follow surface - only Z changes
 			local traceDir = horizDir
@@ -286,7 +305,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		horizDir = Common.Normalize(horizDir)
 
 		-- Get ground normal at current position
-		local groundZ, groundNormal = getGroundZFromQuad(currentPos.x, currentPos.y, currentNode)
+		local groundZ, groundNormal = getGroundZFromQuad(currentPos, currentNode)
 
 		-- Adjust direction to follow surface - only Z changes based on slope
 		local dir = horizDir
@@ -500,7 +519,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		-- Ground snap using quad geometry (no engine call)
 		Profiler.Begin("GroundCalc")
-		local groundZ, groundNormal = getGroundZFromQuad(entryX, entryY, neighborNode)
+		local groundZ, groundNormal = getGroundZFromQuad(Vector3(entryX, entryY, 0), neighborNode)
 		Profiler.End("GroundCalc")
 
 		if not groundZ then
@@ -526,7 +545,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				horizDir = Common.Normalize(horizDir)
 
 				-- Get ground normal and adjust direction
-				local _, surfNormal = getGroundZFromQuad(lastTraceEnd.x, lastTraceEnd.y, currentNode)
+				local _, surfNormal = getGroundZFromQuad(lastTraceEnd, currentNode)
 				local traceDir = horizDir
 				if surfNormal then
 					traceDir = adjustDirectionToSurface(horizDir, surfNormal)
@@ -581,7 +600,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				caveHorizDir = Common.Normalize(caveHorizDir)
 
 				-- Get ground normal and adjust direction
-				local _, caveNormal = getGroundZFromQuad(lastTraceEnd.x, lastTraceEnd.y, currentNode)
+				local _, caveNormal = getGroundZFromQuad(lastTraceEnd, currentNode)
 				local caveTraceDir = caveHorizDir
 				if caveNormal then
 					caveTraceDir = adjustDirectionToSurface(caveHorizDir, caveNormal)
