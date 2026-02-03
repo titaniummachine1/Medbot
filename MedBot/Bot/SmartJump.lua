@@ -180,17 +180,17 @@ local function isNearPayload(position)
 	if not G.World.payloads then
 		return false
 	end
-	
+
 	for _, payload in pairs(G.World.payloads) do
 		if payload:IsValid() then
 			local payloadPos = payload:GetAbsOrigin()
-			
+
 			-- Check distance to entity center
 			local distToCenter = (position - payloadPos):Length()
 			if distToCenter < 200 then
 				return true
 			end
-			
+
 			-- Also check distance to ground-level position (offset -80 like in GoalFinder)
 			local groundPos = Vector3(payloadPos.x, payloadPos.y, payloadPos.z - 80)
 			local distToGround = (position - groundPos):Length()
@@ -208,12 +208,12 @@ local function SmartJumpDetection(cmd, pLocal)
 	end
 
 	local pLocalPos = pLocal:GetAbsOrigin()
-	
+
 	-- Early exit: don't jump if already near payload
 	if isNearPayload(pLocalPos) then
 		return false
 	end
-	
+
 	local moveIntent = Vector3(cmd.forwardmove, -cmd.sidemove, 0)
 	local viewAngles = engine.GetViewAngles()
 
@@ -291,7 +291,7 @@ local function SmartJumpDetection(cmd, pLocal)
 					Log:Debug("SmartJump: Skipping jump - near payload cart")
 					return false
 				end
-				
+
 				G.SmartJump.PredPos = newPos
 				G.SmartJump.HitObstacle = true
 				Log:Debug("SmartJump: Jumping at tick %d (needed: %d)", tick, minJumpTicks)
@@ -398,7 +398,10 @@ function SmartJump.Main(cmd)
 				-- If trace hits something, obstacle is still there - safe to unduck
 				if obstacleTrace.fraction < 1 then
 					shouldUnduck = true
-					Log:Debug("SmartJump: Unducking - obstacle confirmed at height %.1f", G.SmartJump.LastObstacleHeight)
+					Log:Debug(
+						"SmartJump: Unducking - obstacle confirmed at height %.1f",
+						G.SmartJump.LastObstacleHeight
+					)
 				else
 					Log:Debug(
 						"SmartJump: Staying ducked - no obstacle detected at height %.1f",
@@ -468,7 +471,7 @@ local function OnDrawSmartJump()
 	if not pLocal or not G.Menu.SmartJump or not G.Menu.SmartJump.Enable then
 		return
 	end
-	
+
 	-- Check if SmartJump visuals are enabled in menu
 	if not (G.Menu.Visuals and G.Menu.Visuals.showSmartJump) then
 		return

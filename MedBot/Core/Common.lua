@@ -135,9 +135,14 @@ end
 
 Common.JSON = JSON
 
--- Vector helpers
-function Common.Normalize(vec)
-	return vec / vec:Length()
+--- Safe normalize that works with in-place method
+function Common.NormalizeSafe(vec)
+	local len = vec:Length()
+	if len > 0.0001 then
+		vec:Normalize() -- Modifies in-place
+		return vec
+	end
+	return vec
 end
 
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
@@ -412,5 +417,73 @@ function Common.DebugLog(level, ...)
 		Common.Log[level](...)
 	end
 end
+
+--- Vector normalization test suite
+function Common.TestVectorNormalize()
+	print("[Common] Testing vector normalization methods...")
+
+	local testVec = Vector3(3, 4, 0)
+	local originalLen = testVec:Length()
+	print(
+		string.format(
+			"[Common] Original vector: (%.1f, %.1f, %.1f), Length: %.1f",
+			testVec.x,
+			testVec.y,
+			testVec.z,
+			originalLen
+		)
+	)
+
+	-- Test 1: Method in-place (vec:Normalize())
+	local methodVec = Vector3(3, 4, 0)
+	local methodReturn = methodVec:Normalize()
+	print(
+		string.format(
+			"[Common] Method :Normalize() - Result: (%.3f, %.3f, %.3f), Return: %s, Length after: %.3f",
+			methodVec.x,
+			methodVec.y,
+			methodVec.z,
+			tostring(methodReturn),
+			methodVec:Length()
+		)
+	)
+
+	-- Test 2: Library function (vector.Normalize(vec))
+	local libVec = Vector3(3, 4, 0)
+	local libReturn = vector.Normalize(libVec)
+	print(
+		string.format(
+			"[Common] Library vector.Normalize() - Original: (%.3f, %.3f, %.3f), Return: (%.3f, %.3f, %.3f), Length: %.3f",
+			libVec.x,
+			libVec.y,
+			libVec.z,
+			libReturn.x,
+			libReturn.y,
+			libReturn.z,
+			libReturn:Length()
+		)
+	)
+
+	-- Test 3: Division approach (creates new vector)
+	local divVec = Vector3(3, 4, 0)
+	local divResult = divVec / divVec:Length()
+	print(
+		string.format(
+			"[Common] Division vec/len - Original: (%.3f, %.3f, %.3f), Result: (%.3f, %.3f, %.3f), Length: %.3f",
+			divVec.x,
+			divVec.y,
+			divVec.z,
+			divResult.x,
+			divResult.y,
+			divResult.z,
+			divResult:Length()
+		)
+	)
+
+	print("[Common] Vector normalization test complete.")
+end
+
+-- Run test on load to verify behavior
+Common.TestVectorNormalize()
 
 return Common
