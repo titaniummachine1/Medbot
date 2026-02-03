@@ -164,17 +164,11 @@ local function getGroundZFromQuad(x, y, node)
 	local z = w0 * v0.z + w1 * v1.z + w2 * v2.z
 
 	-- Calculate normal from cross product
-	local edge1 = Vector3(v1.x - v0.x, v1.y - v0.y, v1.z - v0.z)
-	local edge2 = Vector3(v2.x - v0.x, v2.y - v0.y, v2.z - v0.z)
-	local normal = Vector3(
-		edge1.y * edge2.z - edge1.z * edge2.y,
-		edge1.z * edge2.x - edge1.x * edge2.z,
-		edge1.x * edge2.y - edge1.y * edge2.x
-	)
-	local len = math.sqrt(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z)
-	if len > 0.0001 then
-		normal = Vector3(normal.x / len, normal.y / len, normal.z / len)
-	else
+	local edge1 = v1 - v0
+	local edge2 = v2 - v0
+	local normal = edge1:Cross(edge2)
+	normal = Common.Normalize(normal)
+	if not normal then
 		normal = Vector3(0, 0, 1)
 	end
 
@@ -192,6 +186,27 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local currentPos = startPos
 	local currentNode = startNode
 	local MAX_ITERATIONS = 20
+
+	-- Get initial surface normal from start node and adjust position/direction
+	Profiler.Begin("InitialGround")
+	local startZ, startNormal = getGroundZFromQuad(startPos.x, startPos.y, startNode)
+	Profiler.End("InitialGround")
+
+	if startZ and startNormal then
+		-- Snap to ground Z
+		currentPos = Vector3(startPos.x, startPos.y, startZ)
+
+		-- Calculate initial direction adjusted to surface
+		local toGoal = goalPos - currentPos
+		local horizDir = Vector3(toGoal.x, toGoal.y, 0)
+		if horizDir:Length() > 0.001 then
+			horizDir = Common.Normalize(horizDir)
+			local startDir = adjustDirectionToSurface(horizDir, startNormal)
+			-- Initialize lastTraceEnd along surface direction
+			local distToGoal = (goalPos - currentPos):Length()
+			lastTraceEnd = currentPos + startDir * distToGoal * 0.01
+		end
+	end
 
 	-- Elevation tracking for hill/cave detection (future trace optimization)
 	local lastHeight = startPos.z

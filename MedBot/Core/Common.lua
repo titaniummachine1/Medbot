@@ -154,6 +154,16 @@ function Common.Distance3D(a, b)
 	return vectorDistance(a, b)
 end
 
+--- Cross product of two vectors
+function Common.Cross(a, b)
+	return a:Cross(b)
+end
+
+--- Dot product of two vectors
+function Common.Dot(a, b)
+	return a:Dot(b)
+end
+
 -- Arrow line drawing function (moved from Visuals.lua and ISWalkable.lua)
 function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_width, invert)
 	assert(start_pos and end_pos, "Common.DrawArrowLine: start_pos and end_pos are required")
