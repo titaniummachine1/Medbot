@@ -6268,59 +6268,43 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Find neighbor node using directional connections (fast 1D bounds check)
+		-- Find neighbor node using directional connections (1D bounds check on shared axis)
 		Profiler.Begin("FindNeighbor")
 		local neighborNode = nil
 
-		-- Determine which direction we exited based on which boundary was hit
-		local exitDirId = nil
-		local tolerance = 0.5
-		if math.abs(exitPoint.x - currentNode._maxX) < tolerance then
-			exitDirId = 2 -- East (dirX = 1)
-		elseif math.abs(exitPoint.x - currentNode._minX) < tolerance then
-			exitDirId = 4 -- West (dirX = -1)
-		elseif math.abs(exitPoint.y - currentNode._maxY) < tolerance then
-			exitDirId = 3 -- South (dirY = 1)
-		elseif math.abs(exitPoint.y - currentNode._minY) < tolerance then
-			exitDirId = 1 -- North (dirY = -1)
-		end
-
-		-- Check connections in the exit direction
-		if exitDirId and currentNode.c and currentNode.c[exitDirId] then
-			local dir = currentNode.c[exitDirId]
-			if dir.connections then
-				for _, connection in ipairs(dir.connections) do
-					local targetId = connection.node or (type(connection) == "number" and connection)
-					local targetNode = nodes[targetId]
-					if targetNode and not targetNode.isDoor then
-						-- 1D bounds check: exit point must be within neighbor's bounds
-						local inNeighborBounds = exitPoint.x >= targetNode._minX
-							and exitPoint.x <= targetNode._maxX
-							and exitPoint.y >= targetNode._minY
-							and exitPoint.y <= targetNode._maxY
-						if inNeighborBounds then
-							neighborNode = targetNode
-							break
-						end
-					end
-				end
-			end
-		end
-
-		-- Fallback: check all directions if not found
-		if not neighborNode and currentNode.c then
-			for dirId, dir in pairs(currentNode.c) do
-				if dir.connections then
-					for _, connection in ipairs(dir.connections) do
+		-- Check all connections - use 1D bounds check on shared axis like door system
+		if currentNode.c then
+			for dirId, dirData in pairs(currentNode.c) do
+				if dirData.connections then
+					for _, connection in ipairs(dirData.connections) do
 						local targetId = connection.node or (type(connection) == "number" and connection)
 						local targetNode = nodes[targetId]
 						if targetNode and not targetNode.isDoor then
-							local inNeighborBounds = exitPoint.x >= targetNode._minX
-								and exitPoint.x <= targetNode._maxX
-								and exitPoint.y >= targetNode._minY
-								and exitPoint.y <= targetNode._maxY
-							if inNeighborBounds then
+							-- 1D bounds check on shared axis based on direction
+							-- North/South (dirId 1/3): shared axis is X (horizontal)
+							-- East/West (dirId 2/4): shared axis is Y (vertical)
+							local onSharedAxis = false
+							if dirId == 1 or dirId == 3 then
+								-- North or South connection - check X axis only
+								onSharedAxis = exitPoint.x >= targetNode._minX and exitPoint.x <= targetNode._maxX
+							elseif dirId == 2 or dirId == 4 then
+								-- East or West connection - check Y axis only
+								onSharedAxis = exitPoint.y >= targetNode._minY and exitPoint.y <= targetNode._maxY
+							end
+
+							if onSharedAxis then
 								neighborNode = targetNode
+								if DEBUG_TRACES then
+									print(
+										string.format(
+											"[IsNavigable] Found neighbor %d via direction %d at exit (%.1f, %.1f)",
+											targetNode.id,
+											dirId,
+											exitPoint.x,
+											exitPoint.y
+										)
+									)
+								end
 								break
 							end
 						end
