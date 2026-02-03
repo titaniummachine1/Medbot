@@ -6269,8 +6269,8 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 				return false
 			end
 
-			-- Set lastTraceEnd to where initial trace ended
-			lastTraceEnd = initialTrace.endpos
+			-- Set lastTraceEnd to where initial trace ended, but snap Z back down by step height
+			lastTraceEnd = initialTrace.endpos - STEP_HEIGHT_Vector
 		end
 	end
 
@@ -6618,7 +6618,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					Profiler.End("CanSkip")
 					return false
 				end
-				lastTraceEnd = currentPos
+				lastTraceEnd = currentPos - STEP_HEIGHT_Vector
 				lastWasClimbing = true
 			end
 			if groundZ > highestHeight then
@@ -6678,7 +6678,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 					Profiler.End("CanSkip")
 					return false
 				end
-				lastTraceEnd = cavePoint
+				lastTraceEnd = cavePoint - STEP_HEIGHT_Vector
 				table.insert(caves, cavePoint)
 				if DEBUG_TRACES then
 					print(string.format("[IsNavigable] Cave detected at Z=%.1f", groundZ))
