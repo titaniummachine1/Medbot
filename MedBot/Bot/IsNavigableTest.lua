@@ -34,7 +34,6 @@ local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 
 -- Benchmark functions
 local function BenchmarkStart()
-	collectgarbage("collect")
 	local startMemory = collectgarbage("count")
 	local startTime = os.clock()
 	return startTime, startMemory
@@ -42,7 +41,6 @@ end
 
 local function BenchmarkStop(startTime, startMemory)
 	local stopTime = os.clock()
-	collectgarbage("collect")
 	local stopMemory = collectgarbage("count")
 
 	local elapsedTime = math.max(stopTime - startTime, 0)

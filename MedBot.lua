@@ -5781,7 +5781,6 @@ local Fonts = { Verdana = draw.CreateFont("Verdana", 14, 510) }
 
 -- Benchmark functions
 local function BenchmarkStart()
-	collectgarbage("collect")
 	local startMemory = collectgarbage("count")
 	local startTime = os.clock()
 	return startTime, startMemory
@@ -5789,7 +5788,6 @@ end
 
 local function BenchmarkStop(startTime, startMemory)
 	local stopTime = os.clock()
-	collectgarbage("collect")
 	local stopMemory = collectgarbage("count")
 
 	local elapsedTime = math.max(stopTime - startTime, 0)
@@ -6044,8 +6042,6 @@ local Navigable = {}
 local G = require("MedBot.Core.Globals")
 local Node = require("MedBot.Navigation.Node")
 local Common = require("MedBot.Core.Common")
-
--- Profiler integration (loaded externally)
 local profilerLoaded, Profiler = pcall(require, "Profiler")
 if not profilerLoaded then
 	-- Profiler not available, create dummy functions
@@ -6087,49 +6083,13 @@ local function shouldHitEntity(entity)
 	return entity ~= pLocal
 end
 
--- Get neighbor node in the given direction from current node
-local function getNeighborInDirection(currentNode, exitDir)
-	Profiler.Begin("IsNavigable.getNeighborInDirection")
-
-	if not currentNode.c or not currentNode.c[exitDir] then
-		Profiler.End("IsNavigable.getNeighborInDirection")
-		return nil
-	end
-
-	local dirData = currentNode.c[exitDir]
-	if not dirData.connections or #dirData.connections == 0 then
-		Profiler.End("IsNavigable.getNeighborInDirection")
-		return nil
-	end
-
-	-- Get first connection (typically only one per direction)
-	local conn = dirData.connections[1]
-	local neighborId = type(conn) == "table" and conn.node or conn
-
-	local nodes = G.Navigation and G.Navigation.nodes
-	if not nodes then
-		Profiler.End("IsNavigable.getNeighborInDirection")
-		return nil
-	end
-
-	local neighbor = nodes[neighborId]
-	Profiler.End("IsNavigable.getNeighborInDirection")
-	return neighbor
+-- Get which node contains this position using fast spatial query
+local function getNodeAtPosition(pos)
+	Profiler.Begin("IsNavigable.getNodeAtPosition")
+	local result = Node.GetAreaAtPosition(pos)
+	Profiler.End("IsNavigable.getNodeAtPosition")
+	return result
 end
-
--- Simple bounds check for goal position
-local function isPositionInNode(pos, node)
-	if not node or node.isDoor then
-		return false
-	end
-	return pos.x >= node._minX and pos.x <= node._maxX and pos.y >= node._minY and pos.y <= node._maxY
-end
-
--- Direction constants
-local DIR_NORTH = 1
-local DIR_SOUTH = 2
-local DIR_EAST = 4
-local DIR_WEST = 8
 
 -- Find where ray exits node bounds
 local function findNodeExit(startPos, dir, node)
@@ -6139,7 +6099,6 @@ local function findNodeExit(startPos, dir, node)
 
 	local tMin = math.huge
 	local exitX, exitY
-	local exitDir
 
 	-- Check X boundaries
 	if dir.x > 0 then
@@ -6148,7 +6107,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = maxX
 			exitY = startPos.y + dir.y * t
-			exitDir = DIR_EAST
 		end
 	elseif dir.x < 0 then
 		local t = (minX - startPos.x) / dir.x
@@ -6156,7 +6114,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = minX
 			exitY = startPos.y + dir.y * t
-			exitDir = DIR_WEST
 		end
 	end
 
@@ -6167,7 +6124,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = maxY
-			exitDir = DIR_NORTH
 		end
 	elseif dir.y < 0 then
 		local t = (minY - startPos.y) / dir.y
@@ -6175,7 +6131,6 @@ local function findNodeExit(startPos, dir, node)
 			tMin = t
 			exitX = startPos.x + dir.x * t
 			exitY = minY
-			exitDir = DIR_SOUTH
 		end
 	end
 
@@ -6185,7 +6140,7 @@ local function findNodeExit(startPos, dir, node)
 	end
 
 	Profiler.End("IsNavigable.findNodeExit")
-	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
+	return Vector3(exitX, exitY, startPos.z), tMin
 end
 
 -- MAIN FUNCTION - Trace to borders
@@ -6249,10 +6204,10 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		-- Check if goal is in current node
 		Profiler.Begin("IsNavigable.GoalCheck")
-		local goalInCurrentNode = isPositionInNode(goalPos, currentNode)
+		local goalNode = getNodeAtPosition(goalPos)
 		Profiler.End("IsNavigable.GoalCheck")
 
-		if goalInCurrentNode then
+		if goalNode and goalNode.id == currentNode.id then
 			-- Final trace to goal
 			Profiler.Begin("IsNavigable.FinalTrace")
 			local finalTrace = TraceHull(
@@ -6286,7 +6241,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 
 		-- Find where we exit current node
 		Profiler.Begin("IsNavigable.FindExit")
-		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
+		local exitPoint, exitDist = findNodeExit(currentPos, dir, currentNode)
 		Profiler.End("IsNavigable.FindExit")
 
 		if not exitPoint then
@@ -6319,9 +6274,14 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 			return false
 		end
 
-		-- Get neighbor directly from connection list
+		-- Find neighbor node
 		Profiler.Begin("IsNavigable.FindNeighbor")
-		local neighborNode = getNeighborInDirection(currentNode, exitDir)
+		local neighborNode = getNodeAtPosition(exitPoint)
+		if not neighborNode or neighborNode.id == currentNode.id then
+			-- Try slightly inside neighbor
+			local probePos = exitPoint + dir * 2
+			neighborNode = getNodeAtPosition(probePos)
+		end
 		Profiler.End("IsNavigable.FindNeighbor")
 
 		if not neighborNode then
@@ -6391,7 +6351,6 @@ function Navigable.DrawDebugTraces()
 	for _, trace in ipairs(hullTraces) do
 		if trace.startPos and trace.endPos then
 			draw.Color(0, 50, 255, 255)
-			local Common = require("MedBot.Core.Common")
 			Common.DrawArrowLine(trace.startPos, trace.endPos - Vector3(0, 0, 0.5), 10, 20, false)
 		end
 	end
@@ -6451,7 +6410,6 @@ local MAX_ITERATIONS = 37
 
 -- Benchmark functions
 local function BenchmarkStart()
-	collectgarbage("collect")
 	local startMemory = collectgarbage("count")
 	local startTime = os.clock()
 	return startTime, startMemory
@@ -6459,7 +6417,6 @@ end
 
 local function BenchmarkStop(startTime, startMemory)
 	local stopTime = os.clock()
-	collectgarbage("collect")
 	local stopMemory = collectgarbage("count")
 
 	local elapsedTime = math.max(stopTime - startTime, 0)
@@ -6861,7 +6818,6 @@ local MAX_ITERATIONS = 37
 
 -- Benchmark functions
 local function BenchmarkStart()
-	collectgarbage("collect")
 	local startMemory = collectgarbage("count")
 	local startTime = os.clock()
 	return startTime, startMemory
@@ -6869,7 +6825,6 @@ end
 
 local function BenchmarkStop(startTime, startMemory)
 	local stopTime = os.clock()
-	collectgarbage("collect")
 	local stopMemory = collectgarbage("count")
 
 	local elapsedTime = math.max(stopTime - startTime, 0)
