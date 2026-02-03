@@ -6063,7 +6063,7 @@ local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
 local STEP_HEIGHT = 18
 local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
 local FORWARD_STEP = 100 -- Max distance per forward trace
-local HILL_THRESHOLD = 8 -- 0.5x step height for significant elevation changes
+local HILL_THRESHOLD = 4 -- 0.5x step height for significant elevation changes
 
 local MaxSpeed = 450
 local MAX_FALL_DISTANCE = 250
@@ -6251,40 +6251,15 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			-- Calculate surface-aligned direction for final trace
 			local toGoal = goalPos - lastTraceEnd
 			local horizDir = Vector3(toGoal.x, toGoal.y, 0)
-			local horizLen = math.sqrt(horizDir.x * horizDir.x + horizDir.y * horizDir.y)
-			if horizLen < 0.001 then
-				horizLen = 0.001
-			end
-			horizDir.x = horizDir.x / horizLen
-			horizDir.y = horizDir.y / horizLen
+			horizDir = Common.Normalize(horizDir)
 
 			-- Get ground normal at last trace position
 			local groundZ, groundNormal = getGroundZFromQuad(lastTraceEnd.x, lastTraceEnd.y, currentNode)
 
-			-- Calculate surface-aligned direction
+			-- Adjust direction to follow surface - only Z changes
 			local traceDir = horizDir
 			if groundNormal then
-				-- Check if slope is too steep
-				local surfaceAngle = math.deg(math.acos(groundNormal:Dot(UP_VECTOR)))
-				if surfaceAngle > MAX_SURFACE_ANGLE then
-					if DEBUG_TRACES then
-						print(string.format("[IsNavigable] FAIL: Surface too steep (%.1f°)", surfaceAngle))
-					end
-					Profiler.End("Iteration")
-					Profiler.End("CanSkip")
-					return false
-				end
-
-				-- Project horizontal direction onto surface plane
-				local dotProduct = horizDir.x * groundNormal.x + horizDir.y * groundNormal.y
-				traceDir = Vector3(horizDir.x, horizDir.y, -dotProduct / groundNormal.z)
-				-- Normalize
-				local dirLen = math.sqrt(traceDir.x * traceDir.x + traceDir.y * traceDir.y + traceDir.z * traceDir.z)
-				if dirLen > 0.001 then
-					traceDir.x = traceDir.x / dirLen
-					traceDir.y = traceDir.y / dirLen
-					traceDir.z = traceDir.z / dirLen
-				end
+				traceDir = adjustDirectionToSurface(horizDir, groundNormal)
 			end
 
 			-- Calculate trace end point along surface-aligned direction
@@ -6327,43 +6302,17 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		-- Find where we exit current node toward goal
 		local toGoal = goalPos - currentPos
-		-- Start with horizontal direction, then adjust to surface slope
+		-- Horizontal direction to destination (only X/Y matters for heading)
 		local horizDir = Vector3(toGoal.x, toGoal.y, 0)
-		local horizLen = math.sqrt(horizDir.x * horizDir.x + horizDir.y * horizDir.y)
-		if horizLen < 0.001 then
-			horizLen = 0.001
-		end
-		horizDir.x = horizDir.x / horizLen
-		horizDir.y = horizDir.y / horizLen
+		horizDir = Common.Normalize(horizDir)
 
 		-- Get ground normal at current position
 		local groundZ, groundNormal = getGroundZFromQuad(currentPos.x, currentPos.y, currentNode)
 
-		-- Calculate surface slope in horizontal direction
+		-- Adjust direction to follow surface - only Z changes based on slope
 		local dir = horizDir
 		if groundNormal then
-			-- Check if slope is too steep
-			local surfaceAngle = math.deg(math.acos(groundNormal:Dot(UP_VECTOR)))
-			if surfaceAngle > MAX_SURFACE_ANGLE then
-				if DEBUG_TRACES then
-					print(string.format("[IsNavigable] FAIL: Surface too steep (%.1f°)", surfaceAngle))
-				end
-				Profiler.End("Iteration")
-				Profiler.End("CanSkip")
-				return false
-			end
-
-			-- Adjust direction to follow surface slope
-			-- Project horizontal direction onto surface plane
-			local dotProduct = horizDir.x * groundNormal.x + horizDir.y * groundNormal.y
-			dir = Vector3(horizDir.x, horizDir.y, -dotProduct / groundNormal.z)
-			-- Normalize
-			local dirLen = math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)
-			if dirLen > 0.001 then
-				dir.x = dir.x / dirLen
-				dir.y = dir.y / dirLen
-				dir.z = dir.z / dirLen
-			end
+			dir = adjustDirectionToSurface(horizDir, groundNormal)
 		end
 
 		Profiler.Begin("FindExit")
