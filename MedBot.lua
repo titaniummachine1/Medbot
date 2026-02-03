@@ -8397,7 +8397,28 @@ function NodeSkipper.Tick(playerPos)
 	end
 
 	local path = G.Navigation.path
-	if not path or #path < 3 then
+	if not path or #path < 2 then
+		return
+	end
+
+	local currentNode = path[1]
+	local nextNode = path[2]
+
+	if not (currentNode and currentNode.pos and nextNode and nextNode.pos) then
+		return
+	end
+
+	local distPlayerToNext = Common.Distance3D(playerPos, nextNode.pos)
+	local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
+
+	if distPlayerToNext < distCurrentToNext then
+		table.remove(path, 1)
+		Log:Info("Smart skip: player closer to next, skipped node %s", tostring(currentNode.id))
+		G.Navigation.currentNodeIndex = 1
+		return
+	end
+
+	if #path < 3 then
 		return
 	end
 
@@ -8417,7 +8438,7 @@ function NodeSkipper.Tick(playerPos)
 		table.remove(path, 1)
 		table.remove(path, 1)
 
-		Log:Info("Skipped 2 nodes, now at node %s", tostring(skipTarget.id))
+		Log:Info("Forward skip: skipped 2 nodes, now at node %s", tostring(skipTarget.id))
 		G.Navigation.currentNodeIndex = 1
 	end
 end
