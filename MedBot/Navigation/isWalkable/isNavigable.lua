@@ -175,7 +175,7 @@ local function getGroundZFromQuad(pos, node)
 	return z, normal
 end
 
--- MAIN FUNCTION - Two-phase: verify path, then trace
+-- MAIN FUNCTION - Two phases: 1) verify path through nodes, 2) trace with surface pitch
 function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	Profiler.Begin("CanSkip")
 
@@ -200,73 +200,84 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	table.insert(waypoints, {
 		pos = currentPos,
 		node = startNode,
-		normal = startNormal
+		normal = startNormal,
 	})
 
 	-- Traverse to destination (no traces - just verify path exists)
 	for iteration = 1, MAX_ITERATIONS do
+		Profiler.Begin("Iteration")
+
 		-- Check if goal reached
-		local goalInNode = goalPos.x >= currentNode._minX and goalPos.x <= currentNode._maxX
-			and goalPos.y >= currentNode._minY and goalPos.y <= currentNode._maxY
+		local goalInNode = goalPos.x >= currentNode._minX
+			and goalPos.x <= currentNode._maxX
+			and goalPos.y >= currentNode._minY
+			and goalPos.y <= currentNode._maxY
 
 		if goalInNode then
 			-- Add goal as final waypoint
 			table.insert(waypoints, {
 				pos = goalPos,
 				node = currentNode,
-				normal = nil
+				normal = nil,
 			})
-			Profiler.End("VerifyPath")
-			break
-		end
-			-- Calculate surface-aligned direction for final trace
-			local toGoal = goalPos - lastTraceEnd
-			local horizDir = Vector3(toGoal.x, toGoal.y, 0)
-			horizDir = Common.Normalize(horizDir)
-
-			-- Get ground normal at last trace position
-			local groundZ, groundNormal = getGroundZFromQuad(lastTraceEnd, currentNode)
-
-			-- Adjust direction to follow surface - only Z changes
-			local traceDir = horizDir
-			if groundNormal then
-				traceDir = adjustDirectionToSurface(horizDir, groundNormal)
-			end
-
-			-- Calculate trace end point along surface-aligned direction
-			local traceDist = (goalPos - lastTraceEnd):Length()
-			local traceEnd = lastTraceEnd + traceDir * traceDist
-
-			-- Trace from last trace end to destination along surface
-			Profiler.Begin("FinalTrace")
-			local finalTrace = TraceHull(
-				lastTraceEnd + STEP_HEIGHT_Vector,
-				traceEnd + STEP_HEIGHT_Vector,
-				PLAYER_HULL.Min,
-				PLAYER_HULL.Max,
-				MASK_SHOT_HULL
-			)
-			Profiler.End("FinalTrace")
-			if finalTrace.fraction < 0.99 then
-				if DEBUG_TRACES then
-					print("[IsNavigable] FAIL: Entity blocking path to destination")
-				end
-				Profiler.End("Iteration")
-				Profiler.End("CanSkip")
-				return false
-			end
-
-			-- Reached destination node - traversal successful
-			if DEBUG_TRACES then
-				print(
-					string.format(
-						"[IsNavigable] SUCCESS: Reached destination node (hills=%d, caves=%d)",
-						#hills,
-						#caves
-					)
-				)
-			end
 			Profiler.End("Iteration")
+			Profiler.End("VerifyPath")
+
+			-- ============ PHASE 2: Trace through waypoints ============
+			Profiler.Begin("TracePath")
+
+			if #waypoints < 2 then
+				Profiler.End("TracePath")
+				Profiler.End("CanSkip")
+				return true -- Single waypoint, no trace needed
+			end
+
+			-- Trace between each pair of waypoints
+			for i = 1, #waypoints - 1 do
+				local wpStart = waypoints[i]
+				local wpEnd = waypoints[i + 1]
+
+				-- Calculate horizontal direction
+				local toNext = wpEnd.pos - wpStart.pos
+				local horizDir = Vector3(toNext.x, toNext.y, 0)
+				horizDir = Common.Normalize(horizDir)
+
+				-- Adjust direction to follow surface pitch
+				local traceDir = horizDir
+				if wpStart.normal then
+					traceDir = adjustDirectionToSurface(horizDir, wpStart.normal)
+				end
+
+				-- Calculate trace endpoint
+				local traceDist = (wpEnd.pos - wpStart.pos):Length()
+				local traceEnd = wpStart.pos + traceDir * traceDist
+
+				-- Trace with hull
+				Profiler.Begin("WaypointTrace")
+				local trace = TraceHull(
+					wpStart.pos + STEP_HEIGHT_Vector,
+					traceEnd + STEP_HEIGHT_Vector,
+					PLAYER_HULL.Min,
+					PLAYER_HULL.Max,
+					MASK_SHOT_HULL
+				)
+				Profiler.End("WaypointTrace")
+
+				if trace.fraction < 0.99 then
+					if DEBUG_TRACES then
+						print(string.format("[IsNavigable] FAIL: Entity blocking waypoint %d->%d", i, i + 1))
+					end
+					Profiler.End("TracePath")
+					Profiler.End("CanSkip")
+					return false
+				end
+			end
+
+			if DEBUG_TRACES then
+				print(string.format("[IsNavigable] SUCCESS: Path clear through %d waypoints", #waypoints))
+			end
+
+			Profiler.End("TracePath")
 			Profiler.End("CanSkip")
 			return true
 		end
@@ -506,114 +517,12 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 		local entryPos = Vector3(entryX, entryY, groundZ)
 
-		-- Track elevation changes for hill/cave detection
-		local heightDiff = groundZ - lastHeight
-
-		if heightDiff > HILL_THRESHOLD then
-			-- Climbing - track highest point
-			if not lastWasClimbing then
-				-- Started climbing - trace from last trace end to this point along surface
-				local toTarget = currentPos - lastTraceEnd
-				local horizDir = Vector3(toTarget.x, toTarget.y, 0)
-				horizDir = Common.Normalize(horizDir)
-
-				-- Get ground normal and adjust direction
-				local _, surfNormal = getGroundZFromQuad(lastTraceEnd, currentNode)
-				local traceDir = horizDir
-				if surfNormal then
-					traceDir = adjustDirectionToSurface(horizDir, surfNormal)
-				end
-
-				-- Calculate surface-aligned trace target
-				local traceDist = (currentPos - lastTraceEnd):Length()
-				local traceTarget = lastTraceEnd + traceDir * traceDist
-
-				Profiler.Begin("StartToHillTrace")
-				local startTrace = TraceHull(
-					lastTraceEnd + STEP_HEIGHT_Vector,
-					traceTarget + STEP_HEIGHT_Vector,
-					PLAYER_HULL.Min,
-					PLAYER_HULL.Max,
-					MASK_SHOT_HULL
-				)
-				Profiler.End("StartToHillTrace")
-				if startTrace.fraction < 0.99 then
-					if DEBUG_TRACES then
-						print(string.format("[IsNavigable] FAIL: Entity blocking path to hill"))
-					end
-					Profiler.End("Iteration")
-					Profiler.End("CanSkip")
-					return false
-				end
-				lastTraceEnd = currentPos - STEP_HEIGHT_Vector
-				lastWasClimbing = true
-			end
-			if groundZ > highestHeight then
-				highestHeight = groundZ
-			end
-		elseif heightDiff < -HILL_THRESHOLD then
-			-- Descending
-			if lastWasClimbing and highestHeight > lastHeight + HILL_THRESHOLD then
-				-- Was climbing and now descending - save hill peak
-				local hillPeak = Vector3(currentPos.x, currentPos.y, highestHeight)
-				table.insert(hills, hillPeak)
-				if DEBUG_TRACES then
-					print(string.format("[IsNavigable] Hill detected at Z=%.1f", highestHeight))
-				end
-				lastTraceEnd = hillPeak
-			end
-			lastWasClimbing = false
-
-			-- Check if descending into cave
-			if lastHeight - groundZ > HILL_THRESHOLD then
-				local cavePoint = Vector3(entryX, entryY, groundZ)
-				-- Trace from last trace end to this cave along surface
-				local toCave = cavePoint - lastTraceEnd
-				local caveHorizDir = Vector3(toCave.x, toCave.y, 0)
-				caveHorizDir = Common.Normalize(caveHorizDir)
-
-				-- Get ground normal and adjust direction
-				local _, caveNormal = getGroundZFromQuad(lastTraceEnd, currentNode)
-				local caveTraceDir = caveHorizDir
-				if caveNormal then
-					caveTraceDir = adjustDirectionToSurface(caveHorizDir, caveNormal)
-				end
-
-				-- Calculate surface-aligned cave trace target
-				local caveTraceDist = (cavePoint - lastTraceEnd):Length()
-				local caveTraceTarget = lastTraceEnd + caveTraceDir * caveTraceDist
-
-				Profiler.Begin("HillToCaveTrace")
-				local caveTrace = TraceHull(
-					lastTraceEnd + STEP_HEIGHT_Vector,
-					caveTraceTarget + STEP_HEIGHT_Vector,
-					PLAYER_HULL.Min,
-					PLAYER_HULL.Max,
-					MASK_SHOT_HULL
-				)
-				Profiler.End("HillToCaveTrace")
-				if caveTrace.fraction < 0.99 then
-					if DEBUG_TRACES then
-						print(
-							string.format(
-								"[IsNavigable] FAIL: Entity blocking path to cave at %.2f",
-								caveTrace.fraction
-							)
-						)
-					end
-					Profiler.End("Iteration")
-					Profiler.End("CanSkip")
-					return false
-				end
-				lastTraceEnd = cavePoint - STEP_HEIGHT_Vector
-				table.insert(caves, cavePoint)
-				if DEBUG_TRACES then
-					print(string.format("[IsNavigable] Cave detected at Z=%.1f", groundZ))
-				end
-			end
-		end
-
-		lastHeight = groundZ
+		-- Add waypoint for this node entry
+		table.insert(waypoints, {
+			pos = entryPos,
+			node = neighborNode,
+			normal = groundNormal,
+		})
 
 		if DEBUG_TRACES then
 			print(string.format("[IsNavigable] Crossed to node %d (Z=%.1f)", neighborNode.id, groundZ))
@@ -624,11 +533,12 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		Profiler.End("Iteration")
 	end
 
+	-- Phase 1 failed to reach goal
 	if DEBUG_TRACES then
 		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
 	end
+	Profiler.End("VerifyPath")
 	Profiler.End("CanSkip")
-
 	return false
 end
 
