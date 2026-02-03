@@ -6142,7 +6142,63 @@ local function findNodeExit(startPos, dir, node)
 	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
 end
 
--- MAIN FUNCTION - Trace to borders
+-- Calculate ground Z position from node quad geometry (no engine call)
+local function getGroundZFromQuad(x, y, node)
+	if not (node.nw and node.ne and node.sw and node.se) then
+		return nil, nil
+	end
+
+	local nw, ne, sw, se = node.nw, node.ne, node.sw, node.se
+
+	-- Determine which triangle contains the point
+	-- Split quad into: Triangle1(nw,ne,se) and Triangle2(nw,se,sw)
+	local dx = x - nw.x
+	local dy = y - nw.y
+	local dx_ne = ne.x - nw.x
+	local dy_se = se.y - nw.y
+
+	local inTriangle1 = (dx / dx_ne + dy / dy_se) <= 1.0
+
+	local v0, v1, v2
+	if inTriangle1 then
+		-- Triangle: nw, ne, se
+		v0, v1, v2 = nw, ne, se
+	else
+		-- Triangle: nw, se, sw
+		v0, v1, v2 = nw, se, sw
+	end
+
+	-- Barycentric interpolation for Z
+	local denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y)
+	if math.abs(denom) < 0.0001 then
+		return v0.z, Vector3(0, 0, 1) -- Degenerate triangle, use first vertex
+	end
+
+	local w0 = ((v1.y - v2.y) * (x - v2.x) + (v2.x - v1.x) * (y - v2.y)) / denom
+	local w1 = ((v2.y - v0.y) * (x - v2.x) + (v0.x - v2.x) * (y - v2.y)) / denom
+	local w2 = 1.0 - w0 - w1
+
+	local z = w0 * v0.z + w1 * v1.z + w2 * v2.z
+
+	-- Calculate normal from cross product
+	local edge1 = Vector3(v1.x - v0.x, v1.y - v0.y, v1.z - v0.z)
+	local edge2 = Vector3(v2.x - v0.x, v2.y - v0.y, v2.z - v0.z)
+	local normal = Vector3(
+		edge1.y * edge2.z - edge1.z * edge2.y,
+		edge1.z * edge2.x - edge1.x * edge2.z,
+		edge1.x * edge2.y - edge1.y * edge2.x
+	)
+	local len = math.sqrt(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z)
+	if len > 0.0001 then
+		normal = Vector3(normal.x / len, normal.y / len, normal.z / len)
+	else
+		normal = Vector3(0, 0, 1)
+	end
+
+	return z, normal
+end
+
+-- MAIN FUNCTION - Optimized single-trace approach
 function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	Profiler.Begin("CanSkip")
 
@@ -6150,18 +6206,24 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	local nodes = G.Navigation and G.Navigation.nodes
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
 
-	if DEBUG_TRACES then
-		print(
-			string.format(
-				"[IsNavigable] START: From (%.1f, %.1f) to (%.1f, %.1f)",
-				startPos.x,
-				startPos.y,
-				goalPos.x,
-				goalPos.y
-			)
-		)
+	-- OPTIMIZATION 1: Try direct trace to goal first
+	Profiler.Begin("DirectTrace")
+	local directTrace = TraceHull(
+		startPos + STEP_HEIGHT_Vector,
+		goalPos + STEP_HEIGHT_Vector,
+		PLAYER_HULL.Min,
+		PLAYER_HULL.Max,
+		MASK_PLAYERSOLID
+	)
+	Profiler.End("DirectTrace")
+
+	-- If direct path clear, check if both positions in same node or goal reachable
+	if directTrace.fraction > 0.99 then
+		Profiler.End("CanSkip")
+		return true
 	end
 
+	-- Direct trace blocked - need to traverse nodes
 	local currentPos = startPos
 	local currentNode = startNode
 	local iteration = 0
@@ -6284,25 +6346,35 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			return false
 		end
 
-		-- Find neighbor - ONLY check connections in exit direction
+		-- Find neighbor - optimized linear search from appropriate end
 		Profiler.Begin("FindNeighbor")
 		local neighborNode = nil
 		local OVERLAP_TOLERANCE = 5.0
 
 		if currentNode.c and currentNode.c[exitDir] then
 			local dirData = currentNode.c[exitDir]
-			if DEBUG_TRACES then
-				print(
-					string.format(
-						"[IsNavigable] Checking dir %d: %d connections",
-						exitDir,
-						dirData.connections and #dirData.connections or 0
-					)
-				)
-			end
 
 			if dirData.connections then
-				for i, connection in ipairs(dirData.connections) do
+				local connCount = #dirData.connections
+
+				-- Determine search direction: if exit near min boundary, search forward; if near max, search backward
+				local searchForward = true
+				if exitDir == 2 or exitDir == 4 then -- East/West (X axis)
+					local midX = (currentNode._minX + currentNode._maxX) * 0.5
+					searchForward = exitPoint.x < midX
+				else -- North/South (Y axis)
+					local midY = (currentNode._minY + currentNode._maxY) * 0.5
+					searchForward = exitPoint.y < midY
+				end
+
+				-- Search connections from appropriate end
+				local start, finish, step = 1, connCount, 1
+				if not searchForward then
+					start, finish, step = connCount, 1, -1
+				end
+
+				for i = start, finish, step do
+					local connection = dirData.connections[i]
 					local targetId = (type(connection) == "table") and (connection.node or connection.id) or connection
 					local candidate = nodes[targetId]
 
@@ -6449,29 +6521,29 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		Profiler.Begin("EntryClamp")
 		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
 		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
-		local entryPos = Vector3(entryX, entryY, exitPoint.z)
 		Profiler.End("EntryClamp")
 
-		-- Ground snap at entry
-		Profiler.Begin("GroundTrace")
-		local groundTrace =
-			engine.TraceLine(entryPos + STEP_HEIGHT_Vector, entryPos - Vector3(0, 0, 100), MASK_PLAYERSOLID)
-		Profiler.End("GroundTrace")
+		-- Ground snap using quad geometry (no engine call)
+		Profiler.Begin("GroundCalc")
+		local groundZ, groundNormal = getGroundZFromQuad(entryX, entryY, neighborNode)
+		Profiler.End("GroundCalc")
 
-		if groundTrace.fraction == 1 then
+		if not groundZ then
 			if DEBUG_TRACES then
-				print(string.format("[IsNavigable] FAIL: No ground at entry to node %d", neighborNode.id))
+				print(string.format("[IsNavigable] FAIL: No ground geometry at entry to node %d", neighborNode.id))
 			end
 			Profiler.End("Iteration")
 			Profiler.End("CanSkip")
 			return false
 		end
 
+		local entryPos = Vector3(entryX, entryY, groundZ)
+
 		if DEBUG_TRACES then
 			print(string.format("[IsNavigable] Crossed to node %d", neighborNode.id))
 		end
 
-		currentPos = groundTrace.endpos
+		currentPos = entryPos
 		currentNode = neighborNode
 		Profiler.End("Iteration")
 	end
