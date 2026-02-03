@@ -135,23 +135,27 @@ function Navigable.CanSkip(startPos, goalPos, startNode)
 		local toGoal = goalPos - currentPos
 		local distToGoal = toGoal:Length()
 
-		-- Vector normalization speed test (runs every iteration)
-		local testVector = Vector3(3, 4, 0)
-
+		local result = testVector
 		-- Method 1: Divide
 		Profiler.Begin("VecTest_Divide")
-		local result1 = testVector / testVector:Length()
+		result = testVector / testVector:Length()
 		Profiler.End("VecTest_Divide")
 
 		-- Method 2: VectorDivide
 		Profiler.Begin("VecTest_VectorDivide")
-		local result2 = vector.Divide(testVector, testVector:Length())
+		result = vector.Divide(testVector, testVector:Length())
 		Profiler.End("VecTest_VectorDivide")
 
+		local vectordivide = vector.Divide
+		-- Method 2: VectorDivide
+		Profiler.Begin("VecTest_VectorDividelocalized")
+		result = vectordivide(testVector, testVector:Length())
+		Profiler.End("VecTest_VectorDividelocalized")
+
+		result = testVector
 		-- Method 3: Normalize (fresh copy)
 		Profiler.Begin("VecTest_Normalize")
-		local result3 = Vector3(testVector.x, testVector.y, testVector.z)
-		result3:Normalize()
+		result:Normalize()
 		Profiler.End("VecTest_Normalize")
 
 		-- Normalize direction for navigation

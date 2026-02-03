@@ -134,6 +134,7 @@ function JSON.stringify(obj)
 end
 
 Common.JSON = JSON
+local vectorDivide = vector.Divide
 
 --- Normalize vector using in-place :Normalize() (fastest method)
 function Common.Normalize(vec)
