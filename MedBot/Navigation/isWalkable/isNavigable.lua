@@ -189,15 +189,50 @@ local function isPointInNodeBounds(point, node, tolerance)
 	return inX and inY
 end
 
+-- Helper: Check if exit point is valid for neighbor connection
+-- Tolerance only on opposite axis to shared edge
+-- Z check: down up to 450, up to jump/step height based on allowJump
+local function isValidNeighborConnection(currentNode, candidateNode, exitPoint, exitDir, allowJump)
+	local TOLERANCE = 10.0
+	local maxUp = allowJump and JUMP_HEIGHT or STEP_HEIGHT
+	
+	-- Get ground Z at exit point for both nodes
+	local currentZ = getGroundZFromQuad(exitPoint, currentNode)
+	local candidateZ = getGroundZFromQuad(exitPoint, candidateNode)
+	
+	if not currentZ or not candidateZ then
+		return false
+	end
+	
+	-- Check Z height difference
+	local zDiff = candidateZ - currentZ
+	if zDiff > maxUp or zDiff < -MAX_FALL_DISTANCE then
+		return false
+	end
+	
+	-- Check bounds based on exit direction (tolerance only on opposite axis)
+	if exitDir == 2 or exitDir == 4 then -- East/West - shared X edge
+		-- X must be at the edge (no tolerance), Y can have tolerance
+		local atXEdge = (exitPoint.x >= candidateNode._minX - 0.1 and exitPoint.x <= candidateNode._maxX + 0.1)
+		local inY = exitPoint.y >= (candidateNode._minY - TOLERANCE) and exitPoint.y <= (candidateNode._maxY + TOLERANCE)
+		return atXEdge and inY
+	else -- North/South - shared Y edge
+		-- Y must be at the edge (no tolerance), X can have tolerance
+		local atYEdge = (exitPoint.y >= candidateNode._minY - 0.1 and exitPoint.y <= candidateNode._maxY + 0.1)
+		local inX = exitPoint.x >= (candidateNode._minX - TOLERANCE) and exitPoint.x <= (candidateNode._maxX + TOLERANCE)
+		return atYEdge and inX
+	end
+end
+
 -- Helper: Find neighbor node through connections/doors from exit point
-local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respectDoors)
+local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respectDoors, allowJump)
 	local dirData = currentNode.c[exitDir]
 	if not dirData or not dirData.connections then
 		return nil
 	end
 
 	local connCount = #dirData.connections
-	local OVERLAP_TOLERANCE = 10.0
+	-- TOLERANCE removed - using Z-based height checks in isValidNeighborConnection
 
 	-- Determine search direction based on exit position
 	local searchForward = true
@@ -255,7 +290,7 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 				end
 			end
 
-			local inBounds = isPointInNodeBounds(exitPoint, checkNode, OVERLAP_TOLERANCE)
+			local inBounds = isValidNeighborConnection(currentNode, checkNode, exitPoint, exitDir, allowJump)
 			if DEBUG_MODE then
 				print(
 					string.format(
@@ -301,7 +336,7 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 						end
 
 						if areaId ~= currentNode.id and areaNode and areaNode._minX then
-							local inBounds = isPointInNodeBounds(exitPoint, areaNode, OVERLAP_TOLERANCE)
+							local inBounds = isValidNeighborConnection(currentNode, areaNode, exitPoint, exitDir, allowJump)
 							if DEBUG_MODE then
 								print(
 									string.format(
@@ -617,7 +652,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors, allowJump
 		end
 
 		-- Find neighbor
-		local neighborNode = findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respectDoors)
+		local neighborNode = findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respectDoors, allowJump)
 
 		if not neighborNode then
 			if DEBUG_MODE then
