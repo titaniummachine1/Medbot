@@ -6256,9 +6256,6 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 			})
 
 			-- ============ PHASE 2: Trace through waypoints ============
-			if #waypoints < 2 then
-				return true -- Single waypoint, no trace needed
-			end
 
 			-- Detect angle changes and trace only when terrain angle changes significantly
 			local ANGLE_CHANGE_THRESHOLD = 15 -- degrees
