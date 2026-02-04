@@ -6380,26 +6380,6 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 	return nil
 end
 
--- Helper: Get closest node at position for jump validation
-local function getClosestNodeAtPos(pos, nodes)
-	local closestNode = nil
-	local closestDistSq = math.huge
-	for _, node in pairs(nodes) do
-		if node._minX then
-			local centerX = (node._minX + node._maxX) * 0.5
-			local centerY = (node._minY + node._maxY) * 0.5
-			local dx = pos.x - centerX
-			local dy = pos.y - centerY
-			local distSq = dx * dx + dy * dy
-			if distSq < closestDistSq then
-				closestDistSq = distSq
-				closestNode = node
-			end
-		end
-	end
-	return closestNode
-end
-
 -- Helper: Get surface angle from normal
 local function getSurfaceAngle(surfaceNormal)
 	if not surfaceNormal then
@@ -6505,7 +6485,7 @@ local function traceWaypoints(waypoints, allowJump)
 				local nodes = G.Navigation and G.Navigation.nodes
 
 				if nodes then
-					hitNode = getClosestNodeAtPos(hitPos, nodes)
+					hitNode = Node.GetAreaAtPosition(hitPos)
 				end
 
 				if not hitNode then
@@ -6548,7 +6528,7 @@ local function traceWaypoints(waypoints, allowJump)
 
 				-- If using jump, check if we changed nodes
 				if useJump then
-					local nodeAtGround = getClosestNodeAtPos(groundPos, nodes)
+					local nodeAtGround = Node.GetAreaAtPosition(groundPos)
 					if nodeAtGround and nodeAtGround.id == hitNode.id then
 						-- Same node - jump didn't get us past the obstacle
 						if DEBUG_MODE then
