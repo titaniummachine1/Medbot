@@ -14,7 +14,9 @@ local Common = require("MedBot.Core.Common")
 -- Constants
 local PLAYER_HULL = { Min = Vector3(-24, -24, 0), Max = Vector3(24, 24, 82) }
 local STEP_HEIGHT = 18
+local JUMP_HEIGHT = 72
 local STEP_HEIGHT_Vector = Vector3(0, 0, STEP_HEIGHT)
+local JUMP_HEIGHT_Vector = Vector3(0, 0, JUMP_HEIGHT)
 local FORWARD_STEP = 100 -- Max distance per forward trace
 local HILL_THRESHOLD = 4 -- 0.5x step height for significant elevation changes
 
@@ -328,8 +330,37 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 	return nil
 end
 
+-- Helper: Get closest node at position for jump validation
+local function getClosestNodeAtPos(pos, nodes)
+	local closestNode = nil
+	local closestDistSq = math.huge
+	for _, node in pairs(nodes) do
+		if node._minX then
+			local centerX = (node._minX + node._maxX) * 0.5
+			local centerY = (node._minY + node._maxY) * 0.5
+			local dx = pos.x - centerX
+			local dy = pos.y - centerY
+			local distSq = dx * dx + dy * dy
+			if distSq < closestDistSq then
+				closestDistSq = distSq
+				closestNode = node
+			end
+		end
+	end
+	return closestNode
+end
+
+-- Helper: Get surface angle from normal
+local function getSurfaceAngle(surfaceNormal)
+	if not surfaceNormal then
+		return 0
+	end
+	return math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
+end
+
 -- Helper: Trace through waypoints (Phase 2)
-local function traceWaypoints(waypoints)
+-- allowJump: if true, will attempt jump (72 units) when hitting obstacles
+local function traceWaypoints(waypoints, allowJump)
 	local ANGLE_CHANGE_THRESHOLD = 15 -- degrees
 	local traceStart = waypoints[1]
 	local traceCount = 0
@@ -366,18 +397,116 @@ local function traceWaypoints(waypoints)
 			local traceDist = (currentWp.pos - traceStart.pos):Length()
 			local traceEnd = traceStart.pos + traceDir * traceDist
 
-			-- Trace with hull
-			local trace = TraceHull(
-				traceStart.pos + STEP_HEIGHT_Vector,
-				traceEnd + STEP_HEIGHT_Vector,
-				PLAYER_HULL.Min,
-				PLAYER_HULL.Max,
-				MASK_SHOT_HULL
-			)
+			-- Try step height first, then jump height if allowed
+			local stepHeights = { STEP_HEIGHT, JUMP_HEIGHT }
+			local traceSuccess = false
+			local lastTraceResult = nil
 
-			traceCount = traceCount + 1
+			for _, stepH in ipairs(stepHeights) do
+				local stepVec = Vector3(0, 0, stepH)
+				local useJump = (stepH == JUMP_HEIGHT)
 
-			if trace.fraction < 0.99 then
+				-- Skip jump attempt if not allowed
+				if useJump and not allowJump then
+					break
+				end
+
+				-- Forward trace with current step height
+				local trace = TraceHull(
+					traceStart.pos + stepVec,
+					traceEnd + stepVec,
+					PLAYER_HULL.Min,
+					PLAYER_HULL.Max,
+					MASK_SHOT_HULL
+				)
+
+				traceCount = traceCount + 1
+				lastTraceResult = trace
+
+				if trace.fraction >= 0.99 then
+					-- Clear path - success
+					traceSuccess = true
+					break
+				end
+
+				-- Hit something - check if we can step up/adjust
+				local hitPos = trace.endpos
+				local hitNormal = trace.plane
+
+				-- Ground trace from hit position to find walkable surface
+				local groundTrace = TraceHull(
+					hitPos + MAX_FALL_DISTANCE_Vector,
+					hitPos - MAX_FALL_DISTANCE_Vector,
+					PLAYER_HULL.Min,
+					PLAYER_HULL.Max,
+					MASK_SHOT_HULL
+				)
+
+				if groundTrace.fraction < 1 then
+					-- Found ground - check surface angle
+					local surfaceAngle = getSurfaceAngle(groundTrace.plane)
+
+					if surfaceAngle <= MAX_SURFACE_ANGLE then
+						-- Walkable surface - adjust to ground and continue
+						local adjustedPos = groundTrace.endpos
+						local adjustedNormal = groundTrace.plane
+
+						-- Check if we changed nodes (for jump validation)
+						if useJump then
+							local nodes = G.Navigation and G.Navigation.nodes
+							if nodes then
+								local nodeAtHit = getClosestNodeAtPos(adjustedPos, nodes)
+								if nodeAtHit and nodeAtHit.id == traceStart.node.id then
+									-- Same node - jump failed, bail out
+									if DEBUG_MODE then
+										print(
+											string.format(
+												"[IsNavigable] FAIL: Jump blocked in same node %d (angle=%.1f°)",
+												traceStart.node.id,
+												surfaceAngle
+											)
+										)
+									end
+									return false
+								end
+								-- Different node - jump succeeded, update trace start
+								if DEBUG_MODE then
+									print(
+										string.format(
+											"[IsNavigable] Jump success: changed to node %d from node %d",
+											nodeAtHit and nodeAtHit.id or -1,
+											traceStart.node.id
+										)
+									)
+								end
+							end
+						end
+
+						-- Update trace start to adjusted position
+						traceStart = {
+							pos = adjustedPos,
+							node = traceStart.node, -- Keep same node for trace continuity
+							normal = adjustedNormal,
+						}
+						traceSuccess = true
+						break
+					end
+				end
+
+				-- Surface unwalkable or no ground found - try next step height or fail
+				if DEBUG_MODE then
+					print(
+						string.format(
+							"[IsNavigable] Hit at step=%d (jump=%s), surfaceAngle=%.1f° - retrying...",
+							stepH,
+							tostring(useJump),
+							getSurfaceAngle(hitNormal)
+						)
+					)
+				end
+			end
+
+			if not traceSuccess then
 				if DEBUG_MODE then
 					print(
 						string.format(
@@ -409,7 +538,8 @@ local function traceWaypoints(waypoints)
 end
 
 -- MAIN FUNCTION - Two phases: 1) verify path through nodes, 2) trace with surface pitch
-function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
+-- allowJump: if true, will use jump height (72) when step height (18) fails
+function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors, allowJump)
 	assert(startNode, "CanSkip: startNode required")
 	local nodes = G.Navigation and G.Navigation.nodes
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
@@ -437,7 +567,7 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		-- Check if goal reached
 		if isPointInNodeBounds(goalPos, currentNode) then
 			table.insert(waypoints, { pos = goalPos, node = currentNode, normal = nil })
-			return traceWaypoints(waypoints)
+			return traceWaypoints(waypoints, allowJump)
 		end
 
 		-- Find where we exit current node toward goal
