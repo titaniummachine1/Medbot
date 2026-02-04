@@ -280,14 +280,40 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 			if DEBUG_MODE then
 				print(string.format("[IsNavigable]   Conn %d: Door %s, traversing...", i, tostring(targetId)))
 			end
-			for _, doorDirData in pairs(candidate.c) do
+			for doorDir, doorDirData in pairs(candidate.c) do
 				if doorDirData.connections then
 					for _, doorConn in ipairs(doorDirData.connections) do
 						local areaId = (type(doorConn) == "table") and (doorConn.node or doorConn.id) or doorConn
 						local areaNode = nodes[areaId]
 
+						if DEBUG_MODE then
+							print(
+								string.format(
+									"[IsNavigable]     Door dir %s -> area %s (exists=%s, hasBounds=%s)",
+									tostring(doorDir),
+									tostring(areaId),
+									tostring(areaNode ~= nil),
+									tostring(areaNode and areaNode._minX ~= nil)
+								)
+							)
+						end
+
 						if areaId ~= currentNode.id and areaNode and areaNode._minX then
-							if isPointInNodeBounds(exitPoint, areaNode, OVERLAP_TOLERANCE) then
+							local inBounds = isPointInNodeBounds(exitPoint, areaNode, OVERLAP_TOLERANCE)
+							if DEBUG_MODE then
+								print(
+									string.format(
+										"[IsNavigable]       Check area %s inBounds=%s, bounds=[%d,%d,%d,%d]",
+										tostring(areaId),
+										tostring(inBounds),
+										areaNode._minX,
+										areaNode._maxX,
+										areaNode._minY,
+										areaNode._maxY
+									)
+								)
+							end
+							if inBounds then
 								return areaNode
 							end
 						end
