@@ -6441,6 +6441,7 @@ local function traceWaypoints(waypoints, allowJump)
 			local maxRetries = 3
 			local retryCount = 0
 			local hitNode = nil
+			local lastTracePos = nil  -- Track last position to detect no progress
 
 			while currentStepIndex <= #stepHeights and retryCount < maxRetries do
 				local stepH = stepHeights[currentStepIndex]
@@ -6524,6 +6525,20 @@ local function traceWaypoints(waypoints, allowJump)
 
 				if DEBUG_MODE then
 					print(string.format("[IsNavigable] Hit on node %d, adjusted to (%.1f, %.1f, %.1f)", hitNode.id, groundPos.x, groundPos.y, groundPos.z))
+				end
+
+				-- Check if we're making progress (XY must change)
+				local dx = groundPos.x - currentTracePos.x
+				local dy = groundPos.y - currentTracePos.y
+				local horizDist = math.sqrt(dx * dx + dy * dy)
+				if horizDist < 0.5 then
+					-- No progress - try next step height
+					if DEBUG_MODE then
+						print(string.format("[IsNavigable] No progress made (horiz=%.2f), trying next step height...", horizDist))
+					end
+					currentStepIndex = currentStepIndex + 1
+					retryCount = retryCount + 1
+					goto continue_retry
 				end
 
 				-- If using jump, check if we changed nodes
