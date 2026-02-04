@@ -52,6 +52,18 @@ function Node.GetNodeByID(id)
 	return G.Navigation.nodes and G.Navigation.nodes[id] or nil
 end
 
+-- Height check: calculate relative height using node normal (for stairs/slopes)
+-- Get Z at position on node's plane, then check height difference
+local function getZOnPlane(px, py, nw, ne, sw)
+	local v1 = ne - nw
+	local v2 = sw - nw
+	local normal = Common.Cross(v1, v2)
+	if normal.z == 0 then
+		return nw.z
+	end
+	return nw.z - (normal.x * (px - nw.x) + normal.y * (py - nw.y)) / normal.z
+end
+
 -- Check if position is within area's horizontal bounds (X/Y) with height limit
 -- Uses precomputed bounds from Phase2_Normalize for speed
 local function isWithinAreaBounds(pos, node)
@@ -68,9 +80,11 @@ local function isWithinAreaBounds(pos, node)
 		return false
 	end
 
-	-- Height limit: ±72 units to prevent finding areas through doors/floors
-	local heightDiff = math.abs(pos.z - node.pos.z)
-	if heightDiff > 72 then
+	local groundZ = getZOnPlane(pos.x, pos.y, node.nw, node.ne, node.sw)
+	local heightAbovePlane = pos.z - groundZ
+
+	-- Allow up to 72 units above plane, up to 5 units below plane
+	if heightAbovePlane > 72 or heightAbovePlane < -5 then
 		return false
 	end
 

@@ -3463,6 +3463,18 @@ function Node.GetNodeByID(id)
 	return G.Navigation.nodes and G.Navigation.nodes[id] or nil
 end
 
+-- Height check: calculate relative height using node normal (for stairs/slopes)
+-- Get Z at position on node's plane, then check height difference
+local function getZOnPlane(px, py, nw, ne, sw)
+	local v1 = ne - nw
+	local v2 = sw - nw
+	local normal = Common.Cross(v1, v2)
+	if normal.z == 0 then
+		return nw.z
+	end
+	return nw.z - (normal.x * (px - nw.x) + normal.y * (py - nw.y)) / normal.z
+end
+
 -- Check if position is within area's horizontal bounds (X/Y) with height limit
 -- Uses precomputed bounds from Phase2_Normalize for speed
 local function isWithinAreaBounds(pos, node)
@@ -3479,9 +3491,11 @@ local function isWithinAreaBounds(pos, node)
 		return false
 	end
 
-	-- Height limit: ±72 units to prevent finding areas through doors/floors
-	local heightDiff = math.abs(pos.z - node.pos.z)
-	if heightDiff > 72 then
+	local groundZ = getZOnPlane(pos.x, pos.y, node.nw, node.ne, node.sw)
+	local heightAbovePlane = pos.z - groundZ
+
+	-- Allow up to 72 units above plane, up to 5 units below plane
+	if heightAbovePlane > 72 or heightAbovePlane < -5 then
 		return false
 	end
 
@@ -6233,7 +6247,7 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 	end
 
 	local connCount = #dirData.connections
-	local OVERLAP_TOLERANCE = 5.0
+	local OVERLAP_TOLERANCE = 10.0
 
 	-- Determine search direction based on exit position
 	local searchForward = true
@@ -6428,17 +6442,28 @@ local function traceWaypoints(waypoints, allowJump)
 			if traceStart.normal then
 				traceDir = adjustDirectionToSurface(horizDir, traceStart.normal)
 			end
-
 			-- Calculate trace endpoint
 			local traceDist = (currentWp.pos - traceStart.pos):Length()
 			local traceEnd = traceStart.pos + traceDir * traceDist
 
-			-- Try step height first, then jump height if allowed
-			local stepHeights = { STEP_HEIGHT, JUMP_HEIGHT }
+			local stepHeightVec = Vector3(0, 0, STEP_HEIGHT)
+			local jumpHeightVec = Vector3(0, 0, JUMP_HEIGHT)
 			local traceSuccess = false
-			local lastTraceResult = nil
 
-			for _, stepH in ipairs(stepHeights) do
+			-- Store the base Z for this segment to prevent height accumulation
+			local baseZ = traceStart.pos.z
+			local currentTracePos = traceStart.pos
+			local currentTraceNormal = traceStart.normal
+
+			-- Try step height first, then jump height if needed
+			local stepHeights = { STEP_HEIGHT, JUMP_HEIGHT }
+			local currentStepIndex = 1
+			local maxRetries = 3
+			local retryCount = 0
+			local hitNode = nil
+
+			while currentStepIndex <= #stepHeights and retryCount < maxRetries do
+				local stepH = stepHeights[currentStepIndex]
 				local stepVec = Vector3(0, 0, stepH)
 				local useJump = (stepH == JUMP_HEIGHT)
 
@@ -6447,99 +6472,103 @@ local function traceWaypoints(waypoints, allowJump)
 					break
 				end
 
+				-- Calculate trace endpoint based on current position
+				local toTarget = traceEnd - currentTracePos
+				local remainingDist = toTarget:Length()
+				if remainingDist < 0.001 then
+					traceSuccess = true
+					break
+				end
+
+				local traceDir = Common.Normalize(toTarget)
+				local currentTraceEnd = currentTracePos + traceDir * remainingDist
+
 				-- Forward trace with current step height
 				local trace = TraceHull(
-					traceStart.pos + stepVec,
-					traceEnd + stepVec,
+					currentTracePos + stepVec,
+					currentTraceEnd + stepVec,
 					PLAYER_HULL.Min,
 					PLAYER_HULL.Max,
 					MASK_SHOT_HULL
 				)
 
 				traceCount = traceCount + 1
-				lastTraceResult = trace
 
 				if trace.fraction >= 0.99 then
-					-- Clear path - success
+					-- Clear path - reached destination
 					traceSuccess = true
 					break
 				end
 
-				-- Hit something - check if we can step up/adjust
+				-- Hit something - find what node/area the hit is in
 				local hitPos = trace.endpos
-				local hitNormal = trace.plane
+				local nodes = G.Navigation and G.Navigation.nodes
 
-				-- Ground trace from hit position to find walkable surface
-				local groundTrace = TraceHull(
-					hitPos + MAX_FALL_DISTANCE_Vector,
-					hitPos - MAX_FALL_DISTANCE_Vector,
-					PLAYER_HULL.Min,
-					PLAYER_HULL.Max,
-					MASK_SHOT_HULL
-				)
+				if nodes then
+					hitNode = getClosestNodeAtPos(hitPos, nodes)
+				end
 
-				if groundTrace.fraction < 1 then
-					-- Found ground - check surface angle
-					local surfaceAngle = getSurfaceAngle(groundTrace.plane)
+				if not hitNode then
+					-- No valid node at hit position - try next step height
+					if DEBUG_MODE then
+						print(string.format("[IsNavigable] Hit at (%.1f, %.1f, %.1f) not on navmesh, trying next...", hitPos.x, hitPos.y, hitPos.z))
+					end
+					currentStepIndex = currentStepIndex + 1
+					retryCount = retryCount + 1
+					goto continue_retry
+				end
 
-					if surfaceAngle <= MAX_SURFACE_ANGLE then
-						-- Walkable surface - adjust to ground and continue
-						local adjustedPos = groundTrace.endpos
-						local adjustedNormal = groundTrace.plane
+				-- Adjust to ground on the hit node's navmesh
+				local groundZ, groundNormal = getGroundZFromQuad(hitPos, hitNode)
 
-						-- Check if we changed nodes (for jump validation)
-						if useJump then
-							local nodes = G.Navigation and G.Navigation.nodes
-							if nodes then
-								local nodeAtHit = getClosestNodeAtPos(adjustedPos, nodes)
-								if nodeAtHit and nodeAtHit.id == traceStart.node.id then
-									-- Same node - jump failed, bail out
-									if DEBUG_MODE then
-										print(
-											string.format(
-												"[IsNavigable] FAIL: Jump blocked in same node %d (angle=%.1f°)",
-												traceStart.node.id,
-												surfaceAngle
-											)
-										)
-									end
-									return false
-								end
-								-- Different node - jump succeeded, update trace start
-								if DEBUG_MODE then
-									print(
-										string.format(
-											"[IsNavigable] Jump success: changed to node %d from node %d",
-											nodeAtHit and nodeAtHit.id or -1,
-											traceStart.node.id
-										)
-									)
-								end
-							end
+				if not groundZ then
+					-- No ground on this node - try next step height
+					if DEBUG_MODE then
+						print(string.format("[IsNavigable] No ground on node %d at hit, trying next...", hitNode.id))
+					end
+					currentStepIndex = currentStepIndex + 1
+					retryCount = retryCount + 1
+					goto continue_retry
+				end
+
+				-- Clamp Z to prevent climbing too high
+				local maxAllowedZ = baseZ + stepH
+				if groundZ > maxAllowedZ then
+					if DEBUG_MODE then
+						print(string.format("[IsNavigable] Ground too high (%.1f > %.1f), clamping", groundZ, maxAllowedZ))
+					end
+					groundZ = maxAllowedZ
+				end
+
+				local groundPos = Vector3(hitPos.x, hitPos.y, groundZ)
+
+				if DEBUG_MODE then
+					print(string.format("[IsNavigable] Hit on node %d, adjusted to (%.1f, %.1f, %.1f)", hitNode.id, groundPos.x, groundPos.y, groundPos.z))
+				end
+
+				-- If using jump, check if we changed nodes
+				if useJump then
+					local nodeAtGround = getClosestNodeAtPos(groundPos, nodes)
+					if nodeAtGround and nodeAtGround.id == hitNode.id then
+						-- Same node - jump didn't get us past the obstacle
+						if DEBUG_MODE then
+							print(string.format("[IsNavigable] Jump failed: still on node %d, giving up", hitNode.id))
 						end
-
-						-- Update trace start to adjusted position
-						traceStart = {
-							pos = adjustedPos,
-							node = traceStart.node, -- Keep same node for trace continuity
-							normal = adjustedNormal,
-						}
-						traceSuccess = true
-						break
+						return false
+					else
+						-- Different node - jump succeeded
+						if DEBUG_MODE then
+							print(string.format("[IsNavigable] Jump success: moved to node %d from node %d", nodeAtGround and nodeAtGround.id or -1, hitNode.id))
+						end
 					end
 				end
 
-				-- Surface unwalkable or no ground found - try next step height or fail
-				if DEBUG_MODE then
-					print(
-						string.format(
-							"[IsNavigable] Hit at step=%d (jump=%s), surfaceAngle=%.1f° - retrying...",
-							stepH,
-							tostring(useJump),
-							getSurfaceAngle(hitNormal)
-						)
-					)
-				end
+				-- Update position and continue with same step height (retry)
+				currentTracePos = groundPos
+				currentTraceNormal = groundNormal
+				retryCount = retryCount + 1
+
+				::continue_retry::
 			end
 
 			if not traceSuccess then
