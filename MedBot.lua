@@ -5381,9 +5381,43 @@ local Phase2_Normalize = {}
 
 local Log = Common.Log.new("Phase2_Normalize")
 
---##########################################################################
---  LOCAL HELPERS
---##########################################################################
+local function getSortAxisForDirection(dirId)
+	if dirId == "north" or dirId == "south" then
+		return "x"
+	elseif dirId == "east" or dirId == "west" then
+		return "y"
+	else
+		return nil
+	end
+end
+
+local function sortConnectionsByNeighborPosition(node, dirId, dir, nodes)
+	if not dir.connections or #dir.connections < 2 then
+		return
+	end
+
+	local axis = getSortAxisForDirection(dirId)
+	if not axis then
+		return
+	end
+
+	table.sort(dir.connections, function(a, b)
+		local nodeIdA = ConnectionUtils.GetNodeId(a)
+		local nodeIdB = ConnectionUtils.GetNodeId(b)
+
+		local neighborA = nodes[nodeIdA]
+		local neighborB = nodes[nodeIdB]
+
+		if not neighborA or not neighborA.pos then
+			return false
+		end
+		if not neighborB or not neighborB.pos then
+			return true
+		end
+
+		return neighborA.pos[axis] < neighborB.pos[axis]
+	end)
+end
 
 local function precomputeNodeBounds(node)
 	if not node.nw or not node.ne or not node.sw or not node.se then
@@ -5423,6 +5457,7 @@ function Phase2_Normalize.Execute(nodes)
 						dir.connections[i] = ConnectionUtils.NormalizeEntry(connection)
 						connectionCount = connectionCount + 1
 					end
+					sortConnectionsByNeighborPosition(node, dirId, dir, nodes)
 				end
 			end
 		end
@@ -6165,65 +6200,6 @@ local function findNodeExit(startPos, dir, node)
 	return Vector3(exitX, exitY, startPos.z), tMin, exitDir
 end
 
--- Find neighbor area at exit point
-local function getNeighborAreaAtExit(exitDir, currentNode, nodes)
-	if not currentNode.c or not currentNode.c[exitDir] then
-		print(string.format("[IsNavigable] No connections in direction %d from node %d", exitDir, currentNode.id))
-		return nil
-	end
-
-	local dirData = currentNode.c[exitDir]
-	if not dirData.connections then
-		print(string.format("[IsNavigable] No connections array in direction %d from node %d", exitDir, currentNode.id))
-		return nil
-	end
-
-	print(
-		string.format(
-			"[IsNavigable] Checking %d connections in direction %d from node %d",
-			#dirData.connections,
-			exitDir,
-			currentNode.id
-		)
-	)
-
-	for i = 1, #dirData.connections do
-		local conn = dirData.connections[i]
-		local targetId = (type(conn) == "table") and (conn.node or conn.id) or conn
-		local candidate = nodes[targetId]
-
-		if not candidate then
-			print(string.format("[IsNavigable] Connection %d: %s does not exist", i, tostring(targetId)))
-		elseif candidate._minX and candidate._maxX and candidate._minY and candidate._maxY then
-			-- Direct area connection
-			print(string.format("[IsNavigable] Found direct neighbor area %d", candidate.id))
-			return candidate
-		elseif candidate.c then
-			-- Door node - find connected area
-			print(string.format("[IsNavigable] Found door %s, traversing...", targetId))
-			for _, doorDirData in pairs(candidate.c) do
-				if doorDirData.connections then
-					for _, doorConn in ipairs(doorDirData.connections) do
-						local areaId = (type(doorConn) == "table") and (doorConn.node or doorConn.id) or doorConn
-						if areaId ~= currentNode.id then
-							local areaNode = nodes[areaId]
-							if areaNode and areaNode._minX then
-								print(string.format("[IsNavigable] Door leads to area %d", areaId))
-								return areaNode
-							end
-						end
-					end
-				end
-			end
-		else
-			print(string.format("[IsNavigable] Connection %d: %s is not a traversable node", i, tostring(targetId)))
-		end
-	end
-
-	print(string.format("[IsNavigable] No traversable neighbors in direction %d from node %d", exitDir, currentNode.id))
-	return nil
-end
-
 -- Calculate ground Z position from node quad geometry (no engine call)
 local function getGroundZFromQuad(pos, node)
 	if not (node.nw and node.ne and node.sw and node.se) then
@@ -6274,80 +6250,371 @@ local function getGroundZFromQuad(pos, node)
 	return z, normal
 end
 
--- MAIN FUNCTION - Two phases: 1) validate path through nodes, 2) trace with surface pitch
+-- MAIN FUNCTION - Two phases: 1) verify path through nodes, 2) trace with surface pitch
 function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 	assert(startNode, "CanSkip: startNode required")
 	local nodes = G.Navigation and G.Navigation.nodes
 	assert(nodes, "CanSkip: G.Navigation.nodes is nil")
 
-	-- ============ PHASE 1: Validate path through nodes ============
+	-- ============ PHASE 1: Verify path through nodes ============
 	local currentPos = startPos
 	local currentNode = startNode
-	local waypoints = {}
+	local waypoints = {} -- Waypoints for Phase 2
+
+	-- Get starting ground Z
+	local startZ, startNormal = getGroundZFromQuad(startPos, startNode)
+	if startZ then
+		currentPos = Vector3(startPos.x, startPos.y, startZ)
+	end
 
 	-- Add start waypoint
 	table.insert(waypoints, {
 		pos = currentPos,
 		node = startNode,
-		normal = nil,
+		normal = startNormal,
 	})
 
-	-- Traverse node path (MAX_ITERATIONS prevents infinite loops)
+	-- Traverse to destination (no traces - just verify path exists)
 	for iteration = 1, MAX_ITERATIONS do
-		-- First check if goal is in current area
-		if
-			currentNode._minX <= goalPos.x
+		-- Check if goal reached
+		local goalInNode = goalPos.x >= currentNode._minX
 			and goalPos.x <= currentNode._maxX
-			and currentNode._minY <= goalPos.y
+			and goalPos.y >= currentNode._minY
 			and goalPos.y <= currentNode._maxY
-		then
-			break
+
+		if goalInNode then
+			-- Add goal as final waypoint
+			table.insert(waypoints, {
+				pos = goalPos,
+				node = currentNode,
+				normal = nil,
+			})
+
+			-- ============ PHASE 2: Trace through waypoints ============
+	
+
+			-- Detect angle changes and trace only when terrain angle changes significantly
+			local ANGLE_CHANGE_THRESHOLD = 15 -- degrees
+			local traceStart = waypoints[1]
+			local traceCount = 0
+
+			for i = 2, #waypoints do
+				local currentWp = waypoints[i]
+				local prevWp = waypoints[i - 1]
+
+				-- Calculate angle change between consecutive normals
+				local angleChange = 0
+				if prevWp.normal and currentWp.normal then
+					local dotProduct = prevWp.normal:Dot(currentWp.normal)
+					dotProduct = math.max(-1, math.min(1, dotProduct)) -- Clamp for acos
+					angleChange = math.deg(math.acos(dotProduct))
+				elseif not currentWp.normal or not prevWp.normal then
+					-- No normal = flat terrain assumed, trigger trace at end
+					angleChange = 0
+				end
+
+				-- Check if this is last waypoint or angle changed significantly
+				local isLastWaypoint = (i == #waypoints)
+				local shouldTrace = isLastWaypoint or angleChange > ANGLE_CHANGE_THRESHOLD
+
+				if shouldTrace then
+					-- Calculate horizontal direction from trace start to current
+					local toTarget = currentWp.pos - traceStart.pos
+					local horizDir = Vector3(toTarget.x, toTarget.y, 0)
+					horizDir = Common.Normalize(horizDir)
+
+					-- Adjust direction using trace start's surface normal
+					local traceDir = horizDir
+					if traceStart.normal then
+						traceDir = adjustDirectionToSurface(horizDir, traceStart.normal)
+					end
+
+					-- Calculate trace endpoint
+					local traceDist = (currentWp.pos - traceStart.pos):Length()
+					local traceEnd = traceStart.pos + traceDir * traceDist
+
+					-- Trace with hull
+					local trace = TraceHull(
+						traceStart.pos + STEP_HEIGHT_Vector,
+						traceEnd + STEP_HEIGHT_Vector,
+						PLAYER_HULL.Min,
+						PLAYER_HULL.Max,
+						MASK_SHOT_HULL
+					)
+
+					traceCount = traceCount + 1
+
+					if trace.fraction < 0.99 then
+						if DEBUG_MODE then
+							print(
+								string.format(
+									"[IsNavigable] FAIL: Entity blocking segment (trace %d, angle=%.1f°)",
+									traceCount,
+									angleChange
+								)
+							)
+						end
+						return false
+					end
+
+					-- Start next trace segment from current waypoint
+					traceStart = currentWp
+				end
+			end
+
+			if DEBUG_MODE then
+				print(
+					string.format(
+						"[IsNavigable] SUCCESS: Path clear with %d traces (from %d waypoints)",
+						traceCount,
+						#waypoints
+					)
+				)
+			end
+
+			return true
 		end
 
-		-- Get horizontal direction to goal
+		-- Find where we exit current node toward goal
 		local toGoal = goalPos - currentPos
+		-- Horizontal direction to destination (only X/Y matters for heading)
 		local horizDir = Vector3(toGoal.x, toGoal.y, 0)
 		horizDir = Common.Normalize(horizDir)
 
-		-- Find exit point from current node
-		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, horizDir, currentNode)
+		-- Get ground normal at current position
+		local groundZ, groundNormal = getGroundZFromQuad(currentPos, currentNode)
+
+		-- Adjust direction to follow surface - only Z changes based on slope
+		local dir = horizDir
+		if groundNormal then
+			dir = adjustDirectionToSurface(horizDir, groundNormal)
+		end
+
+		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, dir, currentNode)
+
 		if not exitPoint or not exitDir then
-			print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
+			if DEBUG_MODE then
+				print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
+			end
 			return false
 		end
 
-		-- Find neighbor (including through doors)
-		local neighborNode = getNeighborAreaAtExit(exitDir, currentNode, nodes)
+		if DEBUG_MODE then
+			local dirNames = { [1] = "N", [2] = "E", [3] = "S", [4] = "W" }
+			print(
+				string.format(
+					"[IsNavigable] Exit via %s at (%.1f, %.1f)",
+					dirNames[exitDir] or "?",
+					exitPoint.x,
+					exitPoint.y
+				)
+			)
+		end
+
+		-- No trace to exit - we trust navmesh is walkable
+
+		-- Find neighbor - optimized linear search from appropriate end
+		local neighborNode = nil
+		local OVERLAP_TOLERANCE = 5.0
+
+		if currentNode.c and currentNode.c[exitDir] then
+			local dirData = currentNode.c[exitDir]
+
+			if dirData.connections then
+				local connCount = #dirData.connections
+
+				-- Determine search direction: if exit near min boundary, search forward; if near max, search backward
+				local searchForward = true
+				if exitDir == 2 or exitDir == 4 then -- East/West (X axis)
+					local midX = (currentNode._minX + currentNode._maxX) * 0.5
+					searchForward = exitPoint.x < midX
+				else -- North/South (Y axis)
+					local midY = (currentNode._minY + currentNode._maxY) * 0.5
+					searchForward = exitPoint.y < midY
+				end
+
+				-- Search connections from appropriate end
+				local start, finish, step = 1, connCount, 1
+				if not searchForward then
+					start, finish, step = connCount, 1, -1
+				end
+
+				for i = start, finish, step do
+					local connection = dirData.connections[i]
+					local targetId = (type(connection) == "table") and (connection.node or connection.id) or connection
+					local candidate = nodes[targetId]
+
+					if candidate and candidate._minX and candidate._maxX and candidate._minY and candidate._maxY then
+						-- Area node - check bounds overlap (optionally using door bounds)
+						local checkNode = candidate
+
+						if respectDoors then
+							-- Find door between currentNode and candidate
+							for _, conn in ipairs(dirData.connections) do
+								local tid = (type(conn) == "table") and (conn.node or conn.id) or conn
+								local door = nodes[tid]
+								if door and not door._minX and door.c then
+									-- Door found, check if it connects to candidate
+									for _, ddir in pairs(door.c) do
+										if ddir.connections then
+											for _, dconn in ipairs(ddir.connections) do
+												local did = (type(dconn) == "table") and (dconn.node or dconn.id)
+													or dconn
+												if did == candidate.id then
+													checkNode = door
+													break
+												end
+											end
+										end
+										if checkNode == door then
+											break
+										end
+									end
+									if checkNode == door then
+										break
+									end
+								end
+							end
+						end
+
+						local inX = exitPoint.x >= (checkNode._minX - OVERLAP_TOLERANCE)
+							and exitPoint.x <= (checkNode._maxX + OVERLAP_TOLERANCE)
+						local inY = exitPoint.y >= (checkNode._minY - OVERLAP_TOLERANCE)
+							and exitPoint.y <= (checkNode._maxY + OVERLAP_TOLERANCE)
+
+						if DEBUG_MODE then
+							print(
+								string.format(
+									"[IsNavigable] Check area=%d via %s, inX=%s, inY=%s",
+									candidate.id,
+									(checkNode == candidate and "area" or "door"),
+									tostring(inX),
+									tostring(inY)
+								)
+							)
+						end
+
+						if inX and inY then
+							neighborNode = candidate
+							if DEBUG_MODE then
+								print(string.format("[IsNavigable] Found neighbor area %d", candidate.id))
+							end
+							break
+						end
+					elseif candidate then
+						-- Door node - traverse through to find area on other side
+						if DEBUG_MODE then
+							print(
+								string.format("[IsNavigable]   Conn %d: Door %s, traversing...", i, tostring(targetId))
+							)
+						end
+
+						if candidate.c then
+							for _, doorDirData in pairs(candidate.c) do
+								if doorDirData.connections then
+									for _, doorConn in ipairs(doorDirData.connections) do
+										local areaId = (type(doorConn) == "table") and (doorConn.node or doorConn.id)
+											or doorConn
+										local areaNode = nodes[areaId]
+
+										if areaId ~= currentNode.id and areaNode and areaNode._minX then
+											local inX = exitPoint.x >= (areaNode._minX - OVERLAP_TOLERANCE)
+												and exitPoint.x <= (areaNode._maxX + OVERLAP_TOLERANCE)
+											local inY = exitPoint.y >= (areaNode._minY - OVERLAP_TOLERANCE)
+												and exitPoint.y <= (areaNode._maxY + OVERLAP_TOLERANCE)
+
+											if DEBUG_MODE then
+												print(
+													string.format(
+														"[IsNavigable]     Door leads to area=%d, inX=%s, inY=%s",
+														areaId,
+														tostring(inX),
+														tostring(inY)
+													)
+												)
+											end
+
+											if inX and inY then
+												neighborNode = areaNode
+												if DEBUG_MODE then
+													print(
+														string.format(
+															"[IsNavigable] Found neighbor area %d via door",
+															areaNode.id
+														)
+													)
+												end
+												break
+											end
+										end
+									end
+									if neighborNode then
+										break
+									end
+								end
+								if neighborNode then
+									break
+								end
+							end
+						end
+					end
+				end
+			end
+		else
+			if DEBUG_MODE then
+				print(string.format("[IsNavigable] No connections in exit direction %d", exitDir))
+			end
+		end
+
 		if not neighborNode then
-			print(string.format("[IsNavigable] FAIL: No neighbor found at exit from node %d", currentNode.id))
+			if DEBUG_MODE then
+				print(
+					string.format(
+						"[IsNavigable] FAIL: No neighbor found at exit (%.1f, %.1f)",
+						exitPoint.x,
+						exitPoint.y
+					)
+				)
+			end
 			return false
 		end
 
-		-- Calculate entry position in neighbor node
-		local entryPos = Vector3(exitPoint.x, exitPoint.y, 0)
-		local groundZ = getGroundZFromQuad(entryPos, neighborNode)
-		if groundZ then
-			entryPos.z = groundZ
+		-- Entry point is exitPoint clamped to neighbor bounds
+		local entryX = math.max(neighborNode._minX + 0.5, math.min(neighborNode._maxX - 0.5, exitPoint.x))
+		local entryY = math.max(neighborNode._minY + 0.5, math.min(neighborNode._maxY - 0.5, exitPoint.y))
+
+		-- Ground snap using quad geometry (no engine call)
+		local groundZ, groundNormal = getGroundZFromQuad(Vector3(entryX, entryY, 0), neighborNode)
+
+		if not groundZ then
+			if DEBUG_MODE then
+				print(string.format("[IsNavigable] FAIL: No ground geometry at entry to node %d", neighborNode.id))
+			end
+			return false
 		end
 
-		-- Add waypoint
+		local entryPos = Vector3(entryX, entryY, groundZ)
+
+		-- Add waypoint for this node entry
 		table.insert(waypoints, {
 			pos = entryPos,
 			node = neighborNode,
-			normal = nil,
+			normal = groundNormal,
 		})
+
+		if DEBUG_MODE then
+			print(string.format("[IsNavigable] Crossed to node %d (Z=%.1f)", neighborNode.id, groundZ))
+		end
 
 		currentPos = entryPos
 		currentNode = neighborNode
 	end
 
-	-- Add goal as final waypoint
-	table.insert(waypoints, {
-		pos = goalPos,
-		node = currentNode,
-		normal = nil,
-	})
-	return true
+	-- Phase 1 failed to reach goal
+	if DEBUG_MODE then
+		print(string.format("[IsNavigable] FAIL: Max iterations (%d) exceeded", MAX_ITERATIONS))
+	end
+	return false
 end
 
 -- Debug
