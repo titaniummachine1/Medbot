@@ -156,15 +156,35 @@ local function getNeighborAreaAtExit(exitDir, currentNode, nodes)
 		local targetId = (type(conn) == "table") and (conn.node or conn.id) or conn
 		local candidate = nodes[targetId]
 
-		if candidate and candidate._minX and candidate._maxX and candidate._minY and candidate._maxY then
-			print(string.format("[IsNavigable] Found neighbor area %d", candidate.id))
+		if not candidate then
+			print(string.format("[IsNavigable] Connection %d: %s does not exist", i, tostring(targetId)))
+		elseif candidate._minX and candidate._maxX and candidate._minY and candidate._maxY then
+			-- Direct area connection
+			print(string.format("[IsNavigable] Found direct neighbor area %d", candidate.id))
 			return candidate
+		elseif candidate.c then
+			-- Door node - find connected area
+			print(string.format("[IsNavigable] Found door %s, traversing...", targetId))
+			for _, doorDirData in pairs(candidate.c) do
+				if doorDirData.connections then
+					for _, doorConn in ipairs(doorDirData.connections) do
+						local areaId = (type(doorConn) == "table") and (doorConn.node or doorConn.id) or doorConn
+						if areaId ~= currentNode.id then
+							local areaNode = nodes[areaId]
+							if areaNode and areaNode._minX then
+								print(string.format("[IsNavigable] Door leads to area %d", areaId))
+								return areaNode
+							end
+						end
+					end
+				end
+			end
 		else
-			print(string.format("[IsNavigable] Connection %d: %s is not a valid area node", i, tostring(targetId)))
+			print(string.format("[IsNavigable] Connection %d: %s is not a traversable node", i, tostring(targetId)))
 		end
 	end
 
-	print(string.format("[IsNavigable] No valid area neighbors in direction %d from node %d", exitDir, currentNode.id))
+	print(string.format("[IsNavigable] No traversable neighbors in direction %d from node %d", exitDir, currentNode.id))
 	return nil
 end
 
@@ -238,6 +258,16 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 
 	-- Traverse node path (MAX_ITERATIONS prevents infinite loops)
 	for iteration = 1, MAX_ITERATIONS do
+		-- First check if goal is in current area
+		if
+			currentNode._minX <= goalPos.x
+			and goalPos.x <= currentNode._maxX
+			and currentNode._minY <= goalPos.y
+			and goalPos.y <= currentNode._maxY
+		then
+			break
+		end
+
 		-- Get horizontal direction to goal
 		local toGoal = goalPos - currentPos
 		local horizDir = Vector3(toGoal.x, toGoal.y, 0)
@@ -246,61 +276,30 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors)
 		-- Find exit point from current node
 		local exitPoint, exitDist, exitDir = findNodeExit(currentPos, horizDir, currentNode)
 		if not exitPoint or not exitDir then
-			print(
-				string.format(
-					"[IsNavigable] FAIL: No exit found from node %d at (%.1f, %.1f, %.1f)",
-					currentNode.id,
-					currentPos.x,
-					currentPos.y,
-					currentPos.z
-				)
-			)
+			print(string.format("[IsNavigable] FAIL: No exit found from node %d", currentNode.id))
 			return false
 		end
 
-		print(
-			string.format(
-				"[IsNavigable] Exit via %s at (%.1f, %.1f) from node %d",
-				({ [1] = "N", [2] = "E", [3] = "S", [4] = "W" })[exitDir],
-				exitPoint.x,
-				exitPoint.y,
-				currentNode.id
-			)
-		)
-
-		-- Find neighbor area at exit point
+		-- Find neighbor (including through doors)
 		local neighborNode = getNeighborAreaAtExit(exitDir, currentNode, nodes)
 		if not neighborNode then
+			print(string.format("[IsNavigable] FAIL: No neighbor found at exit from node %d", currentNode.id))
 			return false
 		end
 
 		-- Calculate entry position in neighbor node
-		local entryX = math.max(neighborNode._minX, math.min(neighborNode._maxX, exitPoint.x))
-		local entryY = math.max(neighborNode._minY, math.min(neighborNode._maxY, exitPoint.y))
-		local groundZ, groundNormal = getGroundZFromQuad(Vector3(entryX, entryY, 0), neighborNode)
-
-		if not groundZ then
-			return false
+		local entryPos = Vector3(exitPoint.x, exitPoint.y, 0)
+		local groundZ = getGroundZFromQuad(entryPos, neighborNode)
+		if groundZ then
+			entryPos.z = groundZ
 		end
-
-		local entryPos = Vector3(entryX, entryY, groundZ)
 
 		-- Add waypoint
 		table.insert(waypoints, {
 			pos = entryPos,
 			node = neighborNode,
-			normal = groundNormal,
+			normal = nil,
 		})
-
-		-- Check if goal reached
-		if
-			neighborNode._minX <= goalPos.x
-			and goalPos.x <= neighborNode._maxX
-			and neighborNode._minY <= goalPos.y
-			and goalPos.y <= neighborNode._maxY
-		then
-			break
-		end
 
 		currentPos = entryPos
 		currentNode = neighborNode
