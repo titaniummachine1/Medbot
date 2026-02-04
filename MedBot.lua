@@ -6293,7 +6293,7 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 			if DEBUG_MODE then
 				print(
 					string.format(
-						"[IsNavigable]   Check area=%d via %s, bounds=[%d,%d,%d,%d], exit=(%.1f,%.1f), inBounds=%s",
+						"[IsNavigable]   Check area=%d via %s, bounds=[%.1f,%.1f,%.1f,%.1f], exit=(%.1f,%.1f), inBounds=%s",
 						candidate.id,
 						(checkNode == candidate and "area" or "door"),
 						checkNode._minX,
@@ -6339,7 +6339,7 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 							if DEBUG_MODE then
 								print(
 									string.format(
-										"[IsNavigable]       Check area %s inBounds=%s, bounds=[%d,%d,%d,%d]",
+										"[IsNavigable]       Check area %s inBounds=%s, bounds=[%.1f,%.1f,%.1f,%.1f]",
 										tostring(areaId),
 										tostring(inBounds),
 										areaNode._minX,
