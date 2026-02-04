@@ -6064,7 +6064,7 @@ local MAX_SURFACE_ANGLE = 55
 local MAX_ITERATIONS = 37
 
 -- Debug
-local DEBUG_MODE = false -- Set to true for debugging (enables traces)
+local DEBUG_MODE = true -- Set to true for debugging (enables traces)
 local hullTraces = {}
 local currentTickLogged = -1
 
@@ -6194,7 +6194,7 @@ local function getGroundZFromQuad(pos, node)
 	-- Barycentric interpolation for Z
 	local denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y)
 	if math.abs(denom) < 0.0001 then
-		return v0.z, Vector3(0, 0, 1) -- Degenerate triangle, use first vertex
+		return v0.z, UP_VECTOR -- Degenerate triangle, use first vertex
 	end
 
 	local w0 = ((v1.y - v2.y) * (pos.x - v2.x) + (v2.x - v1.x) * (pos.y - v2.y)) / denom
@@ -6209,7 +6209,7 @@ local function getGroundZFromQuad(pos, node)
 	local normal = edge1:Cross(edge2)
 	normal = Common.Normalize(normal)
 	if not normal then
-		normal = Vector3(0, 0, 1)
+		normal = UP_VECTOR
 	end
 
 	return z, normal
@@ -6289,12 +6289,33 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 				end
 			end
 
-			if isPointInNodeBounds(exitPoint, checkNode, OVERLAP_TOLERANCE) then
+			local inBounds = isPointInNodeBounds(exitPoint, checkNode, OVERLAP_TOLERANCE)
+			if DEBUG_MODE then
+				print(
+					string.format(
+						"[IsNavigable]   Check area=%d via %s, bounds=[%d,%d,%d,%d], exit=(%.1f,%.1f), inBounds=%s",
+						candidate.id,
+						(checkNode == candidate and "area" or "door"),
+						checkNode._minX,
+						checkNode._maxX,
+						checkNode._minY,
+						checkNode._maxY,
+						exitPoint.x,
+						exitPoint.y,
+						tostring(inBounds)
+					)
+				)
+			end
+
+			if inBounds then
 				return candidate
 			end
 
 		-- Door node - traverse through to find area on other side
 		elseif candidate.c then
+			if DEBUG_MODE then
+				print(string.format("[IsNavigable]   Conn %d: Door %s, traversing...", i, tostring(targetId)))
+			end
 			for _, doorDirData in pairs(candidate.c) do
 				if doorDirData.connections then
 					for _, doorConn in ipairs(doorDirData.connections) do
