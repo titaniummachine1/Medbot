@@ -513,7 +513,7 @@ local function traceWaypoints(waypoints, allowJump)
 				end
 
 				traceCount = traceCount + 1
-
+				print(trace.plane)
 				if trace.fraction >= 0.99 then
 					-- Clear path - reached destination
 					traceSuccess = true
