@@ -40,30 +40,48 @@ function NodeSkipper.Tick(playerPos)
 	-- SMART SKIP: Check if player already passed the current target (path[1])
 	-- We compare distance to next target (path[2])
 	if currentNode and currentNode.pos and nextNode and nextNode.pos then
+		-- Get current area for walkability check
+		local currentArea = Node.GetAreaAtPosition(playerPos)
+		if not currentArea then
+			return false
+		end
+
 		local distPlayerToNext = Common.Distance3D(playerPos, nextNode.pos)
 		local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 
 		if distPlayerToNext < distCurrentToNext then
 			-- Player is closer to path[2] than path[1] is to path[2] - we passed path[1]
-			local missedNode = table.remove(path, 1)
+			-- BUT: Only skip if we can actually walk to nextNode from current position
+			local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+			local success, canSkip = pcall(isNavigable.CanSkip, playerPos, nextNode.pos, currentArea, false, allowJump)
 
-			-- Add to history
-			G.Navigation.pathHistory = G.Navigation.pathHistory or {}
-			table.insert(G.Navigation.pathHistory, 1, missedNode)
-			while #G.Navigation.pathHistory > 32 do
-				table.remove(G.Navigation.pathHistory)
+			if success and canSkip then
+				local missedNode = table.remove(path, 1)
+
+				-- Add to history
+				G.Navigation.pathHistory = G.Navigation.pathHistory or {}
+				table.insert(G.Navigation.pathHistory, 1, missedNode)
+				while #G.Navigation.pathHistory > 32 do
+					table.remove(G.Navigation.pathHistory)
+				end
+
+				-- Track when we last skipped
+				G.Navigation.lastSkipTick = globals.TickCount()
+
+				Log:Info(
+					"MISSED waypoint %s (player closer to next), skipping to %s",
+					tostring(missedNode.id),
+					tostring(nextNode.id)
+				)
+				G.Navigation.currentNodeIndex = 1
+				return true
+			else
+				Log:Debug(
+					"SMART SKIP blocked: Cannot walk to next node %s from current position",
+					tostring(nextNode.id)
+				)
+				return false
 			end
-
-			-- Track when we last skipped
-			G.Navigation.lastSkipTick = globals.TickCount()
-
-			Log:Info(
-				"MISSED waypoint %s (player closer to next), skipping to %s",
-				tostring(missedNode.id),
-				tostring(nextNode.id)
-			)
-			G.Navigation.currentNodeIndex = 1
-			return true
 		end
 	end
 

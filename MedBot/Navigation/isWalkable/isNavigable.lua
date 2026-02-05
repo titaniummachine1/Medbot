@@ -35,18 +35,30 @@ local DEBUG_MODE = true -- Set to true for debugging (enables traces)
 local hullTraces = {}
 local currentTickLogged = -1
 
+local engineTraceHull = engine.TraceHull
+
 local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter)
 	local currentTick = globals.TickCount()
 	if currentTick > currentTickLogged then
 		hullTraces = {}
 		currentTickLogged = currentTick
 	end
-	local result = engine.TraceHull(startPos, endPos, minHull, maxHull, mask)
+	local result = engineTraceHull(startPos, endPos, minHull, maxHull, mask)
 	table.insert(hullTraces, { startPos = startPos, endPos = result.endpos })
 	return result
 end
 
-local TraceHull = DEBUG_MODE and traceHullWrapper or engine.TraceHull
+
+local TraceHull = DEBUG_MODE and traceHullWrapper or engineTraceHull
+
+-- Helper: Get surface angle from normal-- curently unused
+local function getSurfaceAngle(surfaceNormal)
+	if not surfaceNormal then
+		return 0
+	end
+	return math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
+end
+
 
 -- Adjust the direction vector to align with the surface normal
 local function adjustDirectionToSurface(direction, surfaceNormal)
@@ -194,38 +206,41 @@ end
 -- Tolerance only on opposite axis to shared edge
 -- Z check: down up to 450, up to jump/step height based on allowJump
 local function isValidNeighborConnection(currentNode, candidateNode, exitPoint, exitDir, allowJump)
-	local TOLERANCE = 10.0
-	local EDGE_TOLERANCE = 16.0  -- Increased for edge alignment
+	local EDGE_TOLERANCE = 16.0 -- Increased for edge alignment
 	local maxUp = allowJump and JUMP_HEIGHT or STEP_HEIGHT
-	
+
 	-- Get ground Z at exit point for both nodes
 	local currentZ = getGroundZFromQuad(exitPoint, currentNode)
 	local candidateZ = getGroundZFromQuad(exitPoint, candidateNode)
-	
+
 	if not currentZ or not candidateZ then
 		if DEBUG_MODE then
-			print(string.format("[IsNavigable]   FAIL: No ground Z - currentZ=%s, candidateZ=%s", tostring(currentZ), tostring(candidateZ)))
+			print(string.format("[IsNavigable]   FAIL: No ground Z - currentZ=%s, candidateZ=%s", tostring(currentZ),
+				tostring(candidateZ)))
 		end
 		return false
 	end
-	
+
 	-- Check Z height difference
 	local zDiff = candidateZ - currentZ
 	if zDiff > maxUp or zDiff < -MAX_FALL_DISTANCE then
 		if DEBUG_MODE then
-			print(string.format("[IsNavigable]   FAIL: Z diff %.1f outside range [%.1f, %.1f]", zDiff, -MAX_FALL_DISTANCE, maxUp))
+			print(string.format("[IsNavigable]   FAIL: Z diff %.1f outside range [%.1f, %.1f]", zDiff, -
+			MAX_FALL_DISTANCE, maxUp))
 		end
 		return false
 	end
-	
+
 	-- Check bounds based on exit direction (tolerance only on opposite axis)
 	if exitDir == 2 or exitDir == 4 then -- East/West - shared X edge
 		-- X must be at the edge (with tolerance), Y can have tolerance
 		local atXEdge = (exitPoint.x >= candidateNode._minX - EDGE_TOLERANCE and exitPoint.x <= candidateNode._maxX + EDGE_TOLERANCE)
 		local inY = exitPoint.y >= (candidateNode._minY - TOLERANCE) and exitPoint.y <= (candidateNode._maxY + TOLERANCE)
 		if DEBUG_MODE then
-			print(string.format("[IsNavigable]   E/W check: exit=(%.1f,%.1f), node bounds=[%.1f,%.1f,%.1f,%.1f], atXEdge=%s, inY=%s", 
-				exitPoint.x, exitPoint.y, candidateNode._minX, candidateNode._maxX, candidateNode._minY, candidateNode._maxY,
+			print(string.format(
+				"[IsNavigable]   E/W check: exit=(%.1f,%.1f), node bounds=[%.1f,%.1f,%.1f,%.1f], atXEdge=%s, inY=%s",
+				exitPoint.x, exitPoint.y, candidateNode._minX, candidateNode._maxX, candidateNode._minY,
+				candidateNode._maxY,
 				tostring(atXEdge), tostring(inY)))
 		end
 		return atXEdge and inY
@@ -234,8 +249,10 @@ local function isValidNeighborConnection(currentNode, candidateNode, exitPoint, 
 		local atYEdge = (exitPoint.y >= candidateNode._minY - EDGE_TOLERANCE and exitPoint.y <= candidateNode._maxY + EDGE_TOLERANCE)
 		local inX = exitPoint.x >= (candidateNode._minX - TOLERANCE) and exitPoint.x <= (candidateNode._maxX + TOLERANCE)
 		if DEBUG_MODE then
-			print(string.format("[IsNavigable]   N/S check: exit=(%.1f,%.1f), node bounds=[%.1f,%.1f,%.1f,%.1f], atYEdge=%s, inX=%s", 
-				exitPoint.x, exitPoint.y, candidateNode._minX, candidateNode._maxX, candidateNode._minY, candidateNode._maxY,
+			print(string.format(
+				"[IsNavigable]   N/S check: exit=(%.1f,%.1f), node bounds=[%.1f,%.1f,%.1f,%.1f], atYEdge=%s, inX=%s",
+				exitPoint.x, exitPoint.y, candidateNode._minX, candidateNode._maxX, candidateNode._minY,
+				candidateNode._maxY,
 				tostring(atYEdge), tostring(inX)))
 		end
 		return atYEdge and inX
@@ -330,7 +347,7 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 				return candidate
 			end
 
-		-- Door node - traverse through to find area on other side
+			-- Door node - traverse through to find area on other side
 		elseif candidate.c then
 			if DEBUG_MODE then
 				print(string.format("[IsNavigable]   Conn %d: Door %s, traversing...", i, tostring(targetId)))
@@ -354,7 +371,8 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 						end
 
 						if areaId ~= currentNode.id and areaNode and areaNode._minX then
-							local inBounds = isValidNeighborConnection(currentNode, areaNode, exitPoint, exitDir, allowJump)
+							local inBounds = isValidNeighborConnection(currentNode, areaNode, exitPoint, exitDir,
+								allowJump)
 							if DEBUG_MODE then
 								print(
 									string.format(
@@ -381,14 +399,6 @@ local function findNeighborAtExit(currentNode, exitPoint, exitDir, nodes, respec
 	end
 
 	return nil
-end
-
--- Helper: Get surface angle from normal
-local function getSurfaceAngle(surfaceNormal)
-	if not surfaceNormal then
-		return 0
-	end
-	return math.deg(math.acos(surfaceNormal:Dot(UP_VECTOR)))
 end
 
 -- Helper: Trace through waypoints (Phase 2)
@@ -426,7 +436,8 @@ local function traceWaypoints(waypoints, allowJump)
 			if traceStart.normal then
 				traceDir = adjustDirectionToSurface(horizDir, traceStart.normal)
 				if DEBUG_MODE then
-					print(string.format("[IsNavigable] Trace using start normal (%.2f, %.2f, %.2f) -> dir (%.2f, %.2f, %.2f)",
+					print(string.format(
+						"[IsNavigable] Trace using start normal (%.2f, %.2f, %.2f) -> dir (%.2f, %.2f, %.2f)",
 						traceStart.normal.x, traceStart.normal.y, traceStart.normal.z,
 						traceDir.x, traceDir.y, traceDir.z))
 				end
@@ -458,7 +469,7 @@ local function traceWaypoints(waypoints, allowJump)
 			local maxRetries = 3
 			local retryCount = 0
 			local hitNode = nil
-			local lastTracePos = nil  -- Track last position to detect no progress
+			local lastTracePos = nil -- Track last position to detect no progress
 
 			while currentStepIndex <= #stepHeights and retryCount < maxRetries do
 				local stepH = stepHeights[currentStepIndex]
@@ -512,7 +523,8 @@ local function traceWaypoints(waypoints, allowJump)
 				if not hitNode then
 					-- No valid node at hit position - try next step height
 					if DEBUG_MODE then
-						print(string.format("[IsNavigable] Hit at (%.1f, %.1f, %.1f) not on navmesh, trying next...", hitPos.x, hitPos.y, hitPos.z))
+						print(string.format("[IsNavigable] Hit at (%.1f, %.1f, %.1f) not on navmesh, trying next...",
+							hitPos.x, hitPos.y, hitPos.z))
 					end
 					currentStepIndex = currentStepIndex + 1
 					retryCount = retryCount + 1
@@ -544,7 +556,8 @@ local function traceWaypoints(waypoints, allowJump)
 				local groundPos = Vector3(hitPos.x, hitPos.y, groundZ)
 
 				if DEBUG_MODE then
-					print(string.format("[IsNavigable] Hit on node %d, adjusted to (%.1f, %.1f, %.1f)", hitNode.id, groundPos.x, groundPos.y, groundPos.z))
+					print(string.format("[IsNavigable] Hit on node %d, adjusted to (%.1f, %.1f, %.1f)", hitNode.id,
+						groundPos.x, groundPos.y, groundPos.z))
 				end
 
 				-- Check if we're making progress (XY must change)
@@ -554,7 +567,8 @@ local function traceWaypoints(waypoints, allowJump)
 				if horizDist < 0.5 then
 					-- No progress - try next step height
 					if DEBUG_MODE then
-						print(string.format("[IsNavigable] No progress made (horiz=%.2f), trying next step height...", horizDist))
+						print(string.format("[IsNavigable] No progress made (horiz=%.2f), trying next step height...",
+							horizDist))
 					end
 					currentStepIndex = currentStepIndex + 1
 					retryCount = retryCount + 1
@@ -573,7 +587,8 @@ local function traceWaypoints(waypoints, allowJump)
 					else
 						-- Different node - jump succeeded
 						if DEBUG_MODE then
-							print(string.format("[IsNavigable] Jump success: moved to node %d from node %d", nodeAtGround and nodeAtGround.id or -1, hitNode.id))
+							print(string.format("[IsNavigable] Jump success: moved to node %d from node %d",
+								nodeAtGround and nodeAtGround.id or -1, hitNode.id))
 						end
 					end
 				end
