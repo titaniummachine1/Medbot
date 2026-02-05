@@ -504,16 +504,8 @@ local function traceWaypoints(waypoints, allowJump)
 					MASK_SHOT_HULL
 				)
 
-				if DEBUG_MODE then
-					local lastTrace = hullTraces[#hullTraces]
-					if lastTrace then
-						lastTrace.startPos = traceStart.pos
-						lastTrace.endPos = currentWp.pos
-					end
-				end
-
 				traceCount = traceCount + 1
-				print(trace.plane)
+
 				if trace.fraction >= 0.99 then
 					-- Clear path - reached destination
 					traceSuccess = true
