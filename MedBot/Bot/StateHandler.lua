@@ -62,7 +62,9 @@ function StateHandler.handleIdleState()
 		if allowDirectWalk then
 			local currentArea = Navigation.GetAreaAtPosition(G.pLocal.Origin)
 			if currentArea then
-				local success, canWalk = pcall(isNavigable.CanSkip, G.pLocal.Origin, goalPos, currentArea, false)
+				local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+				local success, canWalk =
+					pcall(isNavigable.CanSkip, G.pLocal.Origin, goalPos, currentArea, false, allowJump)
 				if success and canWalk then
 					Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
 					G.Navigation.path = { { pos = goalPos, id = goalNode.id } }

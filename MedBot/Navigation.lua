@@ -228,7 +228,8 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 		return false
 	end
 
-	local success, canWalk = pcall(isNavigable.CanSkip, currentPos, nextNode.pos, currentArea, false)
+	local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+	local success, canWalk = pcall(isNavigable.CanSkip, currentPos, nextNode.pos, currentArea, false, allowJump)
 
 	if success and canWalk then
 		Log:Debug("Next node %d is walkable from current position", nextNode.id)

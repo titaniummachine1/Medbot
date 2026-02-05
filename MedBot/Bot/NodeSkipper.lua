@@ -89,7 +89,8 @@ function NodeSkipper.Tick(playerPos)
 		return false
 	end
 
-	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false)
+	local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false, allowJump)
 	if not (success and canSkip) then
 		return false
 	end

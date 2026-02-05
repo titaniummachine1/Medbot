@@ -5959,7 +5959,9 @@ local function OnCreateMove(Cmd)
 
 		if startNode then
 			local startTime, startMemory = BenchmarkStart()
-			TestState.isNavigable = Navigable.CanSkip(TestState.currentPos, TestState.startPos, startNode)
+			local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+			TestState.isNavigable =
+			Navigable.CanSkip(TestState.currentPos, TestState.startPos, startNode, true, allowJump)
 			BenchmarkStop(startTime, startMemory)
 		else
 			TestState.isNavigable = false
@@ -6078,6 +6080,7 @@ local UP_VECTOR = Vector3(0, 0, 1)
 local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval()
 local MAX_SURFACE_ANGLE = 55
 local MAX_ITERATIONS = 37
+local TOLERANCE = 10.0
 
 -- Debug
 local DEBUG_MODE = true -- Set to true for debugging (enables traces)
@@ -6244,6 +6247,7 @@ end
 -- Z check: down up to 450, up to jump/step height based on allowJump
 local function isValidNeighborConnection(currentNode, candidateNode, exitPoint, exitDir, allowJump)
 	local TOLERANCE = 10.0
+	local EDGE_TOLERANCE = 16.0  -- Increased for edge alignment
 	local maxUp = allowJump and JUMP_HEIGHT or STEP_HEIGHT
 	
 	-- Get ground Z at exit point for both nodes
@@ -6251,25 +6255,41 @@ local function isValidNeighborConnection(currentNode, candidateNode, exitPoint, 
 	local candidateZ = getGroundZFromQuad(exitPoint, candidateNode)
 	
 	if not currentZ or not candidateZ then
+		if DEBUG_MODE then
+			print(string.format("[IsNavigable]   FAIL: No ground Z - currentZ=%s, candidateZ=%s", tostring(currentZ), tostring(candidateZ)))
+		end
 		return false
 	end
 	
 	-- Check Z height difference
 	local zDiff = candidateZ - currentZ
 	if zDiff > maxUp or zDiff < -MAX_FALL_DISTANCE then
+		if DEBUG_MODE then
+			print(string.format("[IsNavigable]   FAIL: Z diff %.1f outside range [%.1f, %.1f]", zDiff, -MAX_FALL_DISTANCE, maxUp))
+		end
 		return false
 	end
 	
 	-- Check bounds based on exit direction (tolerance only on opposite axis)
 	if exitDir == 2 or exitDir == 4 then -- East/West - shared X edge
-		-- X must be at the edge (no tolerance), Y can have tolerance
-		local atXEdge = (exitPoint.x >= candidateNode._minX - 0.1 and exitPoint.x <= candidateNode._maxX + 0.1)
+		-- X must be at the edge (with tolerance), Y can have tolerance
+		local atXEdge = (exitPoint.x >= candidateNode._minX - EDGE_TOLERANCE and exitPoint.x <= candidateNode._maxX + EDGE_TOLERANCE)
 		local inY = exitPoint.y >= (candidateNode._minY - TOLERANCE) and exitPoint.y <= (candidateNode._maxY + TOLERANCE)
+		if DEBUG_MODE then
+			print(string.format("[IsNavigable]   E/W check: exit=(%.1f,%.1f), node bounds=[%.1f,%.1f,%.1f,%.1f], atXEdge=%s, inY=%s", 
+				exitPoint.x, exitPoint.y, candidateNode._minX, candidateNode._maxX, candidateNode._minY, candidateNode._maxY,
+				tostring(atXEdge), tostring(inY)))
+		end
 		return atXEdge and inY
 	else -- North/South - shared Y edge
-		-- Y must be at the edge (no tolerance), X can have tolerance
-		local atYEdge = (exitPoint.y >= candidateNode._minY - 0.1 and exitPoint.y <= candidateNode._maxY + 0.1)
+		-- Y must be at the edge (with tolerance), X can have tolerance
+		local atYEdge = (exitPoint.y >= candidateNode._minY - EDGE_TOLERANCE and exitPoint.y <= candidateNode._maxY + EDGE_TOLERANCE)
 		local inX = exitPoint.x >= (candidateNode._minX - TOLERANCE) and exitPoint.x <= (candidateNode._maxX + TOLERANCE)
+		if DEBUG_MODE then
+			print(string.format("[IsNavigable]   N/S check: exit=(%.1f,%.1f), node bounds=[%.1f,%.1f,%.1f,%.1f], atYEdge=%s, inX=%s", 
+				exitPoint.x, exitPoint.y, candidateNode._minX, candidateNode._maxX, candidateNode._minY, candidateNode._maxY,
+				tostring(atYEdge), tostring(inX)))
+		end
 		return atYEdge and inX
 	end
 end
@@ -6444,7 +6464,8 @@ local function traceWaypoints(waypoints, allowJump)
 
 		-- Check if this is last waypoint or angle changed significantly
 		local isLastWaypoint = (i == #waypoints)
-		local shouldTrace = isLastWaypoint or angleChange > ANGLE_CHANGE_THRESHOLD
+		local zDiff = math.abs(currentWp.pos.z - prevWp.pos.z)
+		local shouldTrace = isLastWaypoint or angleChange > ANGLE_CHANGE_THRESHOLD or zDiff > 8
 
 		if shouldTrace then
 			-- Calculate horizontal direction from trace start to current
@@ -6460,6 +6481,10 @@ local function traceWaypoints(waypoints, allowJump)
 			-- Calculate trace endpoint
 			local traceDist = (currentWp.pos - traceStart.pos):Length()
 			local traceEnd = traceStart.pos + traceDir * traceDist
+
+			-- Check if going significantly downward - if so, don't add upward step offset to end
+			local zDiff = currentWp.pos.z - traceStart.pos.z
+			local isGoingDown = zDiff < -8
 
 			local stepHeightVec = Vector3(0, 0, STEP_HEIGHT)
 			local jumpHeightVec = Vector3(0, 0, JUMP_HEIGHT)
@@ -6500,9 +6525,12 @@ local function traceWaypoints(waypoints, allowJump)
 				local currentTraceEnd = currentTracePos + traceDir * remainingDist
 
 				-- Forward trace with current step height
+				-- When going down, don't add step offset to end (follow slope naturally)
+				local traceStartPos = currentTracePos + stepVec
+				local traceEndPos = isGoingDown and currentTraceEnd or (currentTraceEnd + stepVec)
 				local trace = TraceHull(
-					currentTracePos + stepVec,
-					currentTraceEnd + stepVec,
+					traceStartPos,
+					traceEndPos,
 					PLAYER_HULL.Min,
 					PLAYER_HULL.Max,
 					MASK_SHOT_HULL
@@ -6731,6 +6759,22 @@ function Navigable.CanSkip(startPos, goalPos, startNode, respectDoors, allowJump
 		end
 
 		local entryPos = Vector3(entryX, entryY, entryZ)
+
+		-- Add intermediate waypoint if Z changes significantly (for slopes/hills)
+		local zDiff = math.abs(entryZ - currentPos.z)
+		if zDiff > 8 then
+			-- Create intermediate waypoint at exit point with interpolated Z
+			local exitZ = getGroundZFromQuad(exitPoint, currentNode)
+			if exitZ then
+				local exitPos = Vector3(exitPoint.x, exitPoint.y, exitZ)
+				local _, exitNormal = getGroundZFromQuad(exitPoint, currentNode)
+				table.insert(waypoints, { pos = exitPos, node = currentNode, normal = exitNormal })
+				if DEBUG_MODE then
+					print(string.format("[IsNavigable] Added slope waypoint at exit (Z=%.1f)", exitZ))
+				end
+			end
+		end
+
 		table.insert(waypoints, { pos = entryPos, node = neighborNode, normal = entryNormal })
 
 		if DEBUG_MODE then
@@ -8595,7 +8639,8 @@ function NodeSkipper.Tick(playerPos)
 		return false
 	end
 
-	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false)
+	local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false, allowJump)
 	if not (success and canSkip) then
 		return false
 	end
@@ -9190,7 +9235,8 @@ function Navigation.CheckNextNodeWalkable(currentPos, currentNode, nextNode)
 		return false
 	end
 
-	local success, canWalk = pcall(isNavigable.CanSkip, currentPos, nextNode.pos, currentArea, false)
+	local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+	local success, canWalk = pcall(isNavigable.CanSkip, currentPos, nextNode.pos, currentArea, false, allowJump)
 
 	if success and canWalk then
 		Log:Debug("Next node %d is walkable from current position", nextNode.id)
@@ -10158,7 +10204,9 @@ function StateHandler.handleIdleState()
 		if allowDirectWalk then
 			local currentArea = Navigation.GetAreaAtPosition(G.pLocal.Origin)
 			if currentArea then
-				local success, canWalk = pcall(isNavigable.CanSkip, G.pLocal.Origin, goalPos, currentArea, false)
+				local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+				local success, canWalk =
+					pcall(isNavigable.CanSkip, G.pLocal.Origin, goalPos, currentArea, false, allowJump)
 				if success and canWalk then
 					Log:Info("Direct-walk (short hop), moving immediately (dist: %.1f)", distance)
 					G.Navigation.path = { { pos = goalPos, id = goalNode.id } }

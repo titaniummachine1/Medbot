@@ -193,7 +193,9 @@ local function OnCreateMove(Cmd)
 
 		if startNode then
 			local startTime, startMemory = BenchmarkStart()
-			TestState.isNavigable = Navigable.CanSkip(TestState.currentPos, TestState.startPos, startNode)
+			local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
+			TestState.isNavigable =
+			Navigable.CanSkip(TestState.currentPos, TestState.startPos, startNode, true, allowJump)
 			BenchmarkStop(startTime, startMemory)
 		else
 			TestState.isNavigable = false
