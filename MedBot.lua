@@ -6603,13 +6603,19 @@ local function traceWaypoints(waypoints, allowJump)
 					goto continue_retry
 				end
 
-				-- Check if surface angle is too steep for this step height
-				if groundNormal then
-					local surfaceAngle = math.deg(math.acos(groundNormal:Dot(UP_VECTOR)))
+				-- For step height, immediately escalate to jump if the surface is a wall
+				if not useJump and groundNormal then
+					local dotUp = groundNormal:Dot(UP_VECTOR)
+					local surfaceAngle = math.deg(math.acos(dotUp))
 					if surfaceAngle > MAX_SURFACE_ANGLE then
 						if DEBUG_MODE then
-							print(string.format("[IsNavigable] Surface too steep (%.1f° > %.1f°), trying next step height...",
-								surfaceAngle, MAX_SURFACE_ANGLE))
+							print(
+								string.format(
+									"[IsNavigable] Surface too steep (%.1f° > %.1f°), switching to jump height",
+									surfaceAngle,
+									MAX_SURFACE_ANGLE
+								)
+							)
 						end
 						currentStepIndex = currentStepIndex + 1
 						retryCount = retryCount + 1
