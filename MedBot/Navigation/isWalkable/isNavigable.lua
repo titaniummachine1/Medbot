@@ -558,6 +558,8 @@ local function traceWaypoints(waypoints, allowJump)
 					goto continue_retry
 				end
 
+				local groundPos = Vector3(hitPos.x, hitPos.y, groundZ)
+
 				-- For step height, immediately escalate to jump if the surface is a wall
 				if not useJump and groundNormal then
 					local dotUp = groundNormal:Dot(UP_VECTOR)
@@ -565,13 +567,15 @@ local function traceWaypoints(waypoints, allowJump)
 					if surfaceAngle > MAX_SURFACE_ANGLE then
 						if DEBUG_MODE then
 							print(
-							string.format(
+								string.format(
 									"[IsNavigable] Surface too steep (%.1f° > %.1f°), switching to jump height",
 									surfaceAngle,
 									MAX_SURFACE_ANGLE
 								)
 							)
 						end
+						currentTracePos = groundPos
+						currentTraceNormal = groundNormal
 						currentStepIndex = currentStepIndex + 1
 						retryCount = retryCount + 1
 						goto continue_retry
@@ -585,9 +589,8 @@ local function traceWaypoints(waypoints, allowJump)
 						print(string.format("[IsNavigable] Ground too high (%.1f > %.1f), clamping", groundZ, maxAllowedZ))
 					end
 					groundZ = maxAllowedZ
+					groundPos = Vector3(hitPos.x, hitPos.y, groundZ)
 				end
-
-				local groundPos = Vector3(hitPos.x, hitPos.y, groundZ)
 
 				if DEBUG_MODE then
 					print(string.format("[IsNavigable] Hit on node %d, adjusted to (%.1f, %.1f, %.1f)", hitNode.id,
@@ -604,6 +607,8 @@ local function traceWaypoints(waypoints, allowJump)
 						print(string.format("[IsNavigable] No progress made (horiz=%.2f), trying next step height...",
 							horizDist))
 					end
+					currentTracePos = groundPos
+					currentTraceNormal = groundNormal
 					currentStepIndex = currentStepIndex + 1
 					retryCount = retryCount + 1
 					goto continue_retry
