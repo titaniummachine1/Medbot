@@ -17,6 +17,10 @@ local NodeSkipper = {}
 
 function NodeSkipper.Reset() end
 
+local function isDoorNode(node)
+	return node and not node._minX
+end
+
 function NodeSkipper.Tick(playerPos)
 	assert(playerPos, "Tick: playerPos missing")
 
@@ -50,6 +54,14 @@ function NodeSkipper.Tick(playerPos)
 		local distCurrentToNext = Common.Distance3D(currentNode.pos, nextNode.pos)
 
 		if distPlayerToNext < distCurrentToNext then
+			if isDoorNode(currentNode) or isDoorNode(nextNode) then
+				Log:Debug(
+					"SMART SKIP blocked: door node in segment (%s -> %s)",
+					tostring(currentNode.id),
+					tostring(nextNode.id)
+				)
+				return false
+			end
 			-- Player is closer to path[2] than path[1] is to path[2] - we passed path[1]
 			-- BUT: Only skip if we can actually walk to nextNode from current position
 			local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
@@ -94,6 +106,11 @@ function NodeSkipper.Tick(playerPos)
 	local maxSkipRange = G.Menu.Main.MaxSkipRange or 500
 	local skipTarget = path[3]
 	if not (skipTarget and skipTarget.pos) then
+		return false
+	end
+
+	if isDoorNode(path[1]) or isDoorNode(path[2]) or isDoorNode(skipTarget) then
+		Log:Debug("FORWARD SKIP blocked: door node in candidate segment")
 		return false
 	end
 
