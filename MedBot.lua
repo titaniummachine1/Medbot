@@ -6087,7 +6087,7 @@ local UP_VECTOR = Vector3(0, 0, 1)
 local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval()
 local MAX_SURFACE_ANGLE = 55
 local MAX_ITERATIONS = 37
-local TOLERANCE = 10.0
+local TOLERANCE = 16.0
 
 -- Debug
 local DEBUG_MODE = true -- Set to true for debugging (enables traces)
@@ -8673,7 +8673,7 @@ function NodeSkipper.Tick(playerPos)
 			-- Player is closer to path[2] than path[1] is to path[2] - we passed path[1]
 			-- BUT: Only skip if we can actually walk to nextNode from current position
 			local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
-			local success, canSkip = pcall(isNavigable.CanSkip, playerPos, nextNode.pos, currentArea, false, allowJump)
+			local success, canSkip = pcall(isNavigable.CanSkip, playerPos, nextNode.pos, currentArea, true, allowJump)
 
 			if success and canSkip then
 				local missedNode = table.remove(path, 1)
@@ -8728,7 +8728,7 @@ function NodeSkipper.Tick(playerPos)
 	end
 
 	local allowJump = G.Menu.Navigation.WalkableMode == "Aggressive"
-	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, false, allowJump)
+	local success, canSkip = pcall(isNavigable.CanSkip, playerPos, skipTarget.pos, currentArea, true, allowJump)
 	if not (success and canSkip) then
 		return false
 	end

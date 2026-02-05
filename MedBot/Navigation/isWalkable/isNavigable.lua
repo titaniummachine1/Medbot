@@ -28,7 +28,7 @@ local UP_VECTOR = Vector3(0, 0, 1)
 local MIN_STEP_SIZE = MaxSpeed * globals.TickInterval()
 local MAX_SURFACE_ANGLE = 55
 local MAX_ITERATIONS = 37
-local TOLERANCE = 10.0
+local TOLERANCE = 16.0
 
 -- Debug
 local DEBUG_MODE = true -- Set to true for debugging (enables traces)
