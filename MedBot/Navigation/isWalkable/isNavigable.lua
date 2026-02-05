@@ -48,6 +48,13 @@ local function traceHullWrapper(startPos, endPos, minHull, maxHull, mask, filter
 	return result
 end
 
+local ZeroVector = Vector3(0, 0, 0)
+
+-- Fast check if trace hit anything (no length calculation needed)
+local function didTraceHit(trace)
+	return trace.plane == ZeroVector
+end
+
 
 local TraceHull = DEBUG_MODE and traceHullWrapper or engineTraceHull
 
@@ -493,9 +500,16 @@ local function traceWaypoints(waypoints, allowJump)
 				local currentTraceEnd = currentTracePos + traceDir * remainingDist
 
 				-- Forward trace with current step height
-				-- When going down, don't add step offset to end (follow slope naturally)
-				local traceStartPos = currentTracePos + stepVec
-				local traceEndPos = isGoingDown and currentTraceEnd or (currentTraceEnd + stepVec)
+				-- When going down, keep the trace flush with ground; upward traces include the offset
+				local traceStartPos
+				local traceEndPos
+				if isGoingDown then
+					traceStartPos = currentTracePos
+					traceEndPos = currentTraceEnd
+				else
+					traceStartPos = currentTracePos + stepVec
+					traceEndPos = currentTraceEnd + stepVec
+				end
 				local trace = TraceHull(
 					traceStartPos,
 					traceEndPos,
@@ -506,7 +520,7 @@ local function traceWaypoints(waypoints, allowJump)
 
 				traceCount = traceCount + 1
 
-				if trace.fraction >= 0.99 then
+				if didTraceHit(trace) then
 					-- Clear path - reached destination
 					traceSuccess = true
 					break
