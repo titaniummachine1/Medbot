@@ -544,6 +544,20 @@ local function traceWaypoints(waypoints, allowJump)
 					goto continue_retry
 				end
 
+				-- Check if surface angle is too steep for this step height
+				if groundNormal then
+					local surfaceAngle = math.deg(math.acos(groundNormal:Dot(UP_VECTOR)))
+					if surfaceAngle > MAX_SURFACE_ANGLE then
+						if DEBUG_MODE then
+							print(string.format("[IsNavigable] Surface too steep (%.1f° > %.1f°), trying next step height...",
+								surfaceAngle, MAX_SURFACE_ANGLE))
+						end
+						currentStepIndex = currentStepIndex + 1
+						retryCount = retryCount + 1
+						goto continue_retry
+					end
+				end
+
 				-- Clamp Z to prevent climbing too high
 				local maxAllowedZ = baseZ + stepH
 				if groundZ > maxAllowedZ then
