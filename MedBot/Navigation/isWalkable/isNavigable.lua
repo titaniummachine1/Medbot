@@ -425,6 +425,15 @@ local function traceWaypoints(waypoints, allowJump)
 			local traceDir = horizDir
 			if traceStart.normal then
 				traceDir = adjustDirectionToSurface(horizDir, traceStart.normal)
+				if DEBUG_MODE then
+					print(string.format("[IsNavigable] Trace using start normal (%.2f, %.2f, %.2f) -> dir (%.2f, %.2f, %.2f)",
+						traceStart.normal.x, traceStart.normal.y, traceStart.normal.z,
+						traceDir.x, traceDir.y, traceDir.z))
+				end
+			else
+				if DEBUG_MODE then
+					print(string.format("[IsNavigable] Trace using flat direction (no start normal)"))
+				end
 			end
 			-- Calculate trace endpoint
 			local traceDist = (currentWp.pos - traceStart.pos):Length()
