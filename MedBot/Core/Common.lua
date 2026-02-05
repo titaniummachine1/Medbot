@@ -189,50 +189,33 @@ function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_wi
 	-- Normalize the direction vector safely
 	local normalized_direction = direction / direction_length
 
+	-- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
+	local arrow_base = end_pos - normalized_direction * arrowhead_length
+
+	-- Calculate the perpendicular vector for the arrow width
+	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
+
 	-- Convert world positions to screen positions
 	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
-	if not w2s_start or not w2s_end then
-		return
-	end
-
-	-- Calculate the arrow base position by moving back from end_pos
-	local arrow_base = end_pos - normalized_direction * arrowhead_length
 	local w2s_arrow_base = client.WorldToScreen(arrow_base)
-	if not w2s_arrow_base then
-		return
+	local w2s_perp1 = client.WorldToScreen(arrow_base + perpendicular)
+	local w2s_perp2 = client.WorldToScreen(arrow_base - perpendicular)
+
+	-- Only draw if all screen positions are valid
+	if w2s_start and w2s_end and w2s_arrow_base and w2s_perp1 and w2s_perp2 then
+		-- Set color before drawing
+		draw.Color(255, 255, 255, 255) -- White for arrows
+
+		-- Draw the line from start to the base of the arrow (not all the way to the end)
+		draw.Line(w2s_start[1], w2s_start[2], w2s_arrow_base[1], w2s_arrow_base[2])
+
+		-- Draw the sides of the arrowhead
+		draw.Line(w2s_end[1], w2s_end[2], w2s_perp1[1], w2s_perp1[2])
+		draw.Line(w2s_end[1], w2s_end[2], w2s_perp2[1], w2s_perp2[2])
+
+		-- Optionally, draw the base of the arrowhead to close it
+		draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
 	end
-
-	-- Calculate perpendicular vector for arrowhead - handle vertical case
-	local perp_x, perp_y
-	local dx = w2s_end[1] - w2s_arrow_base[1]
-	local dy = w2s_end[2] - w2s_arrow_base[2]
-	local len = math.sqrt(dx * dx + dy * dy)
-
-	if len > 0.001 then
-		-- Use screen-space perpendicular (works for any orientation)
-		perp_x = -dy / len * (arrowhead_width / 2)
-		perp_y = dx / len * (arrowhead_width / 2)
-	else
-		-- Fallback for degenerate case
-		perp_x = arrowhead_width / 2
-		perp_y = 0
-	end
-
-	local w2s_perp1 = { math.floor(w2s_arrow_base[1] + perp_x), math.floor(w2s_arrow_base[2] + perp_y) }
-	local w2s_perp2 = { math.floor(w2s_arrow_base[1] - perp_x), math.floor(w2s_arrow_base[2] - perp_y) }
-
-	-- Set color before drawing
-	draw.Color(255, 255, 255, 255) -- White for arrows
-
-	-- Draw the line from start all the way to the end (full trace line)
-	draw.Line(math.floor(w2s_start[1]), math.floor(w2s_start[2]), math.floor(w2s_end[1]), math.floor(w2s_end[2]))
-
-	-- Draw the sides of the arrowhead
-	draw.Line(math.floor(w2s_end[1]), math.floor(w2s_end[2]), w2s_perp1[1], w2s_perp1[2])
-	draw.Line(math.floor(w2s_end[1]), math.floor(w2s_end[2]), w2s_perp2[1], w2s_perp2[2])
-
-	-- Draw the base of the arrowhead to close it
-	draw.Line(w2s_perp1[1], w2s_perp1[2], w2s_perp2[1], w2s_perp2[2])
 end
 
 function Common.VectorToString(vec)
