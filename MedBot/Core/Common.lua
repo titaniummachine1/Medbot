@@ -192,8 +192,15 @@ function Common.DrawArrowLine(start_pos, end_pos, arrowhead_length, arrowhead_wi
 	-- Calculate the arrow base position by moving back from end_pos in the direction of start_pos
 	local arrow_base = end_pos - normalized_direction * arrowhead_length
 
-	-- Calculate the perpendicular vector for the arrow width
-	local perpendicular = Vector3(-normalized_direction.y, normalized_direction.x, 0) * (arrowhead_width / 2)
+	-- Calculate the perpendicular vector for the arrow width using cross product
+	-- This works for any direction including vertical traces
+	local up = Vector3(0, 0, 1)
+	local perpendicular = normalized_direction:Cross(up)
+	if perpendicular:Length() < 0.001 then
+		-- Direction is vertical, use arbitrary horizontal perpendicular
+		perpendicular = Vector3(1, 0, 0)
+	end
+	perpendicular = Common.Normalize(perpendicular) * (arrowhead_width / 2)
 
 	-- Convert world positions to screen positions
 	local w2s_start, w2s_end = client.WorldToScreen(start_pos), client.WorldToScreen(end_pos)
