@@ -6563,6 +6563,14 @@ local function traceWaypoints(waypoints, allowJump)
 					MASK_SHOT_HULL
 				)
 
+				if DEBUG_MODE then
+					local lastTrace = hullTraces[#hullTraces]
+					if lastTrace then
+						lastTrace.startPos = traceStart.pos
+						lastTrace.endPos = currentWp.pos
+					end
+				end
+
 				traceCount = traceCount + 1
 
 				if trace.fraction >= 0.99 then
@@ -6610,7 +6618,7 @@ local function traceWaypoints(waypoints, allowJump)
 					if surfaceAngle > MAX_SURFACE_ANGLE then
 						if DEBUG_MODE then
 							print(
-								string.format(
+							string.format(
 									"[IsNavigable] Surface too steep (%.1f° > %.1f°), switching to jump height",
 									surfaceAngle,
 									MAX_SURFACE_ANGLE
